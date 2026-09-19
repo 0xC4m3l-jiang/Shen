@@ -12,6 +12,7 @@
 #   scripts/shen.sh smoke       造三条流量并回显判定结果（快速验证链路）
 #   scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 scripts/traffic/）
 #   scripts/shen.sh check       仓库级验证：make gate + make dev
+#   scripts/shen.sh verify      一键端到端验证：状态 + 全量伪造流量 + L4 核对 + 报告
 #   scripts/shen.sh logs [svc]  看日志尾部（不跟随；svc 如 core/proxy/console/analysis）
 #   scripts/shen.sh local       不用 Docker，本地进程起（开发用）
 #   scripts/shen.sh restart     整栈重建（改配置/换镜像后用；不要单独重启 core）
@@ -127,15 +128,39 @@ cmd_traffic() {
 }
 
 cmd_restart() {
-	# ⚠️ 必须整栈重建：core 是网络命名空间的持有者，单独重启它会让兄弟服务
-	# （proxy/console/analysis/business）留在旧命名空间 ⇒ 宿主端口映射指向空命名空间，
-	# 表现为"容器都 Up 但端口不通"。实测踩过。
+	# 两件必须一起做的事（都实测踩过）：
+	#   ① **整栈重建**：core 是网络命名空间的持有者，单独重启它会让兄弟服务
+	#      （proxy/console/analysis/business）留在旧命名空间 ⇒ 容器都 Up 但端口不通。
+	#   ② **带上 --build**：`--force-recreate` 只重建容器、**不重建镜像** ——
+	#      改了代码不 rebuild，跑的还是旧二进制（新增日志一行都不会出现）。
 	need_docker
 	SHEN_HTTP_PORT="${HTTP_PORT}" SHEN_CONSOLE_PORT="${CONSOLE_PORT}" \
-		compose up -d --force-recreate >"${RUNDIR}/restart.log" 2>&1 ||
+		compose up -d --build --force-recreate >"${RUNDIR}/restart.log" 2>&1 ||
 		{ echo "重启失败，日志尾部："; tail -20 "${RUNDIR}/restart.log"; exit 1; }
 	wait_ready || exit 1
 	echo "✅ 已整栈重建（不要单独 restart core —— 见 docs/ops/functional-verification.md §4）"
+}
+
+cmd_verify() {
+	# 一键验证：容器与观测面 → 全量伪造流量（含 L4 核对）→ 报告 + 定位线索。
+	# 报告落在 RUNDIR（临时目录），不进仓库。
+	need_docker
+	mkdir -p "${RUNDIR}"
+	ts=$(date +%Y%m%d-%H%M%S)
+	report="${RUNDIR}/verify-${ts}.json"
+	echo "== 1/3 容器与观测面 =="
+	cmd_status || true
+	echo
+	echo "== 2/3 伪造流量 + 判定核对（--check-l4）=="
+	python3 "${ROOT}/scripts/traffic/send.py" \
+		--entry "${ENTRY}" --console "${CONSOLE}" --check-l4 --explain --report "${report}" "$@"
+	rc=$?
+	echo
+	echo "== 3/3 报告与定位线索 =="
+	echo "  报告：${report}"
+	echo "  逐判定日志：scripts/shen.sh logs core | grep msg=decision"
+	echo "  适配器侧：  scripts/shen.sh logs proxy | grep 'proxy: 判定'"
+	return $rc
 }
 
 cmd_check() {
@@ -166,10 +191,11 @@ status) shift; cmd_status "$@" ;;
 smoke) shift; cmd_smoke "$@" ;;
 traffic) shift; cmd_traffic "$@" ;;
 check) shift; cmd_check "$@" ;;
+verify) shift; cmd_verify "$@" ;;
 logs) shift; cmd_logs "$@" ;;
 local) shift; cmd_local "$@" ;;
 restart) shift; cmd_restart "$@" ;;
 down) shift; need_docker; compose down ;;
 help | -h | --help) usage ;;
-*) die "未知子命令：$1（可用：up status smoke traffic check logs local restart down help）" ;;
+*) die "未知子命令：$1（可用：up status smoke traffic verify check logs local restart down help）" ;;
 esac

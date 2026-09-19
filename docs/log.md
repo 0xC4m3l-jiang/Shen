@@ -9,6 +9,37 @@
 
 ---
 
+## 2026-09-19 · 本地日志（逐判定）+ 一键验证与定位线索
+
+**做了什么**：用户要「补项目本地日志」并「完善测试脚本，保证后续验证与定位更快更准」。逐条落地：
+① **核心逐判定日志**：在观测记录器（每次判定都经过它）里加一行结构化日志 —— `msg=decision` + `decision_id` / `action` / `severity` / `backend` / `score` / `signals` / `method` / `path` / `source_ip` / `user_agent` / `at`。用 `slog`，开关 `SHEN_LOG_FORMAT=text|json`（默认 text 给人读，json 给 jq）。启动与装载类日志保持原来的标准 `log`（稳定可 grep，脚本在依赖它）。
+② **适配器逐请求日志**：白名单命中（跳过判定）· 判定缓存命中（`ST-10` 复用的直接证据）· 判定结果（id → 决策 + 后端 + 失败原因），开关 `SHEN_PROXY_LOG_REQUESTS`（**默认关**：观测面已记全量判定，生产不需要两份；演示 compose 默认开，本地排查必须有）。日志里的决策用**设计三值术语**（新增纯函数 `actionName` + 单测守住），与控制台、核心日志、文档用同一套词。
+③ **一键验证**：新增 `scripts/shen.sh verify` —— 状态 → 全量伪造流量（含 `--check-l4`）→ **报告落临时目录** → 打印定位线索（逐判定日志怎么 grep、适配器侧怎么看）。
+④ **定位脚本化**：`send.py --explain`（失败/缺口场景打印判定原文 + "追一条"的命令）与 `--report`（JSON 落盘，自动化/留档）。
+⑤ **日志字典成文**：新增 `docs/spec/logs.md`（三条原则 · 组件→日志点表 · 逐判定字段表 · 开关 · 落在哪 · **与事件的区别** · 定位手法 · 未决），并把 `docs/README.md` 里仍标"待建"的两行改准。
+⑥ **真缺陷（本轮最有价值）**：`scripts/shen.sh restart` 原先只 `--force-recreate` —— **它不重建镜像**。加完日志跑验证时一行 `msg=decision` 都没有，正是这个原因（差点误判成"日志没生效"）。已改为 `up -d --build --force-recreate`，并写进日志规格与运行手册：**改了代码必须重建镜像**。
+
+**改了哪些文件**：`core/cmd/core/main.go` · `edge/proxy/handler.go` · `edge/proxy/cmd/proxy/main.go` · `edge/proxy/proxy_test.go` ·
+`deploy/docker/compose.yaml` · `scripts/shen.sh` · `scripts/traffic/send.py` · `scripts/traffic/README.md` ·
+`docs/spec/logs.md`（新增）· `docs/ops/runbook.md` · `docs/README.md`
+
+**对应文档**：[`docs/plans/2026-09-19-local-logs-and-verify.md`](docs/plans/2026-09-19-local-logs-and-verify.md)（含追溯矩阵与审视 5 条）· [`docs/spec/logs.md`](docs/spec/logs.md)
+
+**验证**：`make gate` 通过；日志**实跑可见**（核心与适配器两侧，`decision_id` 一致）；`scripts/shen.sh verify` 端到端跑通并落报告。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 核心逐判定日志 | 一行结构化、字段齐全 | ✅ `msg=decision decision_id=b1fd473f… action=route_origin score=0.6 signals=[ua-headless] method=GET path=/probe` |
+| 适配器逐请求日志 | 同一 `decision_id` | ✅ `proxy: 判定：GET /probe decision_id=b1fd473f… → route_origin（后端 ""，失败=<nil>）` |
+| 日志用设计术语 | 三值而非枚举名 | ✅ `TestActionName` 通过（含 `ACTION_UNSPECIFIED → route_origin`） |
+| 一键验证 | 报告 + 线索 | ✅ 报告写入临时目录；打印两条追查命令 |
+| 门禁 | 全绿 | ✅ `make gate` |
+
+**没做 / 遗留**：① 无日志轮转与保留（生产需配日志驱动）；② 无 trace/span id（跨进程只靠 `decision_id`）；③ 适配器 `request_judged` 事件字段未并入日志字典；④ 日志级别不可调（只有逐请求开关）；⑤ metrics 规格（docs/spec/metrics.md）仍未建 —— AR-28 的指标口径暂无权威处。
+
+---
+
 ## 2026-09-19 · 全场景伪造流量 + 整体功能验证（含缺口清单）
 
 **做了什么**：用户要「不同场景的伪造流量做整体功能验证」，并「跑一次测试脚本确认整体逻辑、帮我找到功能欠缺」。逐条落地：

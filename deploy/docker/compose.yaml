@@ -54,6 +54,8 @@ services:
       SHEN_CORE_ADDR: 127.0.0.1:9443
       SHEN_PROXY_LISTEN: 0.0.0.0:8080
       SHEN_PROXY_SHADOW: "true"
+      # 逐请求定位日志（白名单命中 / 判定缓存命中 / 判定结果）—— 演示栈默认开，便于排查。
+      SHEN_PROXY_LOG_REQUESTS: "true"
     restart: unless-stopped
 
   # ── 控制台：只读观测（不参与请求级判定，AR-10）────────────────────────────────

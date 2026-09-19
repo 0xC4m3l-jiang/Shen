@@ -10,6 +10,7 @@
 | 起全套（**推荐**） | `scripts/shen.sh up`（等价 `make up`） | 只需 Docker；会自动等就绪并打印地址 |
 | 看状态 | `scripts/shen.sh status` | 容器 + 控制台概览 |
 | 快速验证链路 | `scripts/shen.sh smoke` | 经引擎发三条流量并回显分值/信号 |
+| **一键端到端验证** | `scripts/shen.sh verify` | 状态 → 全量伪造流量 + L4 核对 → 报告与定位线索（报告落在临时目录） |
 | **发伪造流量并核对判定** | `scripts/shen.sh traffic` | 10 个场景（探针 / 爆破 / 注入 / 正常对照）+ 断言评分与信号；见 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md) |
 | 仓库级验证 | `scripts/shen.sh check`（= `make gate` + `make dev`） | 门禁 + 开发循环 |
 | 看日志（**不跟随**） | `scripts/shen.sh logs core` | 取尾部 80 行后立即返回 |
@@ -144,6 +145,9 @@ scripts/shen.sh traffic --check-l4          # 顺带核对 L4 结论与证据引
 | 控制台顶部显示「读取核心失败」 | 核心没起 / 名字不对 / 不在同一网络命名空间 | `scripts/shen.sh logs core`；确认 `core` 服务在跑 |
 | `analysis` 反复 `Restarting` | L4 侧启动失败（依赖缺失 / 导入错误） | `scripts/shen.sh logs analysis`（**不跟随**）。历史上踩过三种：依赖没锁进 `analysis/requirements.txt`；生成桩顶层名与本层模块撞名；新版 protobuf 需先导入 well-known types |
 | 业务入口返回 502 | 上游不可达（`SHEN_PROXY_UPSTREAM` 指错了） | `scripts/shen.sh logs proxy`；确认 `business` 在跑，或把上游改成你的服务 |
+| **改了代码但日志/行为没变** | `restart` 只重建容器**不重建镜像** | `scripts/shen.sh restart`（已带 `--build`）；或 `make docker-build` |
+| 想知道「某个请求为什么被判成这样」 | — | `make docker-log S=core` 里筛 `msg=decision`；按 `decision_id` 与 proxy 日志、控制台对齐（见 [`../spec/logs.md`](../spec/logs.md) §7） |
+| 想知道「为什么没判」（走了白名单 / 吃了缓存） | — | `make docker-log S=proxy` 里筛 `白名单` 或 `缓存命中`（需 `SHEN_PROXY_LOG_REQUESTS=1`，演示栈默认开） |
 | 控制台分数全是 0 | 配置里的 `rules` 为空 | 检查 `deploy/config/config.example.yaml` 的 `rules`：没有规则就恒为 0 |
 | `make gate` 红在 `fmt-check` | 有 Go 文件没格式化（**不会**是 vendor —— 已排除第三方） | `make fmt` 后重跑 |
 | `make dev` 报「缺 L4 环境」 | 没建 Python 环境（或被移动） | `make pyenv`（建在 `analysis/.venv`） |

@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -150,7 +151,7 @@ func run() error {
 	breaker := control.NewBreaker(control.BreakerConfig{})
 	// 观测面（写侧 + 读侧）：控制台要能回答「这个请求为什么被判成这样、然后去了哪」。
 	// 写侧把每次判定同时落成**事件**（供 UI 直接读）与**判定记录**（数据模型要求，structure.md §3）。
-	observer := decisionRecorder{events: collector, decisions: stores.Decision}
+	observer := decisionRecorder{events: collector, decisions: stores.Decision, logger: newDecisionLogger()}
 	judgev1.RegisterDeceptionJudgeServer(srv,
 		control.NewJudgeService(decider, sess,
 			control.WithBreaker(breaker),
@@ -293,6 +294,22 @@ func assertConsistency(ctx context.Context, r responder.Responder) error {
 type decisionRecorder struct {
 	events    telemetry.Telemetry
 	decisions store.DecisionStore
+	// logger 是**逐判定**的结构化日志出口（运维面）。
+	// 与响应面的区别：日志是内部的，可以带分值/信号；响应禁止回显（ST-7）。
+	logger *slog.Logger
+}
+
+// newDecisionLogger 构造逐判定日志器。
+//
+// SHEN_LOG_FORMAT=text（默认，便于人读）| json（便于 jq/日志管道）。
+// 为什么用 slog 而不用标准 log：逐判定需要**字段化**（decision_id / action / score / signals），
+// 文本拼接出来的行不好筛。启动与装载类日志仍走标准 log（稳定、可 grep，脚本在依赖它）。
+func newDecisionLogger() *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("SHEN_LOG_FORMAT")), "json") {
+		return slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	}
+	return slog.New(slog.NewTextHandler(os.Stdout, opts))
 }
 
 func (r decisionRecorder) Record(ctx context.Context, rec control.DecisionRecord) error {
@@ -309,12 +326,38 @@ func (r decisionRecorder) Record(ctx context.Context, rec control.DecisionRecord
 	}); err != nil {
 		return err
 	}
-	return r.decisions.Archive(ctx, contract.Decision{
+	if err := r.decisions.Archive(ctx, contract.Decision{
 		DecisionID: rec.DecisionID,
 		Action:     actionFromString(rec.Action),
 		Severity:   severityFromString(rec.Severity),
 		Backend:    rec.Backend,
-	})
+	}); err != nil {
+		return err
+	}
+	r.logDecision(rec)
+	return nil
+}
+
+// logDecision 打一条逐判定日志 —— 本地排查"这个请求为什么被判成这样、然后去了哪"的第一入口。
+//
+// 只记观测面已有的事实，不推断、不加工（与 docs/spec/logs.md 的字段表一致）。
+func (r decisionRecorder) logDecision(rec control.DecisionRecord) {
+	if r.logger == nil {
+		return
+	}
+	r.logger.Info("decision",
+		slog.String("decision_id", rec.DecisionID),
+		slog.String("action", rec.Action),
+		slog.String("severity", rec.Severity),
+		slog.String("backend", rec.Backend),
+		slog.Float64("score", rec.Score),
+		slog.Any("signals", rec.Signals),
+		slog.String("method", rec.Method),
+		slog.String("path", rec.Path),
+		slog.String("source_ip", rec.SourceIP),
+		slog.String("user_agent", rec.UserAgent),
+		slog.Time("at", rec.At),
+	)
 }
 
 // eventLister 把 store 的事件读侧接到 `control.EventLister` 上。

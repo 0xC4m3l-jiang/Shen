@@ -8,6 +8,9 @@ scripts/traffic/send.py --group 扫描器指纹   # 只跑一组
 scripts/traffic/send.py --only probe-git-headless --repeat 3
 scripts/traffic/send.py --check-l4         # 顺带核对 L4 结论与证据引用（AR-12）
 scripts/traffic/send.py --json             # 机器可读（自动化）
+scripts/traffic/send.py --explain          # 失败/缺口场景额外打印判定原文与追查线索
+scripts/traffic/send.py --report /tmp/r.json   # 把完整报告写到文件（留档/自动化）
+scripts/shen.sh verify                     # 一键：状态 + 全量流量 + L4 核对 + 报告 + 线索
 ```
 
 结果分三段：**断言**（通过/失败）· **已知缺口**（只打印，不算失败）· **L4 核对**（结论与证据引用）。

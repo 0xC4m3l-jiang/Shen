@@ -69,6 +69,13 @@ type Handler struct {
 	// Shadow 为真时只观测、不处置（INT-11）。
 	Shadow bool `json:"shadow,omitempty"`
 
+	// LogRequests 打开**逐请求**定位日志（白名单命中 / 判定缓存命中 / 判定结果）。
+	//
+	// 为什么默认关：观测面（事件 + 控制台）已经记录了每一次判定，生产环境不需要再来一份逐请求日志；
+	// 但本地排查（“这个请求为什么走了 origin”）没有它就得去翻控制台，很慢。
+	// 部署侧按需打开：`SHEN_PROXY_LOG_REQUESTS=1`（演示 compose 默认开）。
+	LogRequests bool `json:"log_requests,omitempty"`
+
 	// TrustXFF 决定是否信任 X-Forwarded-For 取客户端 IP（INT-23）。
 	TrustXFF bool `json:"trust_xff,omitempty"`
 
@@ -272,6 +279,21 @@ func (h *Handler) DroppedEvents() uint64 { return h.dropped.Load() }
 // ServeHTTP 处理一个请求，走完 AR-6 的四件事。
 //
 // 流程：① 白名单先于引流判定（INT-25）→ ② 派生 decision_id 并查本地缓存
+// actionName 把决策枚举映射成**设计术语**（terminology.md §4 的三值）。
+//
+// 为什么要它：日志里写 route_mirage / block / route_origin 才与控制台、核心日志、文档用同一套词；
+// 写 ACTION_MIRAGE 这种枚举名，排查时还得心算一层。
+func actionName(act judgev1.Action) string {
+	switch act {
+	case judgev1.Action_ACTION_MIRAGE:
+		return "route_mirage"
+	case judgev1.Action_ACTION_BLOCK:
+		return "block"
+	default:
+		return "route_origin"
+	}
+}
+
 // → ③ 未命中则调核心判定（失败折叠成放行）→ ④ 异步上报 → 按结果路由。
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
 	// ⓪ 对外可见面卫生（OH-2 适用位置表）：
@@ -285,18 +307,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// 本地白名单（env）与远端白名单（策略面）取**并集**：护栏只增不减（见 applyEdgePolicy）。
 	ip := clientIP(r, h.TrustXFF)
 	if whitelisted(ip, h.whitelist) || h.remoteWhitelisted(ip) {
+		if h.LogRequests {
+			log.Printf("proxy: 白名单命中，跳过判定：%s %s 来源=%s", r.Method, r.URL.Path, ip)
+		}
 		return h.forward(sw, r, next, targetOrigin)
 	}
 
 	// ② 派生 decision_id（ST-10）并查本地判定缓存（AR-6 第 2 件事）。
 	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
 	if act, backend, ok := h.cache.get(id); ok {
+		if h.LogRequests {
+			log.Printf("proxy: 判定缓存命中：%s %s decision_id=%s → %s（后端 %q）",
+				r.Method, r.URL.Path, id, actionName(act), backend)
+		}
 		return h.dispatch(sw, r, next, act, backend)
 	}
 
 	// ③ 调核心判定。任何失败都已折叠成「放行」（NI-3 / NI-4 / NI-5）。
 	act, backend, err := h.decide(r, id)
 	h.cache.put(id, act, backend)
+	if h.LogRequests {
+		// 本地排查的主线索：判定 id + 结果 + 后端 +（若有）失败原因。
+		log.Printf("proxy: 判定：%s %s decision_id=%s → %s（后端 %q，失败=%v）",
+			r.Method, r.URL.Path, id, actionName(act), backend, err)
+	}
 
 	// ④ 异步上报（AR-6 第 4 件事）—— 不阻塞请求。
 	h.enqueueEvent(r, id, act, err)

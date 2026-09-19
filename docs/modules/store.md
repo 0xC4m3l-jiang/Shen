@@ -90,7 +90,7 @@
 | --- | --- | --- | --- |
 | 1 | **生产实现未写** —— `redis.go` / `clickhouse.go` / `postgres.go` | 阶段 2 上线 | 阶段 2 |
 | 2 | Redis 持久化策略与丢失后的降级行为 | `ST-15` 只测了行为，未定策略 | 阶段 2 |
-| 3 | ClickHouse 的最终去重与保留策略 | 事件表容量 | `docs/spec/logs.md`（待创建） |
+| 3 | ClickHouse 的最终去重与保留策略 | 事件表容量 | [`../spec/logs.md`](../spec/logs.md) ✅（已建：日志字典；**保留期策略仍未定**） |
 
 ## 9. 变更记录
 

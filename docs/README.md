@@ -128,7 +128,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 
 | 目录 | 现状 | 待补 |
 | --- | --- | --- |
-| [`spec/`](spec/) | [`dependencies.md`](spec/dependencies.md)（生成物）· [`config.md`](spec/config.md) ✅ | `logs.md`（事件类型全表；每字段类型 / 含义 / 敏感级 / 保留期；哪些字段禁止出现在外部可见面）· `metrics.md`（每指标口径**含分母** / 单位 / 采集点 / 正常范围 / 越界动作） |
+| [`spec/`](spec/) | [`dependencies.md`](spec/dependencies.md)（生成物）· [`config.md`](spec/config.md) ✅ · [`events.md`](spec/events.md) ✅ · [`policy-payload.md`](spec/policy-payload.md) ✅ · [`logs.md`](spec/logs.md) ✅ | `metrics.md`（每指标口径**含分母** / 单位 / 采集点 / 正常范围 / 越界动作） |
 | `kb/` · `plans/` | 已建 | —— |
 
 ## 4. 三个容易混的概念
@@ -136,7 +136,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | 概念 | 位置 | 是什么 | 与谁的区别 |
 | --- | --- | --- | --- |
 | **功能知识库** | [`kb/`](kb/README.md) | **非规范**的沉淀：FAQ · 已知问题 · 踩坑 | 与 `design/` 的区别：**不具约束力**、可随时增改、允许不确定 |
-| **日志对应表** | `spec/logs.md`（待建） | **字段的权威字典**：事件类型 → 字段名 → 类型 → 含义 → 敏感级 → 保留期 | 与「日志文件」不是一回事；它保证日志可查询、且能被 `OH` 泄漏检查约束 |
+| **日志字典** | [`spec/logs.md`](spec/logs.md) ✅ | 组件 → 日志点 · 逐判定字段表 · 开关（`SHEN_LOG_FORMAT` / `SHEN_PROXY_LOG_REQUESTS`）· 落在哪 · 与事件的区别 · **定位手法** | 日志是内部面（可含判定细节），响应禁止回显（`ST-7`） |
 | **运营数据查看方式** | `analytics/`（待建） | 每个指标：口径 → 在哪看 → 正常范围 → 越界找谁 | 含**「怎么看」和「看了怎么办」**，不只是指标定义 |
 
 ## 5. 新人上手顺序
@@ -164,3 +164,4 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 
 | **启动 / 验证 / 排障 / 升级**（怎么跑起来、怎么查、怎么修） | [`ops/runbook.md`](ops/runbook.md) |
 | **目录与模块地图**（谁在哪 · 能力是什么 · 怎么接起来） | [`modules/map.md`](modules/_map.md) |
+| **日志字典**（谁记什么 · 字段 · 开关 · 怎么用它排查） | [`spec/logs.md`](spec/logs.md) |

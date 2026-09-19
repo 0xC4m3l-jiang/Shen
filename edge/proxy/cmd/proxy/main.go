@@ -103,6 +103,7 @@ func run() error {
 		CacheTTL:        caddy.Duration(cacheTTL),
 		Window:          caddy.Duration(window),
 		Shadow:          envBool("SHEN_PROXY_SHADOW", true),
+		LogRequests:     envBool("SHEN_PROXY_LOG_REQUESTS", false),
 		TrustXFF:        envBool("SHEN_PROXY_TRUST_XFF", false),
 		ReportQueue:     queue,
 		CacheMaxEntries: cacheMax,

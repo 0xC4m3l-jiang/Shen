@@ -455,6 +455,16 @@ def main(argv: list[str] | None = None) -> int:
         help="跑完顺带核对 L4 结论与证据引用（AR-12）",
     )
     parser.add_argument("--json", action="store_true", help="输出 JSON（自动化用）")
+    parser.add_argument(
+        "--report",
+        default="",
+        help="把完整报告（JSON）写到该路径（自动化/留档用；建议落在临时目录）",
+    )
+    parser.add_argument(
+        "--explain",
+        action="store_true",
+        help="失败/缺口场景额外打印该请求的判定原文与响应头（定位用）",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -531,8 +541,42 @@ def main(argv: list[str] | None = None) -> int:
             print(f"L4 核对失败：{exc}", file=sys.stderr)
             return 1
 
+    asserted = [r for r in results if not r["observe_only"] and not r["gap"]]
+    payload = {
+        "entry": args.entry,
+        "console": args.console,
+        "results": results,
+        "l4": l4,
+        "summary": {
+            "asserted": len(asserted),
+            "failed": len([r for r in asserted if r["failures"]]),
+            "observed": len([r for r in results if r["observe_only"]]),
+            "gaps": len([r for r in results if r["gap"]]),
+            "hygiene_findings": len([r for r in results if r["findings"] or r["st7_findings"]]),
+        },
+    }
+    if args.report:
+        try:
+            pathlib.Path(args.report).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"报告已写入：{args.report}")
+        except OSError as exc:
+            print(f"报告写入失败（不影响结论）：{exc}", file=sys.stderr)
+
+    if args.explain:
+        print("\n── 定位线索（失败与缺口场景的判定原文；按 decision_id 去日志里追）──")
+        for row in results:
+            if not (row["failures"] or row["gap"]):
+                continue
+            print(f"  · {row['id']}  decision_id={row.get('decision_id', '（无判定）')}")
+            if row["flow"]:
+                print(f"      控制台原文：{json.dumps(row['flow'], ensure_ascii=False)}")
+                print(f"      追一条：scripts/shen.sh logs core | grep {row['decision_id']}")
+            else:
+                print("      控制台里没有这条判定 —— 先看 proxy 是走了白名单还是没到判定")
+
     if args.json:
-        asserted = [row for row in results if not row["observe_only"] and not row["gap"]]
         payload = {
             "entry": args.entry,
             "console": args.console,

@@ -707,3 +707,18 @@ func TestHeaderSanitizerKeepsOtherHeaders(t *testing.T) {
 		t.Errorf("状态码不得被改写：%d", rec.Code)
 	}
 }
+
+// TestActionName 守住"日志用设计术语"这条：三值映射不能漂。
+func TestActionName(t *testing.T) {
+	cases := map[judgev1.Action]string{
+		judgev1.Action_ACTION_ORIGIN:      "route_origin",
+		judgev1.Action_ACTION_MIRAGE:      "route_mirage",
+		judgev1.Action_ACTION_BLOCK:       "block",
+		judgev1.Action_ACTION_UNSPECIFIED: "route_origin",
+	}
+	for act, want := range cases {
+		if got := actionName(act); got != want {
+			t.Errorf("actionName(%v) = %q，期望 %q", act, got, want)
+		}
+	}
+}
