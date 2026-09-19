@@ -9,6 +9,41 @@
 
 ---
 
+## 2026-09-19 · `ADR-0019`：TLS 终结默认交客户 L0（`E2` 实测驱动的重估）
+
+**做了什么**：把 `E2` 的实测结论落成**决策 + 代码 + 同步**。
+① 新增 [`ADR-0019`](docs/background/decisions/0019-tls-termination-belongs-to-l0.md)：由于 `E2` 实测到「我方栈与公有站栈在 **ServerHello 扩展顺序**上可区分」
+（JA3S `43-51` vs `51-43`，属不可对齐），**默认姿态改为交客户 L0 终结 TLS** —— 客户 L0 就是真实站同款栈 ⇒ 指纹**构造性一致**，
+且我们收到明文 ⇒ `INT-22`（TLS 可读才允许误导处置）仍成立；自终结（内嵌 Caddy 的 `manual`/`acme`）**保留为备选**；
+② 代码：新增 `SelfTerminationWarning`（纯函数，点名 `JA3S` 差异与 `ADR-0019`）+ 启动日志接线 + 单测（明文无告警、manual/acme 有且点名关键项）；
+③ 同步 **8 份文档**：`ADR-0017` 标注「TLS 部分被 0019 取代」（ID 与正文保留，`D-6`）· 决策索引加 0019 行 ·
+`docs/modules/adapter-proxy.md` §1/§3.1/§8/§9 · `docs/design/architecture.md` §10.2 缺口 14 · `docs/design/integration.md` 的 `INT-22` 注记 ·
+`edge/proxy/README.md` 与 `edge/proxy/config/front-proxy.example.env`（写明「默认 off = L0 终结」**及其原因**）。
+`SHEN_PROXY_TLS_MODE` 的默认值本来就是 `off` —— 本轮改的是**它为什么是默认**以及**自终结必须知情**。
+
+**改了哪些文件**：`edge/proxy/embed.go` · `edge/proxy/cmd/proxy/main.go` · `edge/proxy/embed_test.go` ·
+`docs/background/decisions/0019-tls-termination-belongs-to-l0.md`（新增）· `docs/background/decisions/0017-caddy-l1-base.md` ·
+`docs/background/decisions/README.md` · `docs/modules/adapter-proxy.md` · `docs/design/architecture.md` · `docs/design/integration.md` ·
+`edge/proxy/README.md` · `edge/proxy/config/front-proxy.example.env`
+
+**对应文档**：[`docs/plans/2026-09-19-tls-termination-belongs-to-l0.md`](docs/plans/2026-09-19-tls-termination-belongs-to-l0.md)（含追溯矩阵与审视 4 条）
+
+**验证**：`make gate` 通过（含 `make trace` 的规则 ID 与链接检查）；`go test ./edge/proxy/ -run SelfTermination` 通过。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| `tls_mode=off`（默认） | 无告警 | ✅ `TestSelfTerminationWarning` |
+| `tls_mode=manual` / `acme` | 告警且点名 `JA3S` / `L0` / `ADR-0019` | ✅ 同上 |
+| 取代关系 | 0017 标注、索引含 0019、旧 ID 未动 | ✅ `make trace` |
+
+**没做 / 遗留**：① `E2` 仍是**单站单次**初测（本决定建立在一份采样上，须对客户真实站重复 ≥3 次）；
+② L0 终结时的**来源 IP 透传**（`INT-23`：XFF / PROXY protocol）需写进接入物料（integrate/ 目录未建）；
+③ L0↔引擎那一跳明文还是 mTLS 未定（跨节点部署）；④ 自终结 + ACME 仍保留但**未被本决定背书**；
+⑤ ⚠️ **`ST-10` / `K-20` 误调度取舍**仍待你裁决。
+
+---
+
 ## 2026-09-19 · 降低 Caddy 耦合的可见性：耦合面自动提取 + 升级兼容锁
 
 **做了什么**（用户要求：*Caddy 不要耦合太深，升级要快且保证功能支持*）：

@@ -1,6 +1,6 @@
 # 0017. L1 反向代理底座：内嵌 Caddy + 自研 Go 插件（替代 Go 标准库自研转发层）
 
-- 状态：✅ **已采纳**
+- 状态：✅ **已采纳**（**「TLS 由本进程终结」这一部分已被 [0019](0019-tls-termination-belongs-to-l0.md) 取代**：默认改为交客户 L0；其余结论不变）
 - 日期：2026-09-19
 - 影响范围：[`../../design/language.md`](../../design/language.md) §1 的 **L1 行**；[`../../design/architecture.md`](../../design/architecture.md) 的 `AR-3` / `AR-4` 注释、§7 拓扑、§8.5 步骤 1 行；[`../../design/integration.md`](../../design/integration.md) 的 `INT-22` 落地方式；[`../../design/modules.md`](../../design/modules.md) §1.1 第 11 行底座描述；[`../../design/structure.md`](../../design/structure.md) §1.3 / §1.6；[`../../modules/adapter-proxy.md`](../../modules/adapter-proxy.md)
 - 决策者：用户

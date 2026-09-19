@@ -142,6 +142,9 @@ func run() error {
 	}
 	log.Printf("proxy 已启动：监听 %s（%s），核心 %s，业务 %s，%s",
 		listen, tlsDesc, coreAddr, upstream, mode)
+	if w := proxy.SelfTerminationWarning(tlsCfg); w != "" {
+		log.Printf("警告：%s", w)
+	}
 	if policyInterval > 0 {
 		log.Printf("策略面：每 %s 拉取一次（适配器标识 %s）", policyInterval, handler.AdapterID)
 	} else {

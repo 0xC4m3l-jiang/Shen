@@ -238,7 +238,7 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 
 | # | 未决 | 阻塞什么 | 去向 |
 | --- | --- | --- | --- |
-| 1 | ✅ **已结案（2026-09-19）** —— TLS 由**本进程内嵌的 Caddy** 终结（`SHEN_PROXY_TLS_MODE=off\|manual\|acme`）；形态 ①② 仍靠客户 L0。原问：本模块是否提供 HTTPS 监听 | —— | [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) · [`design/architecture.md`](../design/architecture.md) §10.2 缺口 14 |
+| 1 | ✅ **已结案（2026-09-19，后被 [ADR-0019](../background/decisions/0019-tls-termination-belongs-to-l0.md) 收窄）** —— **默认交客户 L0 终结 TLS**（`SHEN_PROXY_TLS_MODE=off`）；自终结（`manual`/`acme`）保留为「客户没有 L0」时的备选，**启用即在启动日志警告**（`E2` 实测：本栈与公有站栈的 ServerHello 扩展顺序可区分） | —— | [`ADR-0019`](../background/decisions/0019-tls-termination-belongs-to-l0.md) · §3.1 |
 | 2 | ✅ **已结案（2026-09-19）**：改道后端表**两者都要** —— 本地 env 是兜底，策略面下发是正式通路（远端覆盖本地，[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)）。原问：静态配置还是核心下发 | —— | —— |
 | 10 | **注入片段与诱饵资产不经策略面下发**（核心侧尚无来源与归属） | 处置内容到不了边缘 | [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」 |
 | 11 | **同一 `(IP, 会话, 路径, 60s)` 内共享一个决策**（`decision_id` 不含 UA）—— 实测可复现「探针先到 → 真实用户被改道」 | 误调度率（`guard.false_route_budget`）；改它要动 `ST-10` | [`../kb/known-issues.md`](../kb/known-issues.md) `K-20` |
@@ -258,6 +258,7 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | 2026-09-17 | 创建。由原 `adapter-reverse-proxy`（第 11 行）与 `adapter-sidecar`（第 12 行）合并；语言 Lua → Go | [ADR-0008](../background/decisions/0008-edge-language-go.md) · 用户确认 |
 | 2026-09-18 | **接诱饵注入**：`Injector` 接口（由本模块定义，避免适配器互依 MD-4）+ `SHEN_PROXY_INJECT`；只改引流侧 HTML（INT-8），大响应不缓冲 | 本轮开发 |
 | 2026-09-19 | **换底座**：转发与 TLS 终结改为内嵌 **Caddy**（`http.handlers.shen_proxy`）；模块身份与对外接口不变（`JudgeClient` / `TelemetryClient` / `Injector`）；新增 `SHEN_PROXY_TLS_MODE=off\|manual\|acme`；未决项 1（TLS 归属）结案；测试 19 → **30**；新增依赖已进许可台账 | [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) · 用户确认 |
+| 2026-09-19 | **TLS 终结默认改交客户 L0**（`E2` 实测：本栈与公有站栈的 ServerHello 扩展顺序可区分）；自终结保留 + **启动告警**（`SelfTerminationWarning`，含测试）；未决项 1 表述按 `ADR-0019` 收窄 | [`ADR-0019`](../background/decisions/0019-tls-termination-belongs-to-l0.md) · 用户确认 |
 | 2026-09-19 | **接策略面**（`S4`）：`Pull` 拉取改道后端表与白名单（远端覆盖本地 · 白名单并集）· `Ack` 回执（`AR-13`）· 新增 `SHEN_PROXY_POLICY_INTERVAL` / `SHEN_PROXY_POLICY_ID` / `SHEN_PROXY_ADAPTER_ID`；测试 **30 → 37** | [`../plans/2026-09-19-policy-plane.md`](../plans/2026-09-19-policy-plane.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |
 | 2026-09-19 | **策略面下发响应改写规则**：载荷新增可选 `inject_rules`（缺省 = 用本地 env；显式空数组 = 关掉注入）；注入器改为**按请求读当前规则**（支持远端热变更）；测试 **37 → 39** | [`../plans/2026-09-19-content-path-injects.md`](../plans/2026-09-19-content-path-injects.md) · 用户确认（9 项推荐） |
 | 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/2026-09-19-forwarding-deception-hardening.md) |

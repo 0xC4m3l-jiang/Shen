@@ -7,9 +7,9 @@
 > **来源**：外部设计稿 [`../background/research/deception-engine-design.md`](../background/research/deception-engine-design.md) §三。
 > **已确认**：用户于 2026-09-17 确认 **INT-1…INT-25 全部通过**（其中 18 条为重构前已确认规则的换号版本）。
 > ⚠️ **TLS 终结是启用误导处置的硬前提**（见 INT-22）：TLS 透传接入只能观察。
-> ✅ **形态 ③④ 的落点（2026-09-19）**：TLS 由**引擎进程内嵌的 Caddy** 终结
-> （`SHEN_PROXY_TLS_MODE=off|manual|acme`），因此这两种形态具备启用误导处置的前提；
-> 形态 ①② 仍依赖客户 L0。依据 [ADR-0017](../background/decisions/0017-caddy-l1-base.md)。
+> ✅ **形态 ③④ 的落点（2026-09-19，同日收窄）**：**默认交客户 L0 终结 TLS**（客户 L0 与真实站同款栈 ⇒ TLS 指纹天然一致，且引擎收到明文 ⇒ 误导处置的前提成立）；
+> 引擎自终结（内嵌 Caddy 的 `manual`/`acme`）保留为「客户没有 L0」时的备选，**启用即在启动日志警告**（`E2` 实测指纹可区分）。
+> 形态 ①② 一直依赖客户 L0。依据 [ADR-0019](../background/decisions/0019-tls-termination-belongs-to-l0.md)（取代 [ADR-0017](../background/decisions/0017-caddy-l1-base.md) 的 TLS 部分）。
 > 未解决项：四种形态先做哪个、Sidecar 形式、多租户粒度 —— 见 [ADR-0003](../background/decisions/0003-integration-forms.md)。
 
 ---

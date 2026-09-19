@@ -40,6 +40,26 @@ type TLSConfig struct {
 	KeyFile  string // manual：私钥文件路径
 }
 
+// SelfTerminationWarning 在**我们自终结 TLS** 时给出一条基于**实测**的风险提示（`E2`）。
+//
+// 为什么要有它：实验 `E2` 实测（2026-09-19）显示，本栈（Go 标准库 crypto/tls，经内嵌 Caddy 使用）
+// 与常见公有站的栈在 **ServerHello 扩展顺序**上不同 —— JA3S 分别为 `772,4865,43-51` 与 `772,4865,51-43`，
+// 属「可区分且无法通过配置对齐」。也就是说：**只要对手看一眼握手，就能把我们与真实站分开**。
+//
+// 因此默认部署姿态是**由客户 L0 终结 TLS**（L0 用真实站同款栈 ⇒ 指纹天然一致，且我们仍能读到明文，
+// 满足 `INT-22`）；自终结只在「客户没有 L0」时使用，且必须知情。
+//
+// 返回空字符串 = 无需提示（明文模式 = L0 终结）。
+// 依据：[`ADR-0019`](../../docs/background/decisions/0019-tls-termination-belongs-to-l0.md) · 实验 `E2`。
+func SelfTerminationWarning(cfg TLSConfig) string {
+	if cfg.Mode == TLSModeOff {
+		return ""
+	}
+	return "自终结 TLS 已启用（SHEN_PROXY_TLS_MODE=" + string(cfg.Mode) + "）：" +
+		"E2 实测本栈与常见公有站栈在 ServerHello 扩展顺序上可区分（JA3S 不同），对手可据此识别。 " +
+		"默认建议由客户 L0（与真实站同款栈）终结 TLS —— 见 ADR-0019；若确认目标站与本栈同款，可忽略本提示。"
+}
+
 // Validate 校验 TLS 配置，缺什么当场报错，不等到启动后才发现。
 func (t TLSConfig) Validate() error {
 	switch t.Mode {

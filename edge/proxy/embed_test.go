@@ -446,3 +446,24 @@ func TestNoProxyFingerprintOnErrorPath(t *testing.T) {
 		t.Errorf("错误路径不得暴露 Via 头（OH-2），实际 %q", v)
 	}
 }
+
+// TestSelfTerminationWarning：自终结 TLS 必须给出**基于实测**的风险提示（E2 / ADR-0019）。
+//
+// 为什么这条要有测试：它是「默认交客户 L0 终结」这个决策在代码里的唯一体现 ——
+// 没有它，运营选了自终结就完全不知情。
+func TestSelfTerminationWarning(t *testing.T) {
+	if w := SelfTerminationWarning(TLSConfig{Mode: TLSModeOff}); w != "" {
+		t.Errorf("明文模式（= L0 终结）不该有提示，实际 %q", w)
+	}
+	for _, mode := range []TLSMode{TLSModeManual, TLSModeACME} {
+		w := SelfTerminationWarning(TLSConfig{Mode: mode})
+		if w == "" {
+			t.Fatalf("%s 模式必须提示指纹可区分风险", mode)
+		}
+		for _, want := range []string{"JA3S", "L0", "ADR-0019"} {
+			if !strings.Contains(w, want) {
+				t.Errorf("提示里应当点明 %q（让运营知道该看哪份记录）：%s", want, w)
+			}
+		}
+	}
+}
