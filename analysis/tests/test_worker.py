@@ -143,3 +143,35 @@ def test_worker_cli_once_requires_reachable_core() -> None:
 
     # 指向一个没人监听的端口：必须**显式失败**（返回非 0），而不是假装成功
     assert main(["--core", "127.0.0.1:1", "--once"]) != 0
+
+
+def test_ar12_evidence_cache_uses_payload_decision_id() -> None:
+    """回归：遥测事件 ID（`decision:<decision_id>`）与载荷里的 `decision_id` 不是同一个 ID。
+
+    链引用的是**载荷里的** `decision_id`；缓存必须装它，
+    否则 `AR-12` 会误判「证据不存在」并把整条链作废（`make dev` 第 6 步真抓到过）。
+    """
+    payload = {
+        "decision_id": "devcheck-样本名",
+        "at": "2026-09-19T10:00:00+08:00",
+        "source_ip": "203.0.113.9",
+        "method": "GET",
+        "path": "/.git/config",
+        "user_agent": "HeadlessChrome/120",
+        "action": "route_origin",
+        "signals": ["ua-headless"],
+    }
+    port = InMemoryTelemetry(
+        [
+            WireEvent(
+                event_id="decision:devcheck-样本名",  # 外层幂等键
+                event_type="decision",
+                payload=json.dumps(payload).encode("utf-8"),
+                created_at=payload["at"],
+            )
+        ]
+    )
+    run = run_once(port, now="2026-09-19T10:00:30+08:00")
+    assert run.errors == [], f"不应因证据 ID 命名空间不一致而作废：{run.errors}"
+    assert run.chain is not None and run.chain.stages, "链应成形"
+    assert run.chain.stages[0].evidence_ids == ("devcheck-样本名",)

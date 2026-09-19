@@ -9,6 +9,34 @@
 
 ---
 
+## 2026-09-19 · 修复：L4 证据缓存命名空间错位（`make dev` 第 6 步抓到）+ archcheck 放过构建产物
+
+**做了什么**：给 `make dev` 加了第 6 步「跑一轮 L4」之后，它**立刻红了**，并抓到一个上一轮没暴露的**真 bug**——
+① **证据缓存装错命名空间**：判定事件有**两个 ID** —— 外层幂等键是 `decision:<decision_id>`，载荷里才是 `decision_id`；
+而 L4 的链引用的是**载荷里的**那个。缓存只装了外层键，于是 `AR-12`（引用必须存在于遥测）把**每一条链都判成引用不存在**、整链作废。
+修复：缓存同时装两者；并加回归用例 `test_ar12_evidence_cache_uses_payload_decision_id`（构造 `event_id != decision_id` 的场景）。
+② **`archcheck` 把构建产物当源码布局**：`pip install -e .` 在仓库根生成 `shen_analysis.egg-info/`，`ST-1`（顶层目录白名单）因此拦下门禁。
+修复：把 `*.egg-info` / `build` / `dist` / `__pycache__` 归入工具目录跳过，并同步 `.gitignore`（它们是产物，列进 `structure.md` 反而让那份布局失真）。
+
+**改了哪些文件**：`analysis/worker.py` · `analysis/tests/test_worker.py` · `scripts/archcheck/main.go` · `.gitignore` ·
+`docs/plans/2026-09-19-l4-runtime-and-event-contract.md`
+
+**对应文档**：[`docs/plans/2026-09-19-l4-runtime-and-event-contract.md`](docs/plans/2026-09-19-l4-runtime-and-event-contract.md)（审视记录第 7、8 条）
+
+**验证**：`make gate` 通过；`make dev` 通过（含第 6 步 L4 近线分析）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| `make dev` 第 6 步 | 跑通并打印结论 | ✅ `取事件 3 条 · 去重后 3 条 · 结论 2 条（新 2）`，无 `AR-12` 报错 |
+| 回归用例 | 事件 ID 与载荷 ID 不同也不误判 | ✅ `37 passed` |
+| 顶层目录检查 | 构建产物不再算源码布局 | ✅ `make gate` 的 `archcheck` 通过 |
+
+**没做 / 遗留**：① L4 **无断点续读**；② 未接真实 LLM；③ `strategy` 结论未回写 `policy`；④ 事件类型有两套载荷形状（核心的 `decision` 与控制台/适配器的 `request_judged`），
+只有前者进了 `docs/spec/events.md` —— 后者的字典待补齐；⑤ `honeypot-shell` 与蜜罐协议栈内容按目标排除。
+
+---
+
 ## 2026-09-19 · L4 接入运行时（近线 worker）+ 事件契约对齐（跨语言夹具）
 
 **做了什么**：上一轮交付的 L4 只有库与单测 —— 设计里它是链路一环，运行时却**无人调用**。本轮把它**真接上**，并在接的过程中抓到一处**真缺陷**。

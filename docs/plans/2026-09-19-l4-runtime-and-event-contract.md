@@ -135,6 +135,8 @@ $ make gate                            → 门禁通过。
 | 3 | gRPC 生成桩用绝对导入，`python -m analysis.worker` 崩 | **缺陷**（只有 `pytest` 下能跑） | `ModuleNotFoundError: No module named 'telemetry'` | `ensure_proto_path()` 把桩目录入 `sys.path` | ✅ 两种调用方式都可用 |
 | 4 | 页面尾部重复 `</body></html>` 且 `</script>` 位置错 | **缺陷**（HTML 结构损坏） | 静态检查 `Tag must be paired` | 修正为 `</script></body></html>` | ✅ 结构检查通过 |
 | 5 | 旧 console 进程占着端口，新二进制没接上（一度误判为接口未实现） | 环境陷阱 | `lsof` 显示旧 PID 仍 LISTEN | 按端口杀 PID 后重启；并把「进程名不匹配 `pkill -f`」记入经验 | ✅ `/api/analysis` 200 |
+| 7 | **证据缓存装错命名空间**：装的是遥测事件 ID（`decision:<id>`），而链引用的是载荷里的 `decision_id` | **缺陷**（`AR-12` 误判、整链作废） | `make dev` 第 6 步报 `攻击链作废：引用了不存在的证据 ID（AR-12）` | 缓存同时装两者，并加回归用例 `test_ar12_evidence_cache_uses_payload_decision_id` | ✅ `make dev` 全绿 |
+| 8 | `pip install -e .` 在仓库根生成 `shen_analysis.egg-info/`，被 `archcheck` 按「新增顶层目录」拦下 | 工具误判（产物当源码布局） | `make gate` 报 `ST-1 ... shen_analysis.egg-info/` | `archcheck` 增加产物目录跳过（`*.egg-info` / `build` / `dist` / `__pycache__`）+ `.gitignore` | ✅ `make gate` 通过 |
 | 6 | 静态检查器报包内相对/绝对导入都"无法解析" | 工具误判 | 两种 cwd 导入成功 + 36 项测试全过 + 可编辑安装 | 显式关闭该噪音规则并写明理由（运行时权威） | ✅ 噪音消除 |
 
 ---

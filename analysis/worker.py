@@ -118,7 +118,11 @@ def run_once(
         return run
 
     run.fetched = len(fetched)
-    evidence.feed([event.event_id for event in fetched])
+    # 证据缓存要装「L4 会引用的 ID」：判定事件的**载荷里**是 `decision_id`（与契约、控制台一致），
+    # 而遥测事件 ID 是 `decision:<decision_id>`（外层幂等键）。两者都装 ——
+    # 只装后者曾导致 AR-12 误判「引用的证据不存在」，整条攻击链被作废（make dev 抓到的真 bug）。
+    for event in fetched:
+        evidence.feed([event.event_id, str(event.json_payload().get("decision_id", ""))])
 
     decisions = [event for event in fetched if event.event_type == "decision"]
     observations = parse_all([event.json_payload() for event in decisions])
