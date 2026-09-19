@@ -38,6 +38,9 @@
 | 忽略清单自检 | 正反两向 | ✅ 当前通过；故意加 `/core/cmd/core` 时精确报出 3 个文件并退出非 0 |
 | 门禁 | 全绿 | ✅ `make gate` |
 
+**补记（同轮修复）**：搬迁 venv 后 `scripts/dev/smoke.sh` 仍查旧路径 `.venv`，导致 `make dev` 第 6 步直接报「缺 L4 环境」。
+已改为查 `analysis/.venv`，并全仓库扫描残留引用（`Makefile` 的 `cd analysis && .venv/...` 是正确的，文档均已写成 `analysis/.venv`）。
+
 **没做 / 遗留**：① 跨节点部署仍需 mTLS（设计约束，未实现）；② 控制台无鉴权（`ADR-0020`）；③ `analysis` 镜像 250MB 可再瘦；
 ④ vendor 让仓库变大（若代理可达可去掉）；⑤ 按用户要求**已停掉本机 cairn 项目的容器**（stop，未删除）以释放 8080。
 

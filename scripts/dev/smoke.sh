@@ -139,8 +139,9 @@ go test -count=1 -run TestRuleReplay -v ./core/cmd/core || fail "规则回放失
 echo
 echo
 echo "== 6/6 L4 近线分析（读遥测事件 → 意图/链/策略 → 结论事件） =="
-if [ -x "${ROOT}/.venv/bin/python" ]; then
-	SHEN_CORE_ADDR="${ADDR}" "${ROOT}/.venv/bin/python" -m analysis.worker \
+# L4 的环境在 analysis/.venv（Python 是 L4 的实现选择，工具链收在该层内）。
+if [ -x "${ROOT}/analysis/.venv/bin/python" ]; then
+	SHEN_CORE_ADDR="${ADDR}" "${ROOT}/analysis/.venv/bin/python" -m analysis.worker \
 		--core "${ADDR}" --once || fail "L4 近线分析未通过"
 else
 	fail "缺 L4 环境：先跑 make pyenv（TB-15：Python 必须过 ruff 与 pytest）"

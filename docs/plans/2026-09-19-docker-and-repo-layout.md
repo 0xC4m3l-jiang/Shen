@@ -145,6 +145,7 @@ $ make gate
 | 8 | `/core/core` 是空转规则，容易被误读成「忽略源码」 | 误导 | `ls core/core` 不存在；用户据此提问 | 删掉空转项、补齐兜底项、写明「不影响源码」 | ✅ |
 | 9 | `.vscode/` 与已被取代的 `pyrightconfig.json` | 无用文件 | 前者仅 2 个编辑器配置；后者已并入 `analysis/pyproject.toml` | 删除 | ✅ |
 | 10 | 我用 `docker logs -f` 看日志导致命令**挂住不返回** | 自伤（用法错误） | 命令一直流式输出不退出 | 新增 `make docker-log`（不跟随）并在 README/KB 写明区别 | ✅ |
+| 12 | 搬迁 venv 后 `scripts/dev/smoke.sh` 仍查旧路径 `.venv` | **缺陷**（`make dev` 第 6 步直接红） | `❌ 缺 L4 环境：先跑 make pyenv` | 改为查 `analysis/.venv`，并全仓库扫描残留引用 | ✅ `make dev` 全绿 |
 | 11 | 宿主 8080 被**别的项目**容器占用，`make up` 失败 | 环境冲突（非本仓库问题） | `Bind for 0.0.0.0:8080 failed: port is already allocated` | 宿主端口改为可配、默认避开（18080/19444）；按用户要求停掉 cairn 容器 | ✅ |
 
 ---
