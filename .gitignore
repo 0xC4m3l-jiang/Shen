@@ -32,3 +32,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.py[cod]
+
+# Python 构建产物（pip install -e . 会在仓库根生成 egg-info；archcheck 已把它排除在源码布局外）
+*.egg-info/
+build/
+dist/

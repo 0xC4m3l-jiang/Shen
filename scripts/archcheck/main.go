@@ -132,8 +132,8 @@ func checkTopLevel(root string, allowed []string) []finding {
 			continue
 		}
 		name := e.Name()
-		// 隐藏目录（.git / .pi / .github 等）与常见工具目录不属源码布局
-		if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+		// 隐藏目录（.git / .pi / .github 等）与常见工具/构建目录不属源码布局
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".egg-info") || isToolDir(name) {
 			continue
 		}
 		if !set[name] {
@@ -148,6 +148,19 @@ func checkTopLevel(root string, allowed []string) []finding {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// isToolDir 判断一个顶层目录是不是工具/构建产物（不是源码平面）。
+//
+// `*.egg-info`（Python 可编辑安装产生）与 `build` / `dist` / `__pycache__` 都是**产物**，
+// 列进 structure.md §1.1 反而会让那份「源码布局」失真，所以在这里排除。
+func isToolDir(name string) bool {
+	switch name {
+	case "vendor", "node_modules", "build", "dist", "__pycache__":
+		return true
+	default:
+		return false
+	}
+}
+
 // 检查 2 · ST-2 / ST-4 禁止跨顶层目录 import
 // ─────────────────────────────────────────────────────────────────────────────
 

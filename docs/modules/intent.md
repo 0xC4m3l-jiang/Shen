@@ -79,6 +79,8 @@
 | 引用校验 | 引用不存在的证据 ID 必被拒（`AR-12`） | 同上 |
 | 分支穷尽性 | `accepted` 真假两分支 | `MD-8` |
 
+| 运行时链路 | 近线 worker 调用本模块并把结论上报为事件 | `analysis/tests/test_worker.py` + `make analysis`（[ADR-0022](../background/decisions/0022-l4-near-line-worker.md)） |
+
 ## 8. 未决项
 
 | # | 未决 | 阻塞什么 | 去向 |

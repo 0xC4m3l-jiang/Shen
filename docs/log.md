@@ -9,6 +9,45 @@
 
 ---
 
+## 2026-09-19 · L4 接入运行时（近线 worker）+ 事件契约对齐（跨语言夹具）
+
+**做了什么**：上一轮交付的 L4 只有库与单测 —— 设计里它是链路一环，运行时却**无人调用**。本轮把它**真接上**，并在接的过程中抓到一处**真缺陷**。
+① **真缺陷（最重要）**：L4 按**自造字段名**解析事件（`event_id` / `source`），而核心写出的载荷是 Go 字段名（`DecisionID` / `SourceIP`）—— 第一次真接就出现「取到 26 条事件、**0 条可分析**」。测试自洽、真实形状不符，属"自洽但错"的典型。
+② **统一契约**：判定事件的 JSON 键名统一为 **snake_case**（`core/internal/control/observer.go` 加 JSON 标签），Python 侧 L4 与控制台同键；契约正文写入 `docs/spec/events.md`。
+③ **防复发**：新增**跨语言契约夹具** `api/telemetry/v1/testdata/decision_event.json`（由 Go 结构体**直接生成**），Go 侧 `observer_contract_test.go` 与 Python 侧 `test_event_contract.py` **读同一夹具** —— 任何一方改键即红。
+④ **运行时链路（近线 worker，[ADR-0022](docs/background/decisions/0022-l4-near-line-worker.md)）**：`analysis/telemetry.py`（遥测端口 + gRPC 适配器 + 内存替身）与 `analysis/worker.py`（取事件 → `AR-14` 态势去重 → 意图 → 攻击链（`AR-12` 证据校验）→ 策略 → 结论**作为事件**上报）。三条硬边界：**不在业务路径**（近线，挂了不影响请求，`NI-1`）· **无执行能力**（`AR-32`）· **不写存储**（`MD-20`）。
+⑤ **结论可见**：控制台新增 `分析结论（L4）` 块与 /api/analysis，概览加 `l4_conclusions` 计数；页面渲染仍**一律 `textContent`**（攻击者可控字符串，16 处，无 `innerHTML` 拼接）。
+⑥ **门禁与开发循环**：`make pygen`（生成 Python gRPC 桩）· `make analysis`（跑一轮 L4）· `make dev` 第 6 步跑一轮并打印结论；修掉一处 Make 陷阱 —— 目标名 `analysis` 与同名目录冲突，Make 认为"已是最新"（`.PHONY` 里原先那条是多行续行，早先的替换没生效）。
+⑦ **工程化**：`analysis` 成为**可编辑安装的包**（资源随包分发，`AR-24`），导入不再依赖 cwd；Python 依赖锁定（`grpcio` / `grpcio-tools` / `pyyaml` / `ruff` / `pytest`）；静态检查器在本仓库的导入解析误报，用**文件级指令**显式关闭并写明理由（运行时权威判据是 `pytest`）。
+
+**改了哪些文件**：`analysis/telemetry.py` · `analysis/worker.py` · `analysis/events.py` · `analysis/proto/` ·
+`analysis/llm/__init__.py` · `analysis/llm/*.py` · `analysis/chain/*.py` · `analysis/intent/recognize.py` · `analysis/strategy/*.py` ·
+`analysis/tests/test_worker.py` · `analysis/tests/test_event_contract.py` · `analysis/tests/test_llm_contract.py` · `analysis/tests/test_llm_discipline.py` · `analysis/tests/test_l4_modules.py` ·
+`core/internal/control/observer.go` · `core/internal/control/observer_contract_test.go` · `core/cmd/core/main.go` ·
+`api/telemetry/v1/testdata/decision_event.json` · `console/cmd/console/main.go` · `console/web/index.html` ·
+`pyproject.toml` · `requirements.txt` · `requirements-dev.txt` · `pyrightconfig.json` · `Makefile` · `scripts/dev/smoke.sh` · `scripts/demo/business.py` ·
+`docs/spec/events.md` · `docs/background/decisions/0022-l4-near-line-worker.md` · `docs/background/decisions/README.md` ·
+`docs/integrate/observability.md` · `docs/integrate/manual-test.md` · `docs/modules/llm-components.md` · `docs/modules/intent.md` · `docs/modules/chain.md` · `docs/modules/strategy.md`
+
+**对应文档**：[`docs/plans/2026-09-19-l4-runtime-and-event-contract.md`](docs/plans/2026-09-19-l4-runtime-and-event-contract.md)（含追溯矩阵与审视 6 条）· [`docs/spec/events.md`](docs/spec/events.md) · [`docs/background/decisions/0022-l4-near-line-worker.md`](docs/background/decisions/0022-l4-near-line-worker.md)
+
+**验证**：`make gate` 通过；`make dev` 通过（新增第 6 步 L4 近线分析）；**真进程端到端**实测（真核心 + 真流量 + 真 worker + 控制台）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 真流量经引擎 → 判定事件 | 事件可被 L4 解析 | ✅ `取事件 6 条 · 去重后 3 条 · 结论 2 条（新 2）` |
+| 结论内容 | 意图带证据；策略无诱饵即拒绝 | ✅ `intent accepted=True category=exfiltration` · `strategy accepted=False（没有可用诱饵，AR-15）` |
+| 控制台 | 结论可见 | ✅ /api/analysis HTTP 200，2 条；`l4_conclusions: 2`；页面 10149 字节含「分析结论（L4）」 |
+| 跨语言契约 | 两侧读同一夹具 | ✅ Go `TestDecisionRecordWireContract` PASS · Python `test_event_contract.py` 4 例通过 |
+| Python 单测 | 全过 | ✅ `36 passed` |
+| 幂等 | 同窗口重跑不重复 | ✅ `test_worker_is_idempotent_on_rerun`（新 0 / 重复 2） |
+
+**没做 / 遗留**：① **无断点续读**（每轮只取最近若干条，重启不回补更早事件）；② L4 **未接真实 LLM**（`UnconfiguredClient` 显式失败；`AR-19`…`AR-21` 的双阶段收尾尚未被真实走到）；
+③ `strategy` 结论**未回写 `policy`**（只是数据，接策略面是下一步）；④ 事件类型字典待 `spec` 下 logs.md 补齐；⑤ `honeypot-shell` 与蜜罐协议栈内容 —— **目标明确排除**，保持推迟。
+
+---
+
 ## 2026-09-19 · L4 分析层（Python）：`llm-components` / `intent` / `chain` / `strategy` + Python 门禁
 
 **做了什么**：完成目标里最后一块模块组 —— **L4 分析决策层**，设计指定 **Python**（`language.md` §1 · `TB-2` · `TB-20`），

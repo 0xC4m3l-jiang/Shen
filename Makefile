@@ -14,7 +14,8 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo
+        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
+        pyenv pyfmt-check pylint pytest pygen analysis
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -38,6 +39,8 @@ vet: ## go vet（依据 TB-15）
 	$(GO) vet ./...
 
 staticcheck: ## staticcheck，比 vet 更深（依据 TB-15；需先跑 make tools）
+	# 说明：本文件是 Makefile，不是 shell 脚本；把整份文件当 shell 分析属工具误用（SC1089）。
+	# shellcheck disable=SC1089
 	@if [ ! -x $(TOOLBIN)/staticcheck ]; then echo "staticcheck 未安装。先跑 make tools。"; echo "禁止跳过本检查 —— 静默跳过等于假绿。"; exit 1; fi
 	$(TOOLBIN)/staticcheck ./...
 
@@ -63,10 +66,22 @@ licensecheck: ## 依赖许可审计，拦 AGPL / SSPL / BUSL 等（依据 TB-16�
 PY      := .venv/bin/python
 PY_VENV := .venv
 
+pygen: ## 生成 L4 的 Python gRPC 桩（契约唯一事实源仍是 api/ 下的 .proto，ST-6）
+	$(require_pyenv)
+	@$(PY) -m grpc_tools.protoc -I api \
+		--python_out=analysis/proto --grpc_python_out=analysis/proto \
+		api/telemetry/v1/telemetry.proto
+	@echo "✓ L4 gRPC 桩已生成（analysis/proto）"
+
+analysis: ## 跑一轮 L4 近线分析（读核心遥测 → 上报结论事件；需核心已在跑）
+	$(require_pyenv)
+	@$(PY) -m analysis.worker --core $${SHEN_CORE_ADDR:-127.0.0.1:9443} --once
+
 pyenv: ## 建/更新 L4 的 .venv 并安装锁定依赖（首次或改锁文件后跑）
 	@test -d $(PY_VENV) || python3 -m venv $(PY_VENV)
 	@$(PY_VENV)/bin/pip install -q --upgrade pip
 	@$(PY_VENV)/bin/pip install -q -r requirements-dev.txt -r requirements.txt
+	@$(PY_VENV)/bin/pip install -q -e .
 	@echo "L4 环境就绪：$$($(PY_VENV)/bin/python --version)、ruff $$($(PY_VENV)/bin/ruff --version | cut -d' ' -f2)"
 
 define require_pyenv

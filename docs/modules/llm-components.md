@@ -103,6 +103,8 @@
 | 单元 | 黑名单三类各一例 | `analysis/tests/test_llm_discipline.py`（`test_ar22_*`） |
 | **注入样本回归** | 攻击者内容含指令时，**结论不得改变**（`AR-31`） | 同上（`test_ar31_*`，与 `MD-7` 正负样本同构） |
 | 超时注入 | 双阶段收尾 + 整体作废 | 同上（`test_ar19_*` / `test_ar21_*`） |
+| **跨语言契约** | 真实事件载荷可被本层解析（键名漂移即红） | `analysis/tests/test_event_contract.py`（夹具由 Go 结构体生成，见 [`../spec/events.md`](../spec/events.md)） |
+| 运行时链路 | 近线 worker 读事件 → 去重 → 结论上报 | `analysis/tests/test_worker.py` + `make analysis`（[ADR-0022](../background/decisions/0022-l4-near-line-worker.md)） |
 | 分支穷尽性 | `accepted` 真假两分支 | `analysis/llm/envelope.py` 的 `__post_init__` + 上述用例 |
 
 ## 8. 未决项

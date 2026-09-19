@@ -1,0 +1,16 @@
+{
+  "decision_id": "d-9f3c1a2b",
+  "source_ip": "203.0.113.9",
+  "method": "GET",
+  "path": "/.git/config",
+  "user_agent": "HeadlessChrome/120",
+  "action": "route_origin",
+  "severity": "none",
+  "backend": "",
+  "score": 0.9,
+  "signals": [
+    "ua-headless",
+    "path-probe"
+  ],
+  "at": "2026-09-19T10:00:00+08:00"
+}

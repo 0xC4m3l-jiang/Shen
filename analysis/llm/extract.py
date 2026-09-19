@@ -3,6 +3,10 @@
 ① 整段解析 → ② markdown 代码围栏内提取 → ③ 对每个 `{` 位置尝试解析（**必须**设扫描位置上限）。
 """
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 import json

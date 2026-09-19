@@ -4,14 +4,18 @@
 **不直接回写响应**（`AR-32`）。输出只是数据，灰度受 `policy` 的既有语义约束（`AR-13`）。
 """
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from analysis.llm.contract import Field, Schema, validate
-from analysis.llm.envelope import Envelope, accept, reject
-from analysis.llm.limits import Truncation, truncate_list
+from ..llm.contract import Field, Schema, validate
+from ..llm.envelope import Envelope, accept, reject
+from ..llm.limits import Truncation, truncate_list
 
 STRATEGY_SCHEMA = Schema(
     name="strategy",

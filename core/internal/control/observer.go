@@ -19,21 +19,24 @@ import (
 // 因此能回答人工测试与排障最关心的那句话：**这个请求为什么被判成这样、然后去了哪**。
 //
 // ⚠️ 它**只进观测面**，禁止回给适配器或客户端（`ST-7`：判定响应不回显分值 / 规则名 / 枚举）。
+//
+// JSON 标签是**跨语言事件契约**的一部分：Python 侧 L4（`analysis/events.py`）与前端都按 snake_case 读它。
+// 契约正文与跨语言夹具见 `docs/spec/events.md` 与 `api/telemetry/v1/testdata/decision_event.json`。
 type DecisionRecord struct {
-	DecisionID string // 幂等键（ST-10）
-	SourceIP   string
-	Method     string
-	Path       string
-	UserAgent  string
+	DecisionID string `json:"decision_id"` // 幂等键（ST-10）
+	SourceIP   string `json:"source_ip"`
+	Method     string `json:"method"`
+	Path       string `json:"path"`
+	UserAgent  string `json:"user_agent"`
 
-	Action   string // 三值（放行 / 改道 / 拦截）
-	Severity string // 旁路字段
-	Backend  string // 仅改道时非空
+	Action   string `json:"action"`   // 三值（放行 / 改道 / 拦截）
+	Severity string `json:"severity"` // 旁路字段
+	Backend  string `json:"backend"`  // 仅改道时非空
 
-	Score   float64  // 风险分（观测面可见）
-	Signals []string // 命中信号 ID（观测面可见）
+	Score   float64  `json:"score"`   // 风险分（观测面可见）
+	Signals []string `json:"signals"` // 命中信号 ID（观测面可见）
 
-	At time.Time // 由调用方注入（MD-6）
+	At time.Time `json:"at"` // 由调用方注入（MD-6）
 }
 
 // DecisionRecorder 是**写侧**依赖：每完成一次判定就记一笔。

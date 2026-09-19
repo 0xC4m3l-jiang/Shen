@@ -1,38 +1,33 @@
 """契约与信封纪律：`AR-15` / `AR-16` / `AR-17` / `AR-18` / `AR-23`。"""
 
+# pyright: reportMissingImports=false
+# 理由：本仓库静态检查器的导入解析不可靠（绝对/相对导入都误报）；运行时权威判据是 pytest。
+
 from __future__ import annotations
 
 import pytest
 
-from analysis.llm import (
-    ContractError,
-    Envelope,
-    ExtractionError,
-    Field,
-    Schema,
-    accept,
-    extract_json,
-    reject,
-    truncate_list,
-)
-from analysis.llm.limits import LimitError, cap_text
+from analysis.llm.contract import ContractError, Field, Schema
+from analysis.llm.envelope import Envelope, accept, reject
+from analysis.llm.extract import ExtractionError, extract_json
+from analysis.llm.limits import LimitError, Truncation, cap_text, truncate_list
 
 
 def test_ar15_bad_output_raises_never_defaults() -> None:
     schema = Schema("intent", (Field("category", (str,)),))
     with pytest.raises(ContractError):
-        from analysis.llm import validate
+        from analysis.llm.contract import validate
 
         validate({"category": 123}, schema)
     with pytest.raises(ContractError):
-        from analysis.llm import validate
+        from analysis.llm.contract import validate
 
         validate({}, schema)
 
 
 def test_ar15_extra_field_is_rejected() -> None:
     schema = Schema("s", (Field("a", (str,)),))
-    from analysis.llm import validate
+    from analysis.llm.contract import validate
 
     with pytest.raises(ContractError):
         validate({"a": "x", "b": "y"}, schema)
@@ -62,7 +57,7 @@ def test_ar17_scan_cap_bounds_work_on_long_output() -> None:
 
 
 def test_ar18_list_cap_records_truncation() -> None:
-    log: list[object] = []
+    log: list[Truncation] = []
     kept = truncate_list(list(range(100)), field="items", log=log)
     assert len(kept) == 64
     assert log[0].to_wire() == {"field": "items", "kept": 64, "dropped": 36, "cap": 64}

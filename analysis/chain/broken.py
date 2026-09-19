@@ -9,12 +9,16 @@
 本模块只**识别**；是否轮换变体由 `strategy.rotate` 决定，最终经 `policy` 下发（`AR-32`）。
 """
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from analysis.events import Observation
+from ..events import Observation
 
 MIN_SESSIONS_FOR_SAME_METHOD = 3
 

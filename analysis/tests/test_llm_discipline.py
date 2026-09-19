@@ -1,21 +1,19 @@
 """内容 / 超时 / 资源 / 间接注入纪律：`AR-19`…`AR-24` · `AR-31` · `AR-32`。"""
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 import pytest
 
-from analysis.llm import (
-    Blacklist,
-    UnconfiguredClient,
-    as_data_block,
-    assert_no_execution_surface,
-    assert_startup,
-    assert_structured,
-    run_two_phase,
-)
+from analysis.llm.blacklist import Blacklist
+from analysis.llm.client import UnconfiguredClient, assert_no_execution_surface
 from analysis.llm.contract import ContractError, validate
-from analysis.llm.prompts import PromptResourceError
-from analysis.llm.twophase import FINALIZE_SCHEMA
+from analysis.llm.prompts import PromptResourceError, assert_startup
+from analysis.llm.twophase import FINALIZE_SCHEMA, run_two_phase
+from analysis.llm.untrusted import as_data_block, assert_structured
 
 FINAL_OK = '{"session_id": "s-1", "actions_observed": ["scan"], "evidence_ids": ["e-1"]}'
 

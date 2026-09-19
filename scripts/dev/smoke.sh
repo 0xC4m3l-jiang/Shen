@@ -100,11 +100,11 @@ sed 's/weight: 0.3/weight: 1.5/' "$CFG" >"$BAD"
 
 echo "配置：${CFG}（临时） · 判定面：${ADDR}"
 echo
-echo "== 1/5 配置干跑：合法配置 =="
+echo "== 1/6 配置干跑：合法配置 =="
 SHEN_CONFIG="$CFG" go run ./core/cmd/core -check-config || fail "合法配置装载失败"
 
 echo
-echo "== 2/5 配置干跑：非法配置必须被拒 =="
+echo "== 2/6 配置干跑：非法配置必须被拒 =="
 if SHEN_CONFIG="$BAD" go run ./core/cmd/core -check-config >"$BAD_LOG" 2>&1; then
 	fail "非法配置竟然通过校验（配置校验形同虚设）"
 fi
@@ -116,7 +116,7 @@ fi
 grep "weight" "$BAD_LOG" | head -1
 
 echo
-echo "== 3/5 起核心（影子模式）：$ADDR =="
+echo "== 3/6 起核心（影子模式）：$ADDR =="
 SHEN_CONFIG="$CFG" SHEN_LISTEN="$ADDR" go run ./core/cmd/core >"$LOG" 2>&1 &
 CORE_PID=$!
 for _ in $(seq 1 60); do
@@ -130,11 +130,20 @@ grep -q "核心已启动" "$LOG" || fail "核心在 30 秒内没有就绪"
 cat "$LOG"
 
 echo
-echo "== 4/5 在线冒烟（判定面形状 + 幂等） =="
+echo "== 4/6 在线冒烟（判定面形状 + 幂等） =="
 go run ./scripts/devcheck -addr "$ADDR" || fail "在线冒烟失败"
 echo
-echo "== 5/5 规则回放（离线，打印命中明细） =="
+echo "== 5/6 规则回放（离线，打印命中明细） =="
 go test -count=1 -run TestRuleReplay -v ./core/cmd/core || fail "规则回放失败"
 
 echo
-echo "✅ 通过：配置校验 · 非法配置被拒 · 启动 · 判定面 · 冒烟 · 规则回放"
+echo
+echo "== 6/6 L4 近线分析（读遥测事件 → 意图/链/策略 → 结论事件） =="
+if [ -x "${ROOT}/.venv/bin/python" ]; then
+	SHEN_CORE_ADDR="${ADDR}" "${ROOT}/.venv/bin/python" -m analysis.worker \
+		--core "${ADDR}" --once || fail "L4 近线分析未通过"
+else
+	fail "缺 L4 环境：先跑 make pyenv（TB-15：Python 必须过 ruff 与 pytest）"
+fi
+echo
+echo "✅ 通过：配置校验 · 非法配置被拒 · 启动 · 判定面 · 冒烟 · 规则回放 · L4 近线分析"

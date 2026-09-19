@@ -138,6 +138,9 @@ func run() error {
 		return err
 	}
 
+	// nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
+	// 已接受项（非缺陷）：明文 gRPC **只允许本机**，上面 assertPlaintextListenIsLocal 已做失败关闭；
+	// 跨节点部署必须换 mTLS（见 docs/design/structure.md §4）。
 	srv := grpc.NewServer()
 	// 本期监听 127.0.0.1，明文 gRPC 可接受：TLS 在接入层（Envoy/Nginx）终结，
 	// 且 S1 只在同机内走（适配器与核心同主机）。

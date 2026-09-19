@@ -67,6 +67,17 @@
   </section>
 
   <section>
+    <h2>分析结论（L4） <span class="muted" id="analysisHint"></span></h2>
+    <p class="muted" style="margin:0 0 8px">
+      近线分析（`intent` / `chain` / `strategy`）的结论。它**不**参与请求级判定，也**不**直接下发策略
+      —— 只经 `policy` 间接生效（`AR-10` / `AR-32`）。手动跑一轮：`make analysis`。
+    </p>
+    <table id="analysis"><thead><tr>
+      <th>时间</th><th>结论类型</th><th>接受</th><th>结论 / 拒绝原因</th><th>分析条数</th><th>证据引用</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
     <h2>最近事件（原始）</h2>
     <table id="events"><thead><tr><th>时间</th><th>类型</th><th>来源</th><th>事件 ID</th></tr></thead><tbody></tbody></table>
   </section>
@@ -118,10 +129,24 @@ function tr(cells) {
   return row;
 }
 
+function summarizeConclusion(c) {
+  // 结论是结构化数据：这里只挑几个关键字段拼成一行（仍然走 textContent，不用 innerHTML）。
+  const d = c.data || {};
+  if (c.kind === "intent") return `意图 ${show(d.category)}（置信度 ${show(d.confidence)}）`;
+  if (c.kind === "strategy") {
+    const t = d.threshold_suggestions || {};
+    return `诱饵 ${(d.decoy_selection || []).join(", ") || "—"} · 灰度 ${show(d.gray_pct)}% · 阈值 ${show(t.route_mirage)}/${show(t.block)}`;
+  }
+  return JSON.stringify(d);
+}
+
 async function load() {
   try {
-    const [sum, flows, events] = await Promise.all([get("/api/summary"), get("/api/flow?limit=300"), get("/api/events?limit=100")]);
-    $("meta").textContent = `事件 ${sum.total} 条 · 告警 ${sum.alerts} 条`;
+    const [sum, flows, events, conclusions] = await Promise.all([
+      get("/api/summary"), get("/api/flow?limit=300"), get("/api/events?limit=100"),
+      get("/api/analysis?limit=100"),
+    ]);
+    $("meta").textContent = `事件 ${sum.total} 条 · 告警 ${sum.alerts} 条 · L4 结论 ${sum.l4_conclusions || 0} 条`;
 
     const cards = $("cards"); cards.textContent = "";
     const entries = Object.entries(sum.by_action || {});
@@ -134,21 +159,21 @@ async function load() {
       card.append(b, label); cards.appendChild(card);
     }
 
-    const alerts = flows.filter(f => (f.Action || "").toLowerCase().includes("block") ||
-      (f.Severity && f.Severity.toLowerCase() !== "none"));
+    const alerts = flows.filter(f => (f.action || "").toLowerCase().includes("block") ||
+      (f.severity && f.severity.toLowerCase() !== "none"));
     $("alertHint").textContent = alerts.length ? `（${alerts.length} 条）` : "（暂无告警 —— 影子模式下不会有拦截，属正常）";
     fillTable("alerts", alerts.map(f => tr([
-      td(fmtTime(f.At)), actionCell(f.Action), td(show(f.SourceIP)), td(show(f.Method)),
-      td(show(f.Path)), td(f.Score ? f.Score.toFixed(3) : "—"),
-      td((f.Signals || []).join(", ") || "—"), td(show(f.Backend)),
+      td(fmtTime(f.at)), actionCell(f.action), td(show(f.source_ip)), td(show(f.method)),
+      td(show(f.path)), td(f.score ? f.score.toFixed(3) : "—"),
+      td((f.signals || []).join(", ") || "—"), td(show(f.backend)),
     ])));
 
-    const shown = filter === "all" ? flows : flows.filter(f => (f.Action || "").toLowerCase().includes(filter));
+    const shown = filter === "all" ? flows : flows.filter(f => (f.action || "").toLowerCase().includes(filter));
     $("flowHint").textContent = `（显示 ${shown.length} / ${flows.length}）`;
     fillTable("flows", shown.map(f => tr([
-      td(fmtTime(f.At)), actionCell(f.Action), td(show(f.SourceIP)), td(show(f.Method)), td(show(f.Path)),
-      td(show((f.UserAgent || "").slice(0, 40)), "flow"), td(f.Score ? f.Score.toFixed(3) : "—"),
-      td((f.Signals || []).join(", ") || "—"), td(show(f.Backend)),
+      td(fmtTime(f.at)), actionCell(f.action), td(show(f.source_ip)), td(show(f.method)), td(show(f.path)),
+      td(show((f.user_agent || "").slice(0, 40)), "flow"), td(f.score ? f.score.toFixed(3) : "—"),
+      td((f.signals || []).join(", ") || "—"), td(show(f.backend)),
     ])));
 
     const bar = $("filterBar"); bar.textContent = "筛选：";
@@ -159,6 +184,15 @@ async function load() {
       b.onclick = () => { filter = k; load(); };
       bar.append(" ", b);
     }
+
+    $("analysisHint").textContent = conclusions.length
+      ? `（${conclusions.length} 条；跑 make analysis 可再造一批）`
+      : "（暂无 —— 核心没起、或还没跑过 L4：make analysis）";
+    fillTable("analysis", conclusions.map(c => tr([
+      td(fmtTime(c.at)), td(show(c.kind)), td(c.accepted ? "接受" : "拒绝"),
+      td(c.accepted ? summarizeConclusion(c) : show(c.rejected_reason), "flow"),
+      td(show(c.analyzed)), td((c.evidence_ids || []).length + " 个"),
+    ])));
 
     fillTable("events", events.map(e => tr([
       td(fmtTime(e.created_at)), td(show(e.type)), td(show(e.actor_id)), td(show(e.event_id), "flow"),
@@ -172,9 +206,6 @@ async function load() {
 $("refresh").onclick = load;
 $("auto").onchange = (e) => { if (e.target.checked) window._t = setInterval(load, 5000); else clearInterval(window._t); };
 load();
-
-</body>
-</html>
 </script>
 </body>
 </html>

@@ -7,6 +7,10 @@
 业务专有标识无法凭空得知，**必须**由部署方在启动时经 `identifiers` 注入（`AR-24`：资源随版本分发）。
 """
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 import re
@@ -16,7 +20,7 @@ from pathlib import Path
 
 import yaml
 
-from analysis.llm.limits import PURPOSE_LIMITS, LimitError
+from .limits import PURPOSE_LIMITS, LimitError
 
 DEFAULT_RESOURCE = Path(__file__).with_name("resources") / "blacklist.yaml"
 

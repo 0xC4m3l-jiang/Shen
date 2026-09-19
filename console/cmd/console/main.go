@@ -39,24 +39,29 @@ const (
 	defaultListen   = "127.0.0.1:9444"
 	// decisionEventType 是核心写侧用的判定事件类型（见 core/cmd/core 的观测面适配器）。
 	decisionEventType = "decision"
+
+	// analysisEventType 是 L4 近线分析上报的结论事件类型（见 analysis/worker.py）。
+	analysisEventType = "analysis"
 )
 
 // flowRecord 是**判定事件**的载荷形状（跨进程契约：与核心写侧的 DecisionRecord 字段一一对应）。
 //
 // 两端分属不同平面，因此没有共享的 Go 类型（适配器禁止 import 核心内部包）——
 // 改动其一**必须**同时改另一处，并在模块文档里记一笔。
+// flowRecord 与核心写出的事件载荷**同一形状**（snake_case）——
+// 页面的接口也用它，避免"载荷一套键、接口另一套键"的漂移。
 type flowRecord struct {
-	DecisionID string    `json:"DecisionID"`
-	SourceIP   string    `json:"SourceIP"`
-	Method     string    `json:"Method"`
-	Path       string    `json:"Path"`
-	UserAgent  string    `json:"UserAgent"`
-	Action     string    `json:"Action"`
-	Severity   string    `json:"Severity"`
-	Backend    string    `json:"Backend"`
-	Score      float64   `json:"Score"`
-	Signals    []string  `json:"Signals"`
-	At         time.Time `json:"At"`
+	DecisionID string    `json:"decision_id"`
+	SourceIP   string    `json:"source_ip"`
+	Method     string    `json:"method"`
+	Path       string    `json:"path"`
+	UserAgent  string    `json:"user_agent"`
+	Action     string    `json:"action"`
+	Severity   string    `json:"severity"`
+	Backend    string    `json:"backend"`
+	Score      float64   `json:"score"`
+	Signals    []string  `json:"signals"`
+	At         time.Time `json:"at"`
 }
 
 // eventView 是页面消费的事件视图（把 payload 解成对象，前端不用再解一次 JSON 字符串）。
@@ -71,12 +76,28 @@ type eventView struct {
 }
 
 // summary 是页头概览。
+// analysisView 是 L4 结论事件的页面视图。
+//
+// 结论只是**数据**：控制台只读展示，不改策略、不干预请求（AR-10 / AR-32）。
+type analysisView struct {
+	EventID     string          `json:"event_id"`
+	At          time.Time       `json:"at"`
+	Kind        string          `json:"kind"`
+	Accepted    bool            `json:"accepted"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	Reason      string          `json:"rejected_reason,omitempty"`
+	Analyzed    int             `json:"analyzed"`
+	EvidenceIDs []string        `json:"evidence_ids,omitempty"`
+}
+
 type summary struct {
-	Total     int            `json:"total"`
-	ByAction  map[string]int `json:"by_action"`
-	Alerts    int            `json:"alerts"` // block 或 severity 非 none 的条数
-	FirstSeen *time.Time     `json:"first_seen,omitempty"`
-	LastSeen  *time.Time     `json:"last_seen,omitempty"`
+	Total    int            `json:"total"`
+	ByAction map[string]int `json:"by_action"`
+	Alerts   int            `json:"alerts"` // block 或 severity 非 none 的条数
+	// L4Conclusions 是 L4 近线分析上报的结论条数（页面「分析结论」块的数据源）
+	L4Conclusions int        `json:"l4_conclusions"`
+	FirstSeen     *time.Time `json:"first_seen,omitempty"`
+	LastSeen      *time.Time `json:"last_seen,omitempty"`
 }
 
 type server struct {
@@ -101,6 +122,7 @@ func main() {
 	mux.HandleFunc("/api/summary", s.handleSummary)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/flow", s.handleFlow)
+	mux.HandleFunc("/api/analysis", s.handleAnalysis)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		// 存活探针只反映**本进程**存活；核心是否可达由页面上的错误提示体现（ST-17 的语义区分）。
 		w.WriteHeader(http.StatusOK)
@@ -149,6 +171,42 @@ func (s *server) handleFlow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// handleAnalysis 只返回 L4 的结论事件，并把载荷解成结构化字段。
+//
+// 这是「L4 到底分析了什么」在页面上的出处（人工测试时不用去翻日志）。
+func (s *server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
+	events, err := s.fetchType(r, analysisEventType)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := make([]analysisView, 0, len(events))
+	for _, ev := range events {
+		var payload struct {
+			Kind        string          `json:"kind"`
+			Accepted    bool            `json:"accepted"`
+			Data        json.RawMessage `json:"data"`
+			Reason      string          `json:"rejected_reason"`
+			Analyzed    int             `json:"analyzed"`
+			EvidenceIDs []string        `json:"evidence_ids"`
+		}
+		if err := json.Unmarshal(ev.Raw, &payload); err != nil {
+			continue // 解不出的结论不进页面：不猜、不补默认值
+		}
+		out = append(out, analysisView{
+			EventID:     ev.EventID,
+			At:          ev.CreatedAt,
+			Kind:        payload.Kind,
+			Accepted:    payload.Accepted,
+			Data:        payload.Data,
+			Reason:      payload.Reason,
+			Analyzed:    payload.Analyzed,
+			EvidenceIDs: payload.EvidenceIDs,
+		})
+	}
+	writeJSON(w, out)
+}
+
 // handleSummary 返回概览：总数、按决策分布、告警条数、时间范围。
 func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	events, err := s.fetch(r)
@@ -158,6 +216,9 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	sum := summary{Total: len(events), ByAction: map[string]int{}}
 	for _, ev := range events {
+		if ev.Type == analysisEventType {
+			sum.L4Conclusions++
+		}
 		if ev.Flow == nil {
 			continue
 		}
@@ -185,8 +246,13 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, sum)
 }
 
-// fetch 向核心要最近事件，并把判定事件的载荷解出来。
+// fetch 向核心要最近事件（事件类型取查询参数 `type`）。
 func (s *server) fetch(r *http.Request) ([]eventView, error) {
+	return s.fetchType(r, r.URL.Query().Get("type"))
+}
+
+// fetchType 同 fetch，但由调用方**指定**事件类型（页面上每个块各取各的）。
+func (s *server) fetchType(r *http.Request, eventType string) ([]eventView, error) {
 	limit := 200
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
@@ -198,7 +264,7 @@ func (s *server) fetch(r *http.Request) ([]eventView, error) {
 
 	resp, err := s.client.ListEvents(ctx, &telemetryv1.ListEventsRequest{
 		Limit:     uint32(limit),
-		EventType: r.URL.Query().Get("type"),
+		EventType: eventType,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("读核心事件失败（核心没起或地址不对？）：%w", err)

@@ -6,6 +6,10 @@
 - 两阶段均失败时**禁止**写入任何中间数据，**必须**释放已占用的标记（认领、租约）（`AR-21`）。
 """
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 import time
@@ -13,9 +17,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from analysis.llm.contract import Field, Schema, validate
-from analysis.llm.envelope import Envelope, accept, reject
-from analysis.llm.extract import ExtractionError, extract_json
+from .contract import Field, Schema, validate
+from .envelope import Envelope, accept, reject
+from .extract import ExtractionError, extract_json
 
 FINALIZE_SCHEMA = Schema(
     name="finalize",

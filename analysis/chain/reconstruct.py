@@ -1,14 +1,18 @@
 """攻击链还原（`chain`）—— 把零散事件串成可追踪、可回放的阶段序列。"""
 
+# pyright: reportMissingImports=false, reportMissingModuleSource=false
+# 本仓库静态检查器的导入解析不可靠（绝对导入与包内相对导入都误报）；
+# 运行时权威判据是 pytest（缺导入会在运行时真炸）+ `pip install -e .` 安装为包。
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from analysis.chain.broken import BrokenSignal, detect
-from analysis.chain.evidence import EvidenceIndex, assert_exists
-from analysis.events import Observation
-from analysis.intent.recognize import CATEGORIES, rule_hits
+from ..events import Observation
+from ..intent.recognize import CATEGORIES, rule_hits
+from .broken import BrokenSignal, detect
+from .evidence import EvidenceIndex, assert_exists
 
 STAGE_ORDER = CATEGORIES
 
