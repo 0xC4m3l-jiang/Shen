@@ -48,13 +48,15 @@ policy:
 # 规则集 —— 数据，不是代码（ST-24）。
 # 键必须存在：空数组合法，但启动会打印「规则集为空」告警。
 # 算符与字段的允许值见 docs/spec/config.md §2.4。
-rules: []
-#  - id: "ua-headless"
-#    weight: 0.6
-#    match: { field: "user_agent", op: "contains", value: "HeadlessChrome" }
-#  - id: "path-probe"
-#    weight: 0.3
-#    match: { field: "path", op: "prefix", value: "/.git" }
+# ★ 默认给两条**可直接观察**的示例规则：没有规则时一切判定都是 0 分 0 信号，
+#   人工测试会「什么都看不见」。默认影子模式（INT-11）下它们只影响分数与信号，不改变处置。
+rules:
+  - id: "ua-headless"
+    weight: 0.6
+    match: {field: "user_agent", op: "contains", value: "HeadlessChrome"}
+  - id: "path-probe"
+    weight: 0.3
+    match: {field: "path", op: "prefix", value: "/.git"}
 
 # 白名单（INT-25 预留）—— 本期只解析与校验，不消费。
 # 消费方是 director 的引流判定前置：内部 IP / 健康检查 / 监控探针必须在引流判定前放行。

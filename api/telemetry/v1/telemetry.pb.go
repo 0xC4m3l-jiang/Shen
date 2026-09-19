@@ -152,6 +152,113 @@ func (x *TelemetryBatch) GetEvents() []*TelemetryEvent {
 	return nil
 }
 
+type ListEventsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 返回条数上限；0 = 服务端默认（200）。
+	Limit uint32 `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
+	// 只返回该时刻之后的事件；不填 = 不限。
+	Since *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
+	// 只看某类事件（如 request_judged）；空 = 不限。
+	EventType     string `protobuf:"bytes,3,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListEventsRequest) Reset() {
+	*x = ListEventsRequest{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListEventsRequest) ProtoMessage() {}
+
+func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListEventsRequest.ProtoReflect.Descriptor instead.
+func (*ListEventsRequest) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ListEventsRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListEventsRequest) GetSince() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Since
+	}
+	return nil
+}
+
+func (x *ListEventsRequest) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+type ListEventsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Events        []*TelemetryEvent      `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListEventsResponse) Reset() {
+	*x = ListEventsResponse{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListEventsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListEventsResponse) ProtoMessage() {}
+
+func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListEventsResponse.ProtoReflect.Descriptor instead.
+func (*ListEventsResponse) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListEventsResponse) GetEvents() []*TelemetryEvent {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
 type ReportAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Accepted      uint32                 `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
@@ -162,7 +269,7 @@ type ReportAck struct {
 
 func (x *ReportAck) Reset() {
 	*x = ReportAck{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -174,7 +281,7 @@ func (x *ReportAck) String() string {
 func (*ReportAck) ProtoMessage() {}
 
 func (x *ReportAck) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -187,7 +294,7 @@ func (x *ReportAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAck.ProtoReflect.Descriptor instead.
 func (*ReportAck) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{2}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReportAck) GetAccepted() uint32 {
@@ -220,15 +327,24 @@ const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"F\n" +
 	"\x0eTelemetryBatch\x124\n" +
+	"\x06events\x18\x01 \x03(\v2\x1c.telemetry.v1.TelemetryEventR\x06events\"z\n" +
+	"\x11ListEventsRequest\x12\x14\n" +
+	"\x05limit\x18\x01 \x01(\rR\x05limit\x120\n" +
+	"\x05since\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x03 \x01(\tR\teventType\"J\n" +
+	"\x12ListEventsResponse\x124\n" +
 	"\x06events\x18\x01 \x03(\v2\x1c.telemetry.v1.TelemetryEventR\x06events\"G\n" +
 	"\tReportAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\rR\baccepted\x12\x1e\n" +
 	"\n" +
 	"duplicated\x18\x02 \x01(\rR\n" +
-	"duplicated2\x9b\x01\n" +
+	"duplicated2\xec\x01\n" +
 	"\x12DeceptionTelemetry\x12?\n" +
 	"\x06Report\x12\x1c.telemetry.v1.TelemetryEvent\x1a\x17.telemetry.v1.ReportAck\x12D\n" +
-	"\vReportBatch\x12\x1c.telemetry.v1.TelemetryBatch\x1a\x17.telemetry.v1.ReportAckB#Z!shen/api/telemetry/v1;telemetryv1b\x06proto3"
+	"\vReportBatch\x12\x1c.telemetry.v1.TelemetryBatch\x1a\x17.telemetry.v1.ReportAck\x12O\n" +
+	"\n" +
+	"ListEvents\x12\x1f.telemetry.v1.ListEventsRequest\x1a .telemetry.v1.ListEventsResponseB#Z!shen/api/telemetry/v1;telemetryv1b\x06proto3"
 
 var (
 	file_telemetry_v1_telemetry_proto_rawDescOnce sync.Once
@@ -242,25 +358,31 @@ func file_telemetry_v1_telemetry_proto_rawDescGZIP() []byte {
 	return file_telemetry_v1_telemetry_proto_rawDescData
 }
 
-var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_telemetry_v1_telemetry_proto_goTypes = []any{
 	(*TelemetryEvent)(nil),        // 0: telemetry.v1.TelemetryEvent
 	(*TelemetryBatch)(nil),        // 1: telemetry.v1.TelemetryBatch
-	(*ReportAck)(nil),             // 2: telemetry.v1.ReportAck
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*ListEventsRequest)(nil),     // 2: telemetry.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),    // 3: telemetry.v1.ListEventsResponse
+	(*ReportAck)(nil),             // 4: telemetry.v1.ReportAck
+	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
 }
 var file_telemetry_v1_telemetry_proto_depIdxs = []int32{
-	3, // 0: telemetry.v1.TelemetryEvent.created_at:type_name -> google.protobuf.Timestamp
+	5, // 0: telemetry.v1.TelemetryEvent.created_at:type_name -> google.protobuf.Timestamp
 	0, // 1: telemetry.v1.TelemetryBatch.events:type_name -> telemetry.v1.TelemetryEvent
-	0, // 2: telemetry.v1.DeceptionTelemetry.Report:input_type -> telemetry.v1.TelemetryEvent
-	1, // 3: telemetry.v1.DeceptionTelemetry.ReportBatch:input_type -> telemetry.v1.TelemetryBatch
-	2, // 4: telemetry.v1.DeceptionTelemetry.Report:output_type -> telemetry.v1.ReportAck
-	2, // 5: telemetry.v1.DeceptionTelemetry.ReportBatch:output_type -> telemetry.v1.ReportAck
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	5, // 2: telemetry.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	0, // 3: telemetry.v1.ListEventsResponse.events:type_name -> telemetry.v1.TelemetryEvent
+	0, // 4: telemetry.v1.DeceptionTelemetry.Report:input_type -> telemetry.v1.TelemetryEvent
+	1, // 5: telemetry.v1.DeceptionTelemetry.ReportBatch:input_type -> telemetry.v1.TelemetryBatch
+	2, // 6: telemetry.v1.DeceptionTelemetry.ListEvents:input_type -> telemetry.v1.ListEventsRequest
+	4, // 7: telemetry.v1.DeceptionTelemetry.Report:output_type -> telemetry.v1.ReportAck
+	4, // 8: telemetry.v1.DeceptionTelemetry.ReportBatch:output_type -> telemetry.v1.ReportAck
+	3, // 9: telemetry.v1.DeceptionTelemetry.ListEvents:output_type -> telemetry.v1.ListEventsResponse
+	7, // [7:10] is the sub-list for method output_type
+	4, // [4:7] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_telemetry_v1_telemetry_proto_init() }
@@ -274,7 +396,7 @@ func file_telemetry_v1_telemetry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_telemetry_v1_telemetry_proto_rawDesc), len(file_telemetry_v1_telemetry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

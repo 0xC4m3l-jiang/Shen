@@ -140,6 +140,8 @@ func (s *IsolationMemory) Put(_ context.Context, key contract.SessionKey, hit co
 type DecisionMemory struct {
 	mu sync.RWMutex
 	m  map[string]contract.Decision
+	// recent 是最近归档的判定（newest first），有上限 —— 供观测面读侧使用。
+	recent []contract.Decision
 }
 
 // NewDecisionMemory 构造内存实现。
@@ -164,6 +166,24 @@ func (s *DecisionMemory) PutCached(_ context.Context, d contract.Decision, _ tim
 }
 
 // Archive 归档判定（生产实现写入 ClickHouse）。
+// List 返回最近的判定记录（newest first）。
+func (s *DecisionMemory) List(_ context.Context, q DecisionQuery) ([]contract.Decision, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]contract.Decision, 0, limit)
+	for _, d := range s.recent {
+		out = append(out, d)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (s *DecisionMemory) Archive(ctx context.Context, d contract.Decision) error {
 	return s.PutCached(ctx, d, 0)
 }
@@ -171,9 +191,14 @@ func (s *DecisionMemory) Archive(ctx context.Context, d contract.Decision) error
 // ── EventStore ──────────────────────────────────────────
 
 // EventMemory 是 EventStore 的内存实现。
+//
+// 它同时保留**最近 DefaultEventBuffer 条事件本体**，供观测面读侧（控制台看告警与流量）使用。
+// 内存实现不追求完整历史 —— 那是真实存储（ClickHouse）的事；这里只要「够看最近的」。
 type EventMemory struct {
 	mu sync.RWMutex
 	m  map[string]struct{}
+	// recent 是最近写入的事件（newest first）。有上限：观测缓冲不得无界增长。
+	recent []contract.Event
 }
 
 // NewEventMemory 构造内存实现。
@@ -190,7 +215,36 @@ func (s *EventMemory) Write(_ context.Context, ev contract.Event) (bool, error) 
 		return false, nil
 	}
 	s.m[ev.EventID] = struct{}{}
+	// newest first：头部插入，超上限就截断尾部。
+	s.recent = append([]contract.Event{ev}, s.recent...)
+	if len(s.recent) > DefaultEventBuffer {
+		s.recent = s.recent[:DefaultEventBuffer]
+	}
 	return true, nil
+}
+
+// List 返回最近的事件（newest first），支持按时间与类型过滤。
+func (s *EventMemory) List(_ context.Context, q EventQuery) ([]contract.Event, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultListLimit
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]contract.Event, 0, limit)
+	for _, ev := range s.recent {
+		if !q.Since.IsZero() && ev.CreatedAt.Before(q.Since) {
+			continue
+		}
+		if q.Type != "" && ev.Type != q.Type {
+			continue
+		}
+		out = append(out, ev)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 // WriteBatch 批量幂等写入，返回实际写入条数。

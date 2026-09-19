@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -144,11 +145,16 @@ func run() error {
 	//
 	// NI-10：熔断落在服务面（看到全部请求），错误率超阈值时自动纯放行。
 	breaker := control.NewBreaker(control.BreakerConfig{})
+	// 观测面（写侧 + 读侧）：控制台要能回答「这个请求为什么被判成这样、然后去了哪」。
+	// 写侧把每次判定同时落成**事件**（供 UI 直接读）与**判定记录**（数据模型要求，structure.md §3）。
+	observer := decisionRecorder{events: collector, decisions: stores.Decision}
 	judgev1.RegisterDeceptionJudgeServer(srv,
 		control.NewJudgeService(decider, sess,
 			control.WithBreaker(breaker),
-			control.WithIsolation(surf.isolate)))
-	telemetryv1.RegisterDeceptionTelemetryServer(srv, control.NewTelemetryService(collector))
+			control.WithIsolation(surf.isolate),
+			control.WithDecisionRecorder(observer)))
+	telemetryv1.RegisterDeceptionTelemetryServer(srv,
+		control.NewTelemetryServiceWith(collector, control.WithEventLister(eventLister{events: stores.Event})))
 	// 策略面（S4）：把当前策略版本投影后下发给适配器，并接收它们的回执（AR-13 / ST-8）。
 	// 服务端落在 policy 模块（它持有快照与校验和）—— 不新增模块，见 ADR-0018。
 	policyv1.RegisterDeceptionPolicyServer(srv, policy.NewServer(loader, stores.Policy))
@@ -271,6 +277,67 @@ func assertConsistency(ctx context.Context, r responder.Responder) error {
 		return errors.New("responder: 一致性不变量被破坏（AR-30）—— 同输入两次结果不同")
 	}
 	return nil
+}
+
+// ── 观测面适配器（把 store / telemetry 接到 control 定义的接口上）────────────
+
+// decisionRecorder 把一次判定记成两类东西：
+//
+//	① **事件**（type = `decision`）：控制台直接读它渲染「流量在引擎中如何流动」；
+//	② **判定记录**（`store.DecisionStore.Archive`）：数据模型要求的实体（`structure.md` §3）。
+//
+// 事件优先：读侧靠它。任一失败都只返回错误，由服务面记日志 —— **禁止**影响判定响应（`NI-1`）。
+type decisionRecorder struct {
+	events    telemetry.Telemetry
+	decisions store.DecisionStore
+}
+
+func (r decisionRecorder) Record(ctx context.Context, rec control.DecisionRecord) error {
+	payload, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if _, err := r.events.Report(ctx, contract.Event{
+		EventID:   "decision:" + rec.DecisionID, // 幂等键：同一 decision_id 不重复记（AR-11）
+		Type:      "decision",
+		ActorID:   rec.SourceIP,
+		Payload:   payload,
+		CreatedAt: rec.At,
+	}); err != nil {
+		return err
+	}
+	return r.decisions.Archive(ctx, contract.Decision{
+		DecisionID: rec.DecisionID,
+		Action:     actionFromString(rec.Action),
+		Severity:   severityFromString(rec.Severity),
+		Backend:    rec.Backend,
+	})
+}
+
+// eventLister 把 store 的事件读侧接到 `control.EventLister` 上。
+type eventLister struct{ events store.EventStore }
+
+func (l eventLister) ListEvents(ctx context.Context, limit int, since time.Time, eventType string) ([]contract.Event, error) {
+	return l.events.List(ctx, store.EventQuery{Limit: limit, Since: since, Type: eventType})
+}
+
+// actionFromString / severityFromString 把观测记录里的可读值还原成枚举。
+// 只用于**归档**（给数据模型留一条记录），不参与判定 —— 未知值一律回落放行侧。
+func actionFromString(s string) contract.Action {
+	switch s {
+	case "route_mirage", "ACTION_MIRAGE":
+		return contract.ActionMirage
+	case "block", "ACTION_BLOCK":
+		return contract.ActionBlock
+	default:
+		return contract.ActionOrigin
+	}
+}
+
+// severityFromString 目前恒返回 `SeverityNone`：`terminology.md` §4.2 的档位表**尚未登记**其他取值
+// （`MD-24` / `TM-13`：新增档位必须先实测并登记）。这里不做字符串猜测 —— 猜错会把未登记的档位写进归档。
+func severityFromString(string) contract.Severity {
+	return contract.SeverityNone
 }
 
 // assertPlaintextListenIsLocal 拒绝把**明文** gRPC 监听到非回环地址。

@@ -9,6 +9,43 @@
 
 ---
 
+## 2026-09-19 · 观测面读路径 + 控制台（Web UI）+ 一键人工测试环境 + 接入/使用文档
+
+**做了什么**：先把「看不见」的**根因**查清并修掉，再交付「能看」的环境与文档。
+① **根因三处**：`store.EventStore` **只写不读**、`telemetry.proto` **没有查询 RPC** ⇒ 观测面没读路径；
+`DecisionStore.Archive` **从未被调用** ⇒ 判定（分值/命中信号/去向）没落库；示例配置 `rules: []` ⇒ **分数恒 0**，人工测试什么都看不见。
+② **读路径**：`store` 新增 `EventQuery首页 /DecisionQuery首页 /List`（有界缓冲、newest first、按时间与类型过滤，内存实现就位）；`api/telemetry/v1` 新增 **`ListEvents`** 读侧 RPC 并重新生成。
+③ **记录**：`control` 新增观测面契约（`DecisionRecord首页 /DecisionRecorder首页 /EventLister`，**接口由消费方定义**），服务面每次判定记一笔（事件 + `DecisionStore.Archive`），**失败只记日志**（`NI-1`）；判定细节**只进观测面**（`ST-7` 仍禁止回显给客户端）。
+④ **控制台**（`console/`，**新实现**）：Go 进程 + 静态页（`go:embed`，**无前端构建步骤**），提供 首页 /、/api/summary、/api/flow、/api/events、/healthz；页面四块＝概览 / 告警 / 流量访问与流动（含**分值**与**命中信号**）/ 原始事件。渲染**一律用 DOM + `textContent`** —— 页面显示的是攻击者可控的 UA/路径，拼 `innerHTML` 就是存储型 XSS（初版被静态检查抓到 12 处，已全改）。
+⑤ **一键环境**：`scripts/demo/run.sh` 起核心 + 假业务站 + 反向代理 + 控制台并打印地址，`make demo` / `make console` 两个入口。
+⑥ **示例配置**启用两条**可观察**规则（`ua-headless` 0.6 / `path-probe` 0.3）——否则分数恒 0。
+⑦ **文档五份**（目标明确要求）：`docs/integrate/` 的 README · quickstart（5 分钟上手）· business-onboarding（业务怎么接）· observability（怎么看告警/流量/流动）· manual-test（人工测试步骤，含故障注入）。
+
+**改了哪些文件**：`core/internal/store/iface.go` · `core/internal/store/memory.go` · `api/telemetry/v1/telemetry.proto`（+ 生成物）·
+`core/internal/control/observer.go`（新增）· `core/internal/control/service.go` · `core/internal/control/telemetry.go` · `core/cmd/core/main.go` ·
+`console/cmd/console/main.go`（新增）· `console/web/assets.go`（新增）· `console/web/index.html`（新增）·
+`scripts/demo/run.sh` · `scripts/demo/business.py`（新增）· `deploy/config/config.example.yaml` · `Makefile` ·
+`docs/integrate/README.md` · `docs/integrate/quickstart.md` · `docs/integrate/business-onboarding.md` · `docs/integrate/observability.md` · `docs/integrate/manual-test.md`
+
+**对应文档**：[`docs/plans/2026-09-19-observability-and-console.md`](docs/plans/2026-09-19-observability-and-console.md)（含追溯矩阵与审视 5 条）· [`docs/integrate/`](docs/integrate/README.md)
+
+**验证**：`make gate` 通过；**真进程端到端**（核心 + 假业务 + 反向代理 + 控制台）实测。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 经引擎发探针流量 | 产生判定记录 | ✅ 3 条决策事件 |
+| 控制台读流动 | 看到**分值 + 命中信号** | ✅ `/.git/config score=0.90 signals=[ua-headless,path-git]` · `/x score=0.60 signals=[ua-headless]` · 正常 UA `score=0.00` |
+| 概览接口 | 计数与告警数 | ✅ `{"total":6,"by_action":{"route_origin":3},"alerts":0}` |
+| 页面可取 | 200 + HTML | ✅ `code=200 bytes=8394 text/html` |
+| 事件 ↔ 流动条数 | 一致（幂等 + 解析正确） | ✅ 3 ↔ 3 |
+
+**没做 / 遗留**：① 控制台**语言偏离设计**（设计 TypeScript，本轮 Go + 静态页，按用户裁定不引前端工具链）—— 拟开 ADR-0020 登记；
+② 观测面无保留期/分页（内存有界缓冲，只能看最近）；③ 时间基准（事件 UTC / 载荷带本地偏移）待日志字典（spec 下 logs.md，尚未落地）统一；
+④ 剩余模块：`adapter-dns` 收口 · `netpolicy` 声明式 · `analysis/*` 四个 Python 模块（需先定门禁）；⑤ `honeypot-shell` 与蜜罐内容——**目标明确排除**，保持推迟。
+
+---
+
 ## 2026-09-19 · `ADR-0019`：TLS 终结默认交客户 L0（`E2` 实测驱动的重估）
 
 **做了什么**：把 `E2` 的实测结论落成**决策 + 代码 + 同步**。

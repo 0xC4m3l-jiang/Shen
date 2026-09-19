@@ -2,7 +2,9 @@ package control
 
 import (
 	"context"
+	"log"
 	"net/netip"
+	"time"
 
 	judgev1 "shen/api/judge/v1"
 	"shen/core/internal/contract"
@@ -16,6 +18,8 @@ type JudgeService struct {
 	session   session.Session
 	breaker   *Breaker         // 可空；为空时不熔断
 	isolation IsolationChecker // 可空；为空时不查隔离
+	recorder  DecisionRecorder // 可空；为空时不记录（观测面写侧）
+	now       func() time.Time // 可注入时钟（MD-6：时间由调用方注入，便于测试与回放）
 }
 
 // IsolationChecker 是本服务面对隔离查询的依赖。
@@ -38,6 +42,18 @@ func WithIsolation(i IsolationChecker) JudgeOption {
 	return func(s *JudgeService) { s.isolation = i }
 }
 
+// WithDecisionRecorder 给服务面挂上「记录一次判定」（观测面写侧：控制台看流动）。
+//
+// 记录是**尽力而为**的：失败只记日志，绝不影响判定响应（`NI-1`）。
+func WithDecisionRecorder(r DecisionRecorder) JudgeOption {
+	return func(s *JudgeService) { s.recorder = r }
+}
+
+// WithClock 注入时钟（默认 time.Now）。时间必须由调用方注入，才可测、可回放（MD-6）。
+func WithClock(now func() time.Time) JudgeOption {
+	return func(s *JudgeService) { s.now = now }
+}
+
 // NewJudgeService 构造服务端。decider 与 sess 任一为 nil 时 panic。
 //
 // 会话身份由核心自己提取，不信任调用方传来的值。
@@ -48,7 +64,7 @@ func NewJudgeService(d Decider, sess session.Session, opts ...JudgeOption) *Judg
 	if sess == nil {
 		panic("control: session.Session 不能为 nil")
 	}
-	s := &JudgeService{decider: d, session: sess}
+	s := &JudgeService{decider: d, session: sess, now: time.Now}
 	for _, o := range opts {
 		o(s)
 	}
@@ -90,7 +106,39 @@ func (s *JudgeService) decide(ctx context.Context, in *judgev1.JudgeRequest) (*j
 	if err != nil {
 		return nil, err
 	}
+	s.record(ctx, req, d)
 	return toProto(d), nil
+}
+
+// record 把这次判定记进观测面（尽力而为：失败不影响响应，NI-1）。
+func (s *JudgeService) record(ctx context.Context, req contract.JudgeRequest, d contract.Decision) {
+	if s.recorder == nil {
+		return
+	}
+	signals := make([]string, 0, len(d.Verdict.Signals))
+	for _, sig := range d.Verdict.Signals {
+		signals = append(signals, sig.ID)
+	}
+	sourceIP := ""
+	if req.Observed.SourceIP.IsValid() { // 未识别来源时留空，别写成 "<nil>"
+		sourceIP = req.Observed.SourceIP.String()
+	}
+	rec := DecisionRecord{
+		DecisionID: d.DecisionID,
+		SourceIP:   sourceIP,
+		Method:     req.Observed.Method,
+		Path:       req.Observed.Path,
+		UserAgent:  req.Observed.UserAgent,
+		Action:     d.Action.String(),
+		Severity:   d.Severity.String(),
+		Backend:    d.Backend,
+		Score:      d.Verdict.Score,
+		Signals:    signals,
+		At:         s.now(),
+	}
+	if err := s.recorder.Record(ctx, rec); err != nil {
+		log.Printf("control: 判定记录失败（不影响响应）：%v", err)
+	}
 }
 
 // passthroughResponse 是熔断期间的纯放行响应。

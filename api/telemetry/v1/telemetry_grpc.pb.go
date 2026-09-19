@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	DeceptionTelemetry_Report_FullMethodName      = "/telemetry.v1.DeceptionTelemetry/Report"
 	DeceptionTelemetry_ReportBatch_FullMethodName = "/telemetry.v1.DeceptionTelemetry/ReportBatch"
+	DeceptionTelemetry_ListEvents_FullMethodName  = "/telemetry.v1.DeceptionTelemetry/ListEvents"
 )
 
 // DeceptionTelemetryClient is the client API for DeceptionTelemetry service.
@@ -31,6 +32,11 @@ const (
 type DeceptionTelemetryClient interface {
 	Report(ctx context.Context, in *TelemetryEvent, opts ...grpc.CallOption) (*ReportAck, error)
 	ReportBatch(ctx context.Context, in *TelemetryBatch, opts ...grpc.CallOption) (*ReportAck, error)
+	// 读侧：列出最近事件（观测面）。
+	//
+	// 用途：控制台回答「刚才发生了什么、告警在哪、流量怎么流动」——
+	// 这是**人工测试与排障**的基础能力，也是 `logs.md` 字典落地前的过渡读侧契约。
+	ListEvents(ctx context.Context, in *ListEventsRequest, opts ...grpc.CallOption) (*ListEventsResponse, error)
 }
 
 type deceptionTelemetryClient struct {
@@ -61,6 +67,16 @@ func (c *deceptionTelemetryClient) ReportBatch(ctx context.Context, in *Telemetr
 	return out, nil
 }
 
+func (c *deceptionTelemetryClient) ListEvents(ctx context.Context, in *ListEventsRequest, opts ...grpc.CallOption) (*ListEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListEventsResponse)
+	err := c.cc.Invoke(ctx, DeceptionTelemetry_ListEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeceptionTelemetryServer is the server API for DeceptionTelemetry service.
 // All implementations must embed UnimplementedDeceptionTelemetryServer
 // for forward compatibility.
@@ -69,6 +85,11 @@ func (c *deceptionTelemetryClient) ReportBatch(ctx context.Context, in *Telemetr
 type DeceptionTelemetryServer interface {
 	Report(context.Context, *TelemetryEvent) (*ReportAck, error)
 	ReportBatch(context.Context, *TelemetryBatch) (*ReportAck, error)
+	// 读侧：列出最近事件（观测面）。
+	//
+	// 用途：控制台回答「刚才发生了什么、告警在哪、流量怎么流动」——
+	// 这是**人工测试与排障**的基础能力，也是 `logs.md` 字典落地前的过渡读侧契约。
+	ListEvents(context.Context, *ListEventsRequest) (*ListEventsResponse, error)
 	mustEmbedUnimplementedDeceptionTelemetryServer()
 }
 
@@ -84,6 +105,9 @@ func (UnimplementedDeceptionTelemetryServer) Report(context.Context, *TelemetryE
 }
 func (UnimplementedDeceptionTelemetryServer) ReportBatch(context.Context, *TelemetryBatch) (*ReportAck, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportBatch not implemented")
+}
+func (UnimplementedDeceptionTelemetryServer) ListEvents(context.Context, *ListEventsRequest) (*ListEventsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEvents not implemented")
 }
 func (UnimplementedDeceptionTelemetryServer) mustEmbedUnimplementedDeceptionTelemetryServer() {}
 func (UnimplementedDeceptionTelemetryServer) testEmbeddedByValue()                            {}
@@ -142,6 +166,24 @@ func _DeceptionTelemetry_ReportBatch_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeceptionTelemetry_ListEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeceptionTelemetryServer).ListEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeceptionTelemetry_ListEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeceptionTelemetryServer).ListEvents(ctx, req.(*ListEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DeceptionTelemetry_ServiceDesc is the grpc.ServiceDesc for DeceptionTelemetry service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -156,6 +198,10 @@ var DeceptionTelemetry_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportBatch",
 			Handler:    _DeceptionTelemetry_ReportBatch_Handler,
+		},
+		{
+			MethodName: "ListEvents",
+			Handler:    _DeceptionTelemetry_ListEvents_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

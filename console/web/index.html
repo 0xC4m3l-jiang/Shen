@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Shen 观测控制台</title>
+<style>
+  :root { --fg:#1b1f23; --muted:#6b7280; --line:#e5e7eb; --bg:#fafafa;
+          --origin:#16a34a; --mirage:#d97706; --block:#dc2626; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,"Helvetica Neue",Arial,"PingFang SC",sans-serif; color:var(--fg); background:var(--bg); }
+  header { padding:14px 20px; background:#fff; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; }
+  .muted { color:var(--muted); }
+  main { padding:16px 20px 40px; max-width:1400px; }
+  section { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 16px; margin-bottom:16px; }
+  h2 { font-size:14px; margin:0 0 10px; }
+  .cards { display:flex; gap:12px; flex-wrap:wrap; }
+  .card { flex:1 1 140px; border:1px solid var(--line); border-radius:6px; padding:10px 12px; }
+  .card b { display:block; font-size:22px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .tag { padding:1px 6px; border-radius:4px; color:#fff; font-size:12px; }
+  .origin { background:var(--origin); } .mirage { background:var(--mirage); } .block { background:var(--block); }
+  .flow { color:var(--muted); font-size:12px; }
+  button { font:inherit; padding:4px 10px; border:1px solid var(--line); background:#fff; border-radius:6px; cursor:pointer; }
+  button[aria-pressed="true"] { background:#111; color:#fff; border-color:#111; }
+  .err { color:var(--block); white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Shen · 观测控制台</h1>
+  <span class="muted" id="meta">加载中…</span>
+  <span style="flex:1"></span>
+  <button id="refresh">刷新</button>
+  <label class="muted"><input type="checkbox" id="auto"> 每 5 秒自动刷新</label>
+</header>
+
+<main>
+  <section>
+    <h2>概览</h2>
+    <div class="cards" id="cards"></div>
+    <p class="flow" style="margin:10px 0 0">
+      流量在引擎中的流动：<b>客户端</b> → L0(客户 LB/nginx，终结 TLS) → <b>本引擎适配器</b>（白名单 → 判定缓存 → gRPC 判定）
+      → <b>核心</b>（judge 打分 → director 三值） → <b>按决策执行</b>（放行到业务 / 改道到幻境并注入诱饵 / 拦截 403）
+      → <b>异步遥测</b>（就是本页的数据来源）。
+    </p>
+  </section>
+
+  <section>
+    <h2>告警 <span class="muted" id="alertHint"></span></h2>
+    <table id="alerts"><thead><tr>
+      <th>时间</th><th>决策</th><th>来源 IP</th><th>方法</th><th>路径</th><th>分值</th><th>命中信号</th><th>后端</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>流量访问与流动 <span class="muted" id="flowHint"></span></h2>
+    <p class="muted" style="margin:0 0 8px">
+      「分值 / 命中信号」只在本控制台可见 —— 判定响应**禁止**回显它们（`ST-7`）。
+      <span id="filterBar"></span>
+    </p>
+    <table id="flows"><thead><tr>
+      <th>时间</th><th>决策</th><th>来源 IP</th><th>方法</th><th>路径</th><th>UA</th><th>分值</th><th>命中信号</th><th>后端</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>最近事件（原始）</h2>
+    <table id="events"><thead><tr><th>时间</th><th>类型</th><th>来源</th><th>事件 ID</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+
+<script>
+// 渲染纪律：本页展示的是**攻击者可控的字符串**（UA / 路径 / 来源 IP）。
+// 因此**一律用 DOM 构建 + textContent**，绝不把数据拼进 innerHTML —— 否则对手
+// 只要在 UA 里写一段标签，就能在运维的浏览器里执行脚本（存储型 XSS）。
+const $ = (id) => document.getElementById(id);
+const ACTION_CLASS = { origin:"origin", route_origin:"origin", mirage:"mirage", route_mirage:"mirage", block:"block" };
+const ACTION_LABEL = { origin:"放行", route_origin:"放行", mirage:"改道", route_mirage:"改道", block:"拦截" };
+let filter = "all";
+
+async function get(path) {
+  const r = await fetch(path);
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
+  return body;
+}
+
+function fmtTime(t) { return t ? new Date(t).toLocaleString("zh-CN", { hour12:false }) : "—"; }
+function show(v) { return v === undefined || v === null || v === "" ? "—" : String(v); }
+
+// td(text, className) —— 只用 textContent，天然免疫注入。
+function td(text, className) {
+  const cell = document.createElement("td");
+  if (className) cell.className = className;
+  cell.textContent = text;
+  return cell;
+}
+function actionCell(action) {
+  const cell = document.createElement("td");
+  const k = (action || "").toLowerCase();
+  const span = document.createElement("span");
+  span.className = "tag " + (ACTION_CLASS[k] || "origin");
+  span.textContent = ACTION_LABEL[k] || action || "—";
+  cell.appendChild(span);
+  return cell;
+}
+function fillTable(tableId, rows) {
+  const tbody = $(tableId).querySelector("tbody");
+  tbody.textContent = "";               // 清空（不用 innerHTML）
+  for (const cells of rows) tbody.appendChild(cells);
+}
+function tr(cells) {
+  const row = document.createElement("tr");
+  for (const c of cells) row.appendChild(c);
+  return row;
+}
+
+async function load() {
+  try {
+    const [sum, flows, events] = await Promise.all([get("/api/summary"), get("/api/flow?limit=300"), get("/api/events?limit=100")]);
+    $("meta").textContent = `事件 ${sum.total} 条 · 告警 ${sum.alerts} 条`;
+
+    const cards = $("cards"); cards.textContent = "";
+    const entries = Object.entries(sum.by_action || {});
+    if (entries.length === 0) entries.push(["none", 0]);
+    for (const [k, v] of entries) {
+      const card = document.createElement("div"); card.className = "card";
+      const b = document.createElement("b"); b.textContent = String(v);
+      const label = document.createElement("span"); label.className = "muted";
+      label.textContent = entries[0][0] === "none" ? "暂无判定" : (ACTION_LABEL[k] || k);
+      card.append(b, label); cards.appendChild(card);
+    }
+
+    const alerts = flows.filter(f => (f.Action || "").toLowerCase().includes("block") ||
+      (f.Severity && f.Severity.toLowerCase() !== "none"));
+    $("alertHint").textContent = alerts.length ? `（${alerts.length} 条）` : "（暂无告警 —— 影子模式下不会有拦截，属正常）";
+    fillTable("alerts", alerts.map(f => tr([
+      td(fmtTime(f.At)), actionCell(f.Action), td(show(f.SourceIP)), td(show(f.Method)),
+      td(show(f.Path)), td(f.Score ? f.Score.toFixed(3) : "—"),
+      td((f.Signals || []).join(", ") || "—"), td(show(f.Backend)),
+    ])));
+
+    const shown = filter === "all" ? flows : flows.filter(f => (f.Action || "").toLowerCase().includes(filter));
+    $("flowHint").textContent = `（显示 ${shown.length} / ${flows.length}）`;
+    fillTable("flows", shown.map(f => tr([
+      td(fmtTime(f.At)), actionCell(f.Action), td(show(f.SourceIP)), td(show(f.Method)), td(show(f.Path)),
+      td(show((f.UserAgent || "").slice(0, 40)), "flow"), td(f.Score ? f.Score.toFixed(3) : "—"),
+      td((f.Signals || []).join(", ") || "—"), td(show(f.Backend)),
+    ])));
+
+    const bar = $("filterBar"); bar.textContent = "筛选：";
+    for (const k of ["all", "origin", "mirage", "block"]) {
+      const b = document.createElement("button");
+      b.textContent = k === "all" ? "全部" : (ACTION_LABEL[k] || k);
+      b.setAttribute("aria-pressed", String(filter === k));
+      b.onclick = () => { filter = k; load(); };
+      bar.append(" ", b);
+    }
+
+    fillTable("events", events.map(e => tr([
+      td(fmtTime(e.created_at)), td(show(e.type)), td(show(e.actor_id)), td(show(e.event_id), "flow"),
+    ])));
+  } catch (e) {
+    $("meta").textContent = "读取核心失败：" + e.message + "（核心起了吗？SHEN_CORE_ADDR 对吗？）";
+    $("meta").className = "err";
+  }
+}
+
+$("refresh").onclick = load;
+$("auto").onchange = (e) => { if (e.target.checked) window._t = setInterval(load, 5000); else clearInterval(window._t); };
+load();
+
+</body>
+</html>
+</script>
+</body>
+</html>

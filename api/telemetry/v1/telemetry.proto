@@ -10,6 +10,12 @@ import "google/protobuf/timestamp.proto";
 service DeceptionTelemetry {
   rpc Report(TelemetryEvent) returns (ReportAck);
   rpc ReportBatch(TelemetryBatch) returns (ReportAck);
+
+  // 读侧：列出最近事件（观测面）。
+  //
+  // 用途：控制台回答「刚才发生了什么、告警在哪、流量怎么流动」——
+  // 这是**人工测试与排障**的基础能力，也是 `logs.md` 字典落地前的过渡读侧契约。
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
 }
 
 message TelemetryEvent {
@@ -24,6 +30,19 @@ message TelemetryEvent {
 }
 
 message TelemetryBatch {
+  repeated TelemetryEvent events = 1;
+}
+
+message ListEventsRequest {
+  // 返回条数上限；0 = 服务端默认（200）。
+  uint32 limit = 1;
+  // 只返回该时刻之后的事件；不填 = 不限。
+  google.protobuf.Timestamp since = 2;
+  // 只看某类事件（如 request_judged）；空 = 不限。
+  string event_type = 3;
+}
+
+message ListEventsResponse {
   repeated TelemetryEvent events = 1;
 }
 

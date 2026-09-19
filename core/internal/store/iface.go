@@ -26,12 +26,42 @@ type IsolationStore interface {
 	Put(ctx context.Context, key contract.SessionKey, hit contract.IsolationHit) error
 }
 
+// DecisionQuery 是判定记录的查询条件（观测面读侧：控制台看「判定怎么流动」）。
+type DecisionQuery struct {
+	// Limit 是返回条数上限（newest first）。0 → DefaultListLimit。
+	Limit int
+	// Since 非零时只返回该时刻之后的记录。
+	Since time.Time
+}
+
 // DecisionStore 承载判定结果（生产实现：Redis 缓存 + ClickHouse 归档）。
 type DecisionStore interface {
 	GetCached(ctx context.Context, decisionID string) (contract.Decision, bool, error)
 	PutCached(ctx context.Context, d contract.Decision, ttl time.Duration) error
 	Archive(ctx context.Context, d contract.Decision) error
+	// List 返回最近的判定记录（newest first）。
+	//
+	// 它服务于**观测面读侧**：控制台要能回答「刚才那些请求被判成了什么、为什么」。
+	// 生产实现（ClickHouse）应按时间倒序 + 分区裁剪实现，不要全表扫。
+	List(ctx context.Context, q DecisionQuery) ([]contract.Decision, error)
 }
+
+// EventQuery 是遥测事件的查询条件（观测面读侧：控制台看告警与流量访问）。
+type EventQuery struct {
+	// Limit 是返回条数上限（newest first）。0 → DefaultListLimit。
+	Limit int
+	// Since 非零时只返回该时刻之后的事件。
+	Since time.Time
+	// Type 非空时只返回该类型的事件。
+	Type string
+}
+
+// 观测面的默认取值：缓冲有上限，避免无界增长（与 MD-10 的容量上限同一精神）。
+const (
+	DefaultListLimit = 200
+	// DefaultEventBuffer 是内存实现保留的最近事件条数。
+	DefaultEventBuffer = 4096
+)
 
 // EventStore 承载遥测事件（生产实现：ClickHouse，只增不改）。
 type EventStore interface {
@@ -39,6 +69,8 @@ type EventStore interface {
 	Write(ctx context.Context, ev contract.Event) (bool, error)
 	// WriteBatch 返回实际写入条数。
 	WriteBatch(ctx context.Context, evs []contract.Event) (int, error)
+	// List 返回最近的事件（newest first）—— 观测面读侧。
+	List(ctx context.Context, q EventQuery) ([]contract.Event, error)
 }
 
 // PolicyStore 承载策略版本（生产实现：PostgreSQL，版本只增）与适配器回执。

@@ -14,7 +14,7 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface
+        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -87,6 +87,13 @@ fp-capture: ## TLS 指纹采集（E2）：make fp-capture ADDR=host:443 [SNI=nam
 fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
 	@if [ -z "$(A)" ] || [ -z "$(B)" ]; then echo '用法：make fp-diff A=real.json B=ours.json'; exit 1; fi
 	$(GO) run ./scripts/fingerprint -mode diff -a "$(A)" -b "$(B)"
+
+# ── 观测台（人工测试用）──────────────────────────────────────────────────────
+console: ## 只起观测控制台（核心需已在跑；地址取 SHEN_CORE_ADDR）
+	$(GO) run ./console/cmd/console
+
+demo: ## 一键起「能看」的本地环境：核心 + 假业务 + 代理 + 控制台（人工测试入口）
+	@scripts/demo/run.sh
 
 # ── Caddy 耦合面（升级时先看它）──────────────────────────────────────────────
 # 为什么做成目标而不是写在文档里：文档会腐烂，这里的结果**永远来自代码**。
