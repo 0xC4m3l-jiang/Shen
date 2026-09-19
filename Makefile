@@ -22,7 +22,7 @@ PROTOS := $(shell find api -name '*.proto')
         check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen analysis \
         docker-build up down docker-ps docker-logs docker-log check-ignore \
-        start status app-smoke verify
+        start status app-smoke traffic verify
 
 # check-ignore 必须用 --no-index：默认行为下 git 认为已入库文件不受忽略规则影响，
 # 于是检查会永远通过 —— 那是**假的防线**（本仓库真的踩过：见 docs/log.md）。
@@ -39,8 +39,11 @@ start: ## 起全套并等就绪（= scripts/shen.sh up；只需 Docker）
 status: ## 看容器状态 + 控制台概览
 	@scripts/shen.sh status
 
-app-smoke: ## 经引擎造流量并回显判定结果（验证业务链路）
+app-smoke: ## 快速链路验证：经引擎造三条流量并回显判定
 	@scripts/shen.sh smoke
+
+traffic: ## 发伪造流量并从观测面核对判定（完整验证；场景见 scripts/traffic/scenarios.json）
+	@scripts/shen.sh traffic $(ARGS)
 
 verify: ## 仓库级验证：make gate + make dev
 	@scripts/shen.sh check
@@ -140,15 +143,15 @@ define require_pyenv
 	@test -x $(PY) || { echo "缺 Python 环境：先跑 make pyenv（TB-15 要求 Python 过 ruff）"; exit 1; }
 endef
 
-pyfmt-check: ## L4 代码风格（ruff format --check）
+pyfmt-check: ## Python 代码风格（ruff format --check）：L4 + scripts/
 	$(require_pyenv)
-	@cd $(ANALYSIS) && .venv/bin/ruff format --check .
-	@echo "✓ L4 格式（ruff format）"
+	@cd $(ANALYSIS) && .venv/bin/ruff format --check . ../scripts
+	@echo "✓ Python 格式（ruff format）"
 
-pylint: ## L4 静态检查（ruff check；含 TB-14 的裸 except 禁令）
+pylint: ## Python 静态检查（ruff check）：L4 + scripts/（含 TB-14 的裸 except 禁令）
 	$(require_pyenv)
-	@cd $(ANALYSIS) && .venv/bin/ruff check .
-	@echo "✓ L4 静态检查（ruff）"
+	@cd $(ANALYSIS) && .venv/bin/ruff check . ../scripts
+	@echo "✓ Python 静态检查（ruff）"
 
 pytest: ## L4 单测（pytest）
 	$(require_pyenv)

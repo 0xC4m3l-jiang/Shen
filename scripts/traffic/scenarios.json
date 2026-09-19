@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "_about": "伪造流量场景（声明式）。每条 = 一次请求 + 期望；期望从**观测面**核对（控制台），因为判定响应禁止回显分值/信号（ST-7）。",
+  "_expect_fields": {
+    "min_score": "从控制台看到的分数下界（含）",
+    "max_score": "分数上界（含）",
+    "signals_any": "至少命中其中任一信号 ID",
+    "signals_all": "必须命中全部信号 ID",
+    "action": "三值之一（route_origin / route_mirage / block）；不写则不判定，只报告（影子模式与接管后取值不同，INT-11）",
+    "observe_only": "true = 只发送并报告，不断言分数/信号（示例配置未覆盖这类流量；用于人工观察与后续加规则）"
+  },
+  "_note": "期望值按 deploy/config/config.example.yaml 当前的两条示例规则写：ua-headless（UA 含 HeadlessChrome，权重 0.6）· path-probe（路径前缀 /.git，权重 0.3）。改了规则请同步本文件。",
+  "scenarios": [
+    {
+      "id": "probe-git-headless",
+      "group": "自动化探针",
+      "why": "两类信号同时命中：无头浏览器 + 源码目录探测",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0 Safari/537.36"
+      },
+      "expect": {
+        "min_score": 0.8,
+        "signals_any": [
+          "ua-headless",
+          "path-probe"
+        ],
+        "action": "route_origin"
+      }
+    },
+    {
+      "id": "probe-git-normal-ua",
+      "group": "自动化探针",
+      "why": "只有路径信号：分数应显著低于上一条",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
+      },
+      "expect": {
+        "min_score": 0.2,
+        "max_score": 0.5,
+        "signals_any": [
+          "path-probe"
+        ]
+      }
+    },
+    {
+      "id": "headless-home",
+      "group": "自动化探针",
+      "why": "只有 UA 信号：无头浏览器访问首页",
+      "method": "GET",
+      "path": "/",
+      "headers": {
+        "User-Agent": "HeadlessChrome/120.0.0.0"
+      },
+      "expect": {
+        "min_score": 0.5,
+        "max_score": 0.7,
+        "signals_any": [
+          "ua-headless"
+        ]
+      }
+    },
+    {
+      "id": "normal-home-firefox",
+      "group": "正常用户",
+      "why": "对照组：正常浏览器访问首页不应得分",
+      "method": "GET",
+      "path": "/",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "expect": {
+        "max_score": 0.1,
+        "action": "route_origin"
+      }
+    },
+    {
+      "id": "normal-api-safari",
+      "group": "正常用户",
+      "why": "对照组：正常接口调用",
+      "method": "GET",
+      "path": "/api/items",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"
+      },
+      "expect": {
+        "max_score": 0.1
+      }
+    },
+    {
+      "id": "env-probe",
+      "group": "敏感文件探测",
+      "why": "示例规则只覆盖 /.git 前缀；这条用于人工观察（要覆盖请在配置里加规则）",
+      "method": "GET",
+      "path": "/.env",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "observe_only": true
+      }
+    },
+    {
+      "id": "wp-login-brute",
+      "group": "凭证爆破",
+      "why": "POST 表单爆破形态；演示站未实现 POST（会回 501），因此声明 501 可接受 —— 这里验的是引擎照常转发",
+      "method": "POST",
+      "path": "/wp-login.php",
+      "headers": {
+        "User-Agent": "python-requests/2.31.0",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      "body": "log=admin&pwd=admin&wp-submit=Log+In",
+      "expect": {
+        "observe_only": true,
+        "status_in": [
+          200,
+          501
+        ]
+      }
+    },
+    {
+      "id": "sqli-admin",
+      "group": "注入尝试",
+      "why": "SQLi 形态（注意：查询串会进 path 字段）；示例规则未覆盖，人工观察",
+      "method": "GET",
+      "path": "/admin?id=1%27%20OR%201%3D1--",
+      "headers": {
+        "User-Agent": "sqlmap/1.7#stable (https://sqlmap.org)"
+      },
+      "expect": {
+        "observe_only": true
+      }
+    },
+    {
+      "id": "path-traversal",
+      "group": "注入尝试",
+      "why": "路径穿越；注意客户端/上游可能已做归一化，观察实际 path",
+      "method": "GET",
+      "path": "/download?file=../../etc/passwd",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (compatible; masscan/1.3)"
+      },
+      "expect": {
+        "observe_only": true
+      }
+    },
+    {
+      "id": "actuator-env",
+      "group": "敏感端点扫描",
+      "why": "Spring Actuator 扫描形态；示例规则未覆盖，人工观察",
+      "method": "GET",
+      "path": "/actuator/env",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (compatible; Nuclei - Open-source project; https://nuclei.projectdiscovery.io)"
+      },
+      "expect": {
+        "observe_only": true
+      }
+    }
+  ]
+}

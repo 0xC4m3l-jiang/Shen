@@ -12,14 +12,14 @@ BODY = b"<html><body>REAL-BUSINESS</body></html>"
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def do_GET(self):  # noqa: N802 —— BaseHTTPRequestHandler 的既定命名
+    def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(BODY)))
         self.end_headers()
         self.wfile.write(BODY)
 
-    def log_message(self, format, *args):  # noqa: A002 —— 签名必须与基类一致
+    def log_message(self, format, *args):
         """保持安静：访问噪声留给控制台看，不刷终端。"""
 
 

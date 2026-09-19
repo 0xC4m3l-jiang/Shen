@@ -8,13 +8,21 @@
 scripts/demo/run.sh          # 核心 + 假业务站 + 反向代理 + 控制台
 ```
 
-## 2. 造三类流量
+## 2. 造流量（用验证脚本，推荐）
+
+```sh
+scripts/shen.sh traffic          # 10 个场景：探针 / 爆破 / 注入 / 正常对照 + 断言 + 汇总
+scripts/shen.sh smoke            # 只要三条流量的快速版
+```
+
+场景清单与期望见 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md)（声明式，加场景就是加一条 JSON）。
+
+想手敲也行（脚本做的就是这些事）：
 
 ```sh
 BASE=http://127.0.0.1:18080
 curl -s -o /dev/null -w "%{http_code} " -A "HeadlessChrome/120" $BASE/.git/config   # 探针 → 高分
 curl -s -o /dev/null -w "%{http_code} " -A "Mozilla/5.0"        $BASE/             # 正常 → 低分
-curl -s -o /dev/null -w "%{http_code} " -A "HeadlessChrome/120" "$BASE/next?p=2"    # 同 IP 同会话
 ```
 
 ## 3. 核对（控制台 / `api`）

@@ -9,7 +9,8 @@
 | --- | --- | --- |
 | 起全套（**推荐**） | `scripts/shen.sh up`（等价 `make up`） | 只需 Docker；会自动等就绪并打印地址 |
 | 看状态 | `scripts/shen.sh status` | 容器 + 控制台概览 |
-| 验证链路（造流量看判定） | `scripts/shen.sh smoke` | 经引擎发三条流量并回显分值/信号 |
+| 快速验证链路 | `scripts/shen.sh smoke` | 经引擎发三条流量并回显分值/信号 |
+| **发伪造流量并核对判定** | `scripts/shen.sh traffic` | 10 个场景（探针 / 爆破 / 注入 / 正常对照）+ 断言评分与信号；见 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md) |
 | 仓库级验证 | `scripts/shen.sh check`（= `make gate` + `make dev`） | 门禁 + 开发循环 |
 | 看日志（**不跟随**） | `scripts/shen.sh logs core` | 取尾部 80 行后立即返回 |
 | 本地进程起（开发） | `scripts/shen.sh local` | 不用 Docker；Go/Python 直接跑 |
@@ -72,6 +73,7 @@ scripts/shen.sh local    # 起「本地演示环境」：核心 + 假业务站 +
 | --- | --- | --- |
 | ① 容器 | `scripts/shen.sh status` | 五个服务都 `Up`；`core` 的 PORTS 显示 `18080->8080` 与 `19444->9444` |
 | ② 链路 | `scripts/shen.sh smoke` | 三条流量都 `HTTP 200`；「流量流动」里能看到 `score` 与 `signals` |
+| ②’ 判定正确性 | `scripts/shen.sh traffic` | 断言全过（当前示例规则下 `5/5`）；观察类场景只报告不断言 |
 | ③ 仓库 | `scripts/shen.sh check` | `make gate` 通过（格式/vet/staticcheck/errcheck/架构/追溯/泄漏/许可/Python 门禁/单测含 -race）+ `make dev` 全绿 |
 | ④ 观测 | 控制台四块 / 四个接口 | 见下表 |
 
@@ -107,6 +109,27 @@ L4 结论需要**新态势**才产生：同一 `(来源, 会话, 方法, 路径)
 docker compose -f deploy/docker/compose.yaml exec -T analysis python -m analysis.worker --core 127.0.0.1:9443 --once
 ```
 
+### 2.1 伪造流量验证（`scripts/traffic/`）
+
+```sh
+scripts/shen.sh traffic                     # 全部场景（= make traffic）
+scripts/shen.sh traffic --group 自动化探针   # 只跑一组
+scripts/shen.sh traffic --only probe-git-headless --repeat 3
+scripts/shen.sh traffic --json              # 机器可读
+```
+
+场景是**声明式**的（[`../../scripts/traffic/scenarios.json`](../../scripts/traffic/scenarios.json)）：每条 = 一次请求 + 期望（分数上下界 / 命中信号 / 决策）。
+核对走**观测面**（控制台 `/api/flow`），因为判定响应禁止回显分值（`ST-7`）。所有场景**额外**检查两件事：
+业务未被影响（状态码不得 ≥ 500，`NI-1`）与响应头卫生（不得出现 `x-shen*` / `Via` / `Caddy`，`OH-2`）。
+
+两个必须知道的语义：
+
+1. **判定按会话复用**（`ST-10`）：判定键是 `(来源, 会话, 方法, 路径)`。脚本给**每条请求**带唯一 `sid` cookie，
+   所以每个场景各自得到独立判定；想复现"同窗复用"就用 `--no-session-nonce`。仅换查询串**不会**绕过缓存。
+2. **观察类场景不下断言**：示例配置只有两条规则（`ua-headless` / `path-probe`），
+   像 `/.env`、`/wp-login.php`、SQLi、Actuator 这类流量目前是"看得见但没规则"，标成 `observe_only` 只报告。
+   加了规则后把期望补上，脚本就会开始替你盯着回归。
+
 ## 3. 修复（症状 → 原因 → 处理）
 
 | 症状 | 最可能的原因 | 处理 |
@@ -121,6 +144,8 @@ docker compose -f deploy/docker/compose.yaml exec -T analysis python -m analysis
 | `make dev` 报「缺 L4 环境」 | 没建 Python 环境（或被移动） | `make pyenv`（建在 `analysis/.venv`） |
 | 构建卡在 `go mod download` | 网络访问不了 Go 模块代理 | 本仓库依赖已 **vendor 入库**，正常构建**不需要网络**；若仍卡，见 §4.2 |
 | 容器起不来且提示 `no space left` | Docker 磁盘满 | `docker system prune`（会删未使用镜像/缓存） |
+| `traffic` 报「控制台没找到这条判定」 | 适配器上报延迟 / 判定被复用 / 核心没起 | 先 `status`；判定复用见 §2.1（换会话而非只换查询串） |
+| `traffic` 报某个场景分数不符 | 配置里的规则被改过 | 期望值写在 `scenarios.json`，改规则要同步改期望（见文件顶部说明） |
 
 **先看日志再猜**：`scripts/shen.sh logs <服务>`（`core` / `proxy` / `console` / `analysis` / `business`）。
 

@@ -165,7 +165,9 @@ func (s *server) handleFlow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	var out []flowRecord
+	// 用 make(...,0) 而不是 var：Go 把 nil 切片序列化成 null，
+	// 客户端就得同时处理 null 与 []（真踩过：验证脚本读 /api/flow 拿到 null 直接报错）。
+	out := make([]flowRecord, 0, len(events))
 	for _, ev := range events {
 		if ev.Flow != nil {
 			out = append(out, *ev.Flow)
@@ -183,7 +185,7 @@ func (s *server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	out := make([]analysisView, 0, len(events))
+	out := make([]analysisView, 0, len(events)) // 同上：空列表也必须是 []
 	for _, ev := range events {
 		var payload struct {
 			Kind        string          `json:"kind"`

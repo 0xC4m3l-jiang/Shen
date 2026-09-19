@@ -9,7 +9,8 @@
 # 用法：
 #   scripts/shen.sh up          起全套（Docker；默认模式）
 #   scripts/shen.sh status      看容器状态 + 控制台概览
-#   scripts/shen.sh smoke       造三条流量并回显判定结果（验证链路）
+#   scripts/shen.sh smoke       造三条流量并回显判定结果（快速验证链路）
+#   scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 scripts/traffic/）
 #   scripts/shen.sh check       仓库级验证：make gate + make dev
 #   scripts/shen.sh logs [svc]  看日志尾部（不跟随；svc 如 core/proxy/console/analysis）
 #   scripts/shen.sh local       不用 Docker，本地进程起（开发用）
@@ -119,6 +120,11 @@ for row in data:
 PY
 }
 
+cmd_traffic() {
+	# 伪造流量 + 判定核对（只用标准库，不需要 venv）
+	exec python3 "${ROOT}/scripts/traffic/send.py" --entry "${ENTRY}" --console "${CONSOLE}" "$@"
+}
+
 cmd_check() {
 	echo "== 仓库级验证 1/2：make gate =="
 	make -C "${ROOT}" gate
@@ -145,10 +151,11 @@ case "${1:-help}" in
 up) shift; cmd_up "$@" ;;
 status) shift; cmd_status "$@" ;;
 smoke) shift; cmd_smoke "$@" ;;
+traffic) shift; cmd_traffic "$@" ;;
 check) shift; cmd_check "$@" ;;
 logs) shift; cmd_logs "$@" ;;
 local) shift; cmd_local "$@" ;;
 down) shift; need_docker; compose down ;;
 help | -h | --help) usage ;;
-*) die "未知子命令：$1（可用：up status smoke check logs local down help）" ;;
+*) die "未知子命令：$1（可用：up status smoke traffic check logs local down help）" ;;
 esac

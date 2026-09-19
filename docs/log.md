@@ -9,6 +9,39 @@
 
 ---
 
+## 2026-09-19 · 伪造流量验证脚本（`scripts/traffic/`）
+
+**做了什么**：给人工测试一套**声明式**的伪造流量工具 —— 发请求 + **从观测面核对判定** + 断言 + 退出码，能直接进自动化。
+① **场景声明式**（`scripts/traffic/scenarios.json`，10 条）：自动化探针（无头浏览器 + 源码目录探测）· 敏感文件（`.env`）· 凭证爆破（`wp-login.php` POST）· 注入（SQLi）· 路径穿越 · Actuator 扫描 · 正常用户对照（首页 / 接口）。每条 = 一次请求 + 期望（分数上下界 / 命中信号 / 决策）。
+② **核对走观测面**：判定响应禁止回显分值/信号（`ST-7`），所以脚本只看响应状态码，**判定去控制台读** —— 这也是本项目最容易讲错的一条规矩，脚本按它写。
+③ **每请求唯一会话**：第一版只换查询串，结果第二个场景吃到了第一个场景的判定（`probe-git-normal-ua` 拿到 0.90 与 `ua-headless`）。读代码确认判定按 `decision_id`（键为 `(来源, 会话, 方法, 路径)`，`ST-10`）复用 ⇒ 改为**每条请求带唯一 `sid` cookie**；修正后 0.30 / 仅 `path-probe`。想复现"同窗复用"用 `--no-session-nonce`。
+④ **观察类不下断言**：示例配置只有两条规则（`ua-headless` / `path-probe`），/.env、/wp-login.php、SQLi、Actuator 这类流量标 `observe_only` —— 只报告，不替用户编期望值。
+⑤ **额外两道检查**（所有场景都做）：业务未被影响（状态码默认 < 500，可用 `status_in` 声明例外，`NI-1`）与响应头卫生（不得出现 `x-shen*` / `Via` / `Caddy`，`OH-2`）。
+⑥ **入口与门禁**：`scripts/shen.sh traffic` · `make traffic`；顺手补掉一个门禁漏洞 —— `scripts/*.py` 此前从未进 Python 静态检查，现已纳入 ruff（并修掉暴露出的 7 条）。
+⑦ **修掉一个控制台缺陷**：空列表被 Go 序列化成 `null`（`var out []T` 是 nil 切片），客户端得同时处理 `null` 与 `[]`；改为 `make([]T, 0)`，/api/flow 与 /api/analysis 都返回 `[]`。
+⑧ 文档同步：运行手册新增 §2.1（伪造流量验证 + 两个必须知道的语义）与故障表两条；人工测试文档改为指向脚本。
+
+**改了哪些文件**：`scripts/traffic/scenarios.json`（新增）· `scripts/traffic/send.py`（新增）· `scripts/traffic/README.md`（新增）·
+`scripts/shen.sh` · `Makefile` · `console/cmd/console/main.go` · `docs/ops/runbook.md` · `docs/integrate/manual-test.md`
+
+**对应文档**：[`docs/plans/2026-09-19-traffic-verification-script.md`](docs/plans/2026-09-19-traffic-verification-script.md)（含追溯矩阵与审视 5 条）· [`scripts/traffic/README.md`](scripts/traffic/README.md)
+
+**验证**：`make gate` 通过；对 Docker 栈**实跑**全部场景。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 全场景 | 断言全过 | ✅ 断言 5/5 通过 · 观察 5 条 · 响应头卫生问题 0 条 |
+| 探针（UA+路径） | ≥0.8 且命中两类信号 | ✅ 0.90 ua-headless,path-probe |
+| 仅路径 / 仅 UA | 0.2–0.5 / 0.5–0.7 | ✅ 0.30 path-probe · 0.60 ua-headless |
+| 正常对照 | ≤0.1 | ✅ 0.00（首页与接口） |
+| 观察类 | 只报告 | ✅ 5 条（`.env` · 爆破 501 · SQLi · 穿越 · Actuator） |
+| 退出码 | 全过 → 0 | ✅ 0 |
+
+**没做 / 遗留**：① 5 条观察类场景尚无断言（等加了规则再收紧）；② 无并发/速率控制（不做压测）；③ 期望值与示例配置**手工同步**，改规则忘改场景会假红；④ 会话 nonce 默认 cookie 名 `sid`，换配置需 `--session-cookie`；⑤ 未覆盖 TLS 入口与跨节点形态。
+
+---
+
 ## 2026-09-19 · 运行手册 + 一键启动脚本 + 产物卫生
 
 **做了什么**：用户要三件事 —— ① 把「如何启动 / 如何检查 / 如何修复」记录清楚，保证后续启动、更新、验证准确；② 给一个启动脚本；③ 注意本地产物位置，别让无用文件影响项目结构。逐条落地：
