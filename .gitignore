@@ -26,3 +26,9 @@ coverage.out
 # ── 编辑器与系统 ──────────────────────────────────────────────────────────
 .DS_Store
 *.swp
+# L4（Python）：仓库内 venv 与缓存一律不入库（TB-15 用 .venv/bin 下的锁定工具）
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]

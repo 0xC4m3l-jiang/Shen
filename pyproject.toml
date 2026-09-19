@@ -1,0 +1,32 @@
+# L4 分析决策层（Python）的工具与门禁配置。
+#
+# 依据：docs/design/language.md TB-15（CI 必须含 Python 的 ruff 检查）
+# 依赖锁定见 requirements-dev.txt（版本固定，便于复现与升级审查）。
+
+[project]
+name = "shen-analysis"
+version = "0.0.0"
+description = "Shen L4 分析决策层：意图识别 / 攻击链 / 策略生成 / LLM 契约纪律"
+requires-python = ">=3.13"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# TB-14：禁止裸 except（E722）
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RET", "ARG", "PTH", "C4", "RUF"]
+ignore = [
+  "RUF001", # 全角标点：中文注释与文案里是刻意的
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["analysis/tests"]
+pythonpath = ["."]
+addopts = "-q"

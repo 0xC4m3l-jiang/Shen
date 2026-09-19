@@ -35,7 +35,8 @@ Shen/
 > `core` = 核心 · `edge` = 数据平面 L1 · `deception` = 执行平面 L2+L3 · `analysis` = 分析平面 L4 · `console` = 控制平面。
 > 这样"代码在哪"与"架构图上的哪一块"是同一个答案。
 >
-> **阶段未到的目录不预建**（`MD-21`（MVP 只交付标记为阶段 1 的模块））：`deception/` `analysis/` `console/` 当前**不存在**。
+> **阶段未到的目录不预建**（`MD-21`）：顶层目录只在**进入其实施阶段**时才建。
+> 当前状态：`core/` `edge/` `deception/` `analysis/` `console/` **均已建**；`honeypot-shell` 与蜜罐协议栈内容按用户裁定**推迟**。
 
 ### 1.2 `core/` 内部
 
@@ -109,7 +110,10 @@ edge/
 | `edge/dns/` | 🟡 [`Corefile.example`](../../edge/dns/config/Corefile.example) 已建（② 纯配置，无源码） |
 | `edge/injection/` | ✅ 已建（阶段 2b，含单测；被适配器引用，**不独立部署** `ST-5`） |
 | `deception/honeypot/` | ✅ 已建（阶段 3 **框架**：协议注册表 · 运行框架 · 最小适配器 + 7 例单测；**真实协议栈待设计**） |
-| `deception/shell/` · `deception/netpolicy/` · `analysis/*` · `console/` | ⏳ 阶段 2 / 3 |
+| `deception/netpolicy/` | 🟡 阶段 3：三份声明式产物（微隔离 / 假拓扑 / 运行时检测，复用 Cilium / Tetragon，**无源码**） |
+| `deception/shell/` | ⏸ **推迟**（用户裁定：蜜罐只做接入架构，内容与协议栈待专项调研） |
+| `analysis/*` | ✅ 已建（阶段 3，Python：`llm` 契约层 · `intent` · `chain` · `strategy` + 24 例测试；工具链见 `requirements-dev.txt`） |
+| `console/` | ✅ 已建（阶段 2b：Go 进程 + 静态页，只读观测；语言偏离见 [ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)） |
 | `scripts/*` | 🟡 部分已建：`archcheck/` `gate/` `licensecheck/` `tracecheck/` `check-leak/` ✅ 已实现；`devcheck/`（开发期在线冒烟）+ `dev/smoke.sh`（一键验证）✅ 已实现；`sentinel/` `doctor/` 仍只有说明 |
 | `deploy/` | 🟡 配置示例已建；helm / compose 未建 |
 

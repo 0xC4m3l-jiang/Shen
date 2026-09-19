@@ -6,8 +6,8 @@
 | 所属层 | `L4`（依据 MD-1） |
 | 实现语言 | `Python`（依据 [`../design/language.md`](../design/language.md) §1 与 `TB-2`） |
 | 负责人 | — |
-| 状态 | 设计（阶段 3） |
-| 最后更新 | 2026-09-18 |
+| 状态 | ✅ **已实现（框架 + 确定性部分）**（阶段 3，Python）：策略数据生成（灰度 ≤20%、阈值有下界）+ 诱饵轮换决策；**只出数据**，经 `policy` 下发 |
+| 最后更新 | 2026-09-19 |
 
 ---
 
@@ -74,7 +74,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 策略 schema 校验 + 版本递增 | `analysis/strategy/`（待建） |
+| 单元 | 策略 schema 校验 + 灰度/阈值边界 | `analysis/tests/test_l4_modules.py`（`test_strategy_generates_data_only_within_limits`） |
 | 注入样本回归 | 攻击者内容含指令时策略不变 | 同上 |
 | 分支穷尽性 | `accepted` 真假两分支 | `MD-8` |
 

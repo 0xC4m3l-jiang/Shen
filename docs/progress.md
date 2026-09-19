@@ -38,10 +38,10 @@
 | 14 | `honeypot-protocol` | 协议仿真（SSH / MySQL / Redis / FTP…）+ 交互捕获；**可选自研** | L2 | Go / Rust | `deception/honeypot/` | ✅ [`modules/honeypot-protocol.md`](modules/honeypot-protocol.md) | ✅ **框架 + 7 例单测**（协议栈待设计，见模块文档 §8） | 3 |
 | 15 | `honeypot-shell` | 命令表分发 + 内存文件系统 + 文件投递（含会话水印）；**可选自研** | L2 | Go / Rust | `deception/shell/` | ✅ [`modules/honeypot-shell.md`](modules/honeypot-shell.md) | ⏸ **推迟**（先交付接入架构；内容层待调研） | 3 |
 | 16 | `netpolicy` | 微隔离 + 假拓扑 + 运行时检测（复用 Cilium / Tetragon） | L3 | 声明式 + eBPF | `deception/netpolicy/` | ✅ [`modules/netpolicy.md`](modules/netpolicy.md) | 🟡 **声明式产物已就绪**（三份模板，无源码） | 3 |
-| 17 | `intent` | **意图识别**（侦察 / 利用 / 横向 / 窃取） | L4 | Python | `analysis/intent/` | ✅ [`modules/intent.md`](modules/intent.md)（设计） | ⏳ | 3 |
-| 18 | `chain` | **攻击链还原** + **识破信号识别**（触发诱饵再生成） | L4 | Python | `analysis/chain/` | ✅ [`modules/chain.md`](modules/chain.md)（设计） | ⏳ | 3 |
-| 19 | `strategy` | **策略生成** + 诱饵再生成决策（经 `policy` 下发） | L4 | Python | `analysis/strategy/` | ✅ [`modules/strategy.md`](modules/strategy.md)（设计） | ⏳ | 3 |
-| 20 | `llm-components` | LLM 契约纪律（`AR-15`…`AR-27`）+ **间接注入防护** + 内容预生成 | L4 | Python | `analysis/llm/` | ✅ [`modules/llm-components.md`](modules/llm-components.md)（设计） | ⏳ | 3 |
+| 17 | `intent` | **意图识别**（侦察 / 利用 / 横向 / 窃取） | L4 | Python | `analysis/intent/` | ✅ [`modules/intent.md`](modules/intent.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
+| 18 | `chain` | **攻击链还原** + **识破信号识别**（触发诱饵再生成） | L4 | Python | `analysis/chain/` | ✅ [`modules/chain.md`](modules/chain.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
+| 19 | `strategy` | **策略生成** + 诱饵再生成决策（经 `policy` 下发） | L4 | Python | `analysis/strategy/` | ✅ [`modules/strategy.md`](modules/strategy.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
+| 20 | `llm-components` | LLM 契约纪律（`AR-15`…`AR-27`）+ **间接注入防护** + 内容预生成 | L4 | Python | `analysis/llm/` | ✅ [`modules/llm-components.md`](modules/llm-components.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 21 | `console` | 控制台：**观测（只读）** —— 告警 · 流量访问 · 请求流动 | 控制台 | **Go + 静态页**（[ADR-0020](background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | `console/` | ✅ [`modules/console.md`](modules/console.md) | ✅ **已实现（最小可用）**（页面 + 4 个只读接口） | 2b |
 | 22 | `control` | **服务面**：gRPC 入参映射 · 会话身份提取 · 熔断（`NI-10`）· **禁止回显的强制点** | 核心 | Go | `core/internal/control/` | ✅ [`modules/control.md`](modules/control.md) | ✅ 3 文件 + 1 单测 | 1 |
 | 23 | `decoy` | **诱饵面**：五类（Developer API / 指令文件 / MCP / 数据集 / 蜜饵）+ 多态轮换 | 核心 | Go | `core/internal/decoy/` | ✅ [`modules/decoy.md`](modules/decoy.md) | ✅ 2 文件 + 1 单测 | 2b |

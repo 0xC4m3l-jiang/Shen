@@ -57,7 +57,38 @@ leakcheck: ## 泄漏检查：字符串字面量 ↔ OH-1 禁用清单、响应�
 licensecheck: ## 依赖许可审计，拦 AGPL / SSPL / BUSL 等（依据 TB-16）
 	$(GO) run ./scripts/licensecheck
 
-lint: fmt-check vet staticcheck errcheck archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
+# ── L4（Python）工具链与门禁 ────────────────────────────────────────────────
+# 依据 docs/design/language.md TB-15：CI 必须含 Python 的 ruff 检查。
+# 依赖锁定在 requirements-dev.txt；一律用仓库内 .venv，不污染系统 Python。
+PY      := .venv/bin/python
+PY_VENV := .venv
+
+pyenv: ## 建/更新 L4 的 .venv 并安装锁定依赖（首次或改锁文件后跑）
+	@test -d $(PY_VENV) || python3 -m venv $(PY_VENV)
+	@$(PY_VENV)/bin/pip install -q --upgrade pip
+	@$(PY_VENV)/bin/pip install -q -r requirements-dev.txt -r requirements.txt
+	@echo "L4 环境就绪：$$($(PY_VENV)/bin/python --version)、ruff $$($(PY_VENV)/bin/ruff --version | cut -d' ' -f2)"
+
+define require_pyenv
+	@test -x $(PY) || { echo "缺 Python 环境：先跑 make pyenv（TB-15 要求 Python 过 ruff）"; exit 1; }
+endef
+
+pyfmt-check: ## L4 代码风格（ruff format --check）
+	$(require_pyenv)
+	@$(PY_VENV)/bin/ruff format --check analysis/
+	@echo "✓ L4 格式（ruff format）"
+
+pylint: ## L4 静态检查（ruff check；含 TB-14 的裸 except 禁令）
+	$(require_pyenv)
+	@$(PY_VENV)/bin/ruff check analysis/
+	@echo "✓ L4 静态检查（ruff）"
+
+pytest: ## L4 单测（pytest）
+	$(require_pyenv)
+	@$(PY_VENV)/bin/pytest analysis/tests
+	@echo "✓ L4 单测（pytest）"
+
+lint: fmt-check vet staticcheck errcheck pyfmt-check pylint archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
 
 # ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
 #
@@ -116,7 +147,7 @@ bench: ## 基准：业务路径额外延迟的空载下界（AR-29 的输入之�
 	$(GO) test ./edge/proxy/ -run '^$$' -bench BenchmarkAddedLatency -benchtime 500x -count=1
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
-test: ## 全部单测，含数据竞争检测（依据 TB-15）
+test: pytest ## 全部单测，含数据竞争检测（依据 TB-15）
 	$(GO) test -race ./...
 
 coverage: ## 单测覆盖率

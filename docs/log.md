@@ -9,6 +9,58 @@
 
 ---
 
+## 2026-09-19 · L4 分析层（Python）：`llm-components` / `intent` / `chain` / `strategy` + Python 门禁
+
+**做了什么**：完成目标里最后一块模块组 —— **L4 分析决策层**，设计指定 **Python**（`language.md` §1 · `TB-2` · `TB-20`），
+而 `TB-15` 要求 Python 必须过 `ruff`，所以同时引入**仓库内 `.venv` + 锁定版本**的 Python 门禁（[ADR-0021](docs/background/decisions/0021-l4-python-toolchain.md)）。
+① **契约层 `analysis/llm/`**：`AR-15`（独立校验、坏输出**抛异常**，禁止默认值/静默降级）· `AR-16`（统一信封 `{accepted,data}` + 拒绝原因）·
+`AR-17`（三段式 JSON 提取 + **扫描位置上限**）· `AR-18`/`AR-23`（列表硬截断并**记录截断数**、分用途长度上限）·
+`AR-19`…`AR-21`（双阶段收尾：复用同一会话、收尾契约**只允许事实类字段**、两阶段失败**不写中间数据 + 释放租约**）·
+`AR-22`（黑名单三类：泄露 / 自曝 / 超长，业务标识由部署侧注入）· `AR-24`（提示词**资源化** + 启动期校验占位符齐全）·
+`AR-25`（`session_id` 一等字段并校验一致）。
+② **注入与执行面**：`AR-31`（攻击者可控内容以**结构化数据区**传入并显式标注不可信，原始观测**原样保留**）·
+`AR-32`（分析客户端**只**能把提示词变文本；`assert_no_execution_surface` 按**子串**拦截任何执行类成员）。
+③ **三个分析模块**：`intent`（确定性规则命中 → 意图类别 + 置信度 + 证据引用；无命中即**拒绝**，不臆测）·
+`chain`（阶段有序还原 + 四类识破信号 + **写入前校验证据引用** `AR-12`）· `strategy`（策略**数据**：灰度 ≤20%、阈值有下界；诱饵轮换决策）。
+④ **去重**：`AR-14` 态势去重 —— 同一态势 1000 条事件只触发 **1 次** L4（防 LLM 调用量随事件量线性增长）。
+⑤ **门禁**：新增 `pyenv` / `pyfmt-check` / `pylint` / `pytest` 四个目标并接进 `make lint` 与 `make test`；**缺环境时报错退出**，不静默跳过。
+⑥ 同步：`ADR-0021` · 四份 L4 模块文档状态 · `docs/design/structure.md`（原来写着 `analysis/`/`console/` 「当前不存在」，已改准）· `docs/progress.md` 第 17–20 行 · 决策索引。
+
+**改了哪些文件**：`analysis/__init__.py` · `analysis/events.py` · `analysis/dedupe.py` ·
+`analysis/llm/__init__.py` · `analysis/llm/envelope.py` · `analysis/llm/extract.py` · `analysis/llm/contract.py` · `analysis/llm/limits.py` ·
+`analysis/llm/blacklist.py` · `analysis/llm/twophase.py` · `analysis/llm/prompts.py` · `analysis/llm/untrusted.py` · `analysis/llm/client.py` ·
+`analysis/llm/resources/blacklist.yaml` · `analysis/llm/resources/prompts/intent.md` · `analysis/llm/resources/prompts/chain.md` ·
+`analysis/llm/resources/prompts/strategy.md` · `analysis/llm/resources/prompts/finalize.md` ·
+`analysis/intent/recognize.py` · `analysis/chain/evidence.py` · `analysis/chain/reconstruct.py` · `analysis/chain/broken.py` ·
+`analysis/strategy/generate.py` · `analysis/strategy/rotate.py` ·
+`analysis/tests/test_llm_contract.py` · `analysis/tests/test_llm_discipline.py` · `analysis/tests/test_l4_modules.py` ·
+`pyproject.toml` · `requirements.txt` · `requirements-dev.txt` · `pyrightconfig.json` · `Makefile` · `.gitignore` ·
+`docs/background/decisions/0021-l4-python-toolchain.md` · `docs/background/decisions/README.md` · `docs/design/structure.md` ·
+`docs/modules/intent.md` · `docs/modules/chain.md` · `docs/modules/strategy.md` · `docs/modules/llm-components.md` · `docs/progress.md`
+
+**对应文档**：[`docs/plans/2026-09-19-l4-analysis-python.md`](docs/plans/2026-09-19-l4-analysis-python.md)（含追溯矩阵 17 条与审视 5 条）· [`docs/background/decisions/0021-l4-python-toolchain.md`](docs/background/decisions/0021-l4-python-toolchain.md)
+
+**验证**：`make gate` 通过（新增 Python 三项：`ruff format --check` · `ruff check` · `pytest`）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| L4 单测 | 全过 | ✅ `24 passed` |
+| 坏输出 | **抛异常**、绝不填默认值 | ✅ `ContractError` |
+| 超长输出（5000 噪声 + 300 个花括号） | 扫描上限内失败、放宽后成功 | ✅ |
+| 收尾塞「成功」类字段 | 拒绝 | ✅ `ContractError` |
+| 两阶段均失败 | 不返回中间数据 + 释放租约 | ✅ `data == {}`、`released == 1` |
+| 引用不存在的证据 ID | 整条链作废 | ✅ `MissingEvidence` |
+| 同态势 1000 条事件 | 只触发 1 次 L4 | ✅ `admitted == 1` |
+| 客户端暴露 `execute()` | 被拦下 | ✅ `AssertionError` |
+| 门禁 | Python 三项进 `make gate` | ✅ 门禁通过 |
+
+**没做 / 遗留**：① ⚠️ **L4 尚未接入运行时触发链路**（遥测事件 → `AR-14` 去重 → L4 → 结论落库）—— 目前是**可调用库 + 单测**，线上不会自动跑；
+② L4 未接真实 LLM（`UnconfiguredClient` 显式失败）；③ `chain` 的链序与置信度是启发式初值，待真实数据校正；④ `strategy` 输出未经策略面端到端验证；
+⑤ `honeypot-shell` 与蜜罐协议栈内容 —— **目标明确排除**，保持推迟。
+
+---
+
 ## 2026-09-19 · 剩余模块（非代码类）：`adapter-dns` 配置收口 · `netpolicy` 声明式产物 · `console` 文档与偏离登记
 
 **做了什么**：目标要求「按设计完成所有模块（除细节蜜罐）」。本轮补齐**不需要写数据面代码**的三块：

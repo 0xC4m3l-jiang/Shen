@@ -85,7 +85,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 组件渲染 | `console/`（待建） |
+| 实跑 | 页面与四个只读接口 | `console/web/index.html` + `scripts/demo/run.sh`（见 [`../integrate/manual-test.md`](../integrate/manual-test.md)） |
 | 集成 | 策略发布 → 回执对账 | 同上 |
 | 契约 | 与 `api/policy/v1` 的一致性测试（`ST-6`：文档由 proto 生成） | 同上 |
 
