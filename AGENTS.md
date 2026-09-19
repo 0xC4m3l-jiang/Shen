@@ -62,7 +62,7 @@
 
 详见 [`docs/background/decisions/README.md`](docs/background/decisions/README.md) §3。
 
-## 4. 开发循环（设计 → 开发 → 验证）
+## 4. 开发循环（设计 → 开发 → 验证 → 提交）
 
 **每次动手都走这四段，不许跳段。**
 
@@ -72,16 +72,18 @@
 | **② 设计定稿** | 访谈达成共识后 | 决定经用户确认才升格；有真实取舍的写 ADR | 规则 → `docs/design/` · 取舍 → `docs/background/decisions/` |
 | **③ 开发** | 设计定稿后 | 先声明改动范围；只做被要求的最小实现；不替用户决定选型；不加未要求的接口或依赖 | 模块文档 + 代码 |
 | **④ 验证** | 开发完成后 | 跑 `make gate`（含 `make trace`）与 `make dev`；效果类或对抗性结论另按技能 `evidence-and-decisions` §3 走 | 门禁输出 · 基准数据 |
+| **⑤ 收尾提交** | 验证绿、记录写完之后 | `make done MSG="…"`：**门禁 → 提交 → 校验工作区干净**（一条命令跑完三段） | git 提交记录 |
 
-**三条不能破**：
+**四条不能破**：
 
 1. ①→② 的升格**必须经用户确认**（§3）—— **Agent 不得自行升格**
 2. ③ 之前先确认待定项不阻塞你（见文首「动手前做两件事」）
 3. ④ **不绿就不算完成** —— `make gate` 失败时**禁止**声称完成，也**禁止**绕过检查
+4. ⑤ **必须提交** —— 每轮收尾跑 `make done MSG="…"`；**没有提交就没有回退点**（曾发生过工具被误删、只能从会话记录考古的事）
 
 > `grill_deck` 只在交互式终端可用；非交互时退化为 markdown 提问（同样按轮次 + 编号 + 推荐答案）。用 `/grill` 重开上一轮复核或改答案。
 
-**每轮必须留下五样**（= 全局技能 `dev-loop` 的四类产出 + 本条验收命令；形状与逐个动作见 [`.pi/skills/dev-loop-project/SKILL.md`](.pi/skills/dev-loop-project/SKILL.md)）：
+**每轮必须留下六样**（= 全局技能 `dev-loop` 的四类产出 + 本条验收命令；形状与逐个动作见 [`.pi/skills/dev-loop-project/SKILL.md`](.pi/skills/dev-loop-project/SKILL.md)）：
 
 | # | 产出 | 要求 |
 | --- | --- | --- |
@@ -90,6 +92,7 @@
 | 3 | `make gate` | 已含 `make trace`：模块文档↔代码↔单测 · 规则 ID 引用存在性 · 变更包与日志 |
 | 4 | `make dev` | 效果验证的关键行贴进变更包 §6（能反驳「跑了吗」即可，不需全文） |
 | 5 | **审视**（仅 L 档） | 用全局技能 `audit`（`~/.pi/agent/skills/audit/SKILL.md`）对着本轮 diff 核文档、删无用、标废弃；审视表进变更包 §7.1 |
+| 6 | **提交** | `make done MSG="<一句话主题>"`（门禁 → 提交 → 校验工作区干净）；提交信息写清「做了什么」，让 `git log` 能当索引读 |
 
 > 追溯检查发现的**已知缺口**必须写进 [`scripts/tracecheck/allow.txt`](scripts/tracecheck/allow.txt) 并说明理由；
 > 豁免过期会被门禁报出来 —— 不允许僵尸条目。

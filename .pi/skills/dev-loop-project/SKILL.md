@@ -104,7 +104,9 @@ metadata:
 | 命令 | 用途 |
 | --- | --- |
 | `make check` | 快速内循环：构建 + 格式化 + vet + 架构 + 追溯 |
-| `make gate` | **一轮的验收命令**：静态检查 + 架构 + 追溯 + 许可 + 单测（`-race`） |
+| `make gate` | **一轮的验收命令**：静态检查 + 架构 + 追溯 + 泄漏 + 许可 + 单测（`-race`） |
+| `make done MSG="…"` | **一轮的收尾命令**：`gate` → 提交 → 校验工作区干净（每轮必跑） |
+| `make clean-check` | 只校验工作区是否干净（改动是否已提交） |
 | `make dev` | 效果验证：配置干跑（合法 + 非法）→ 起核心 → 在线冒烟 → 规则回放 |
 | `make replay` | 规则回放：样本 → 分数 → 命中信号（判定响应不回显分值，只能在这里看） |
 | `make smoke` | 在线冒烟：判定面形状、三值闭集、`decision_id` 幂等 |
@@ -127,6 +129,7 @@ metadata:
 - [ ] `make trace` 零错误（提示与登记豁免单独列出，允许存在但必须知情）
 - [ ] `make dev` 输出 PASS，关键行贴进变更包 §6
 - [ ] 变更日志在 [`docs/log.md`](../../../docs/log.md) 追加一条
+- [ ] **本轮改动已提交且工作区干净**：`make done MSG="…"`（门禁 → 提交 → 校验）；只提交用 `make commit MSG="…"`
 - [ ] **L 档做过审视**（全局技能 `audit`：`~/.pi/agent/skills/audit/SKILL.md`），审视表写进变更包 §7.1
 - [ ] 若动了 `docs/design/` → 有用户确认的记录；若动了数据模型 → 同步 `structure.md` §3 与 `spec/`
 

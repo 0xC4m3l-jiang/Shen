@@ -14,7 +14,7 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev
+        check-config replay smoke dev commit clean-check done
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -38,15 +38,11 @@ vet: ## go vet（依据 TB-15）
 	$(GO) vet ./...
 
 staticcheck: ## staticcheck，比 vet 更深（依据 TB-15；需先跑 make tools）
-	@if [ ! -x $(TOOLBIN)/staticcheck ]; then \
-		echo "staticcheck 未安装。先跑 make tools。"; \
-		echo "禁止跳过本检查 —— 静默跳过等于假绿。"; exit 1; fi
+	@if [ ! -x $(TOOLBIN)/staticcheck ]; then echo "staticcheck 未安装。先跑 make tools。"; echo "禁止跳过本检查 —— 静默跳过等于假绿。"; exit 1; fi
 	$(TOOLBIN)/staticcheck ./...
 
 errcheck: ## 未处理的错误返回值（依据 TB-14；需先跑 make tools）
-	@if [ ! -x $(TOOLBIN)/errcheck ]; then \
-		echo "errcheck 未安装。先跑 make tools。"; \
-		echo "禁止跳过本检查 —— 静默跳过等于假绿。"; exit 1; fi
+	@if [ ! -x $(TOOLBIN)/errcheck ]; then echo "errcheck 未安装。先跑 make tools。"; echo "禁止跳过本检查 —— 静默跳过等于假绿。"; exit 1; fi
 	$(TOOLBIN)/errcheck ./...
 
 archcheck: ## 架构与依赖方向：ST-1…ST-4 顶层目录与跨平面 import、MD-18…MD-20 store 唯一 I/O 出口与模块清单一致、TB-20/21/24 语言层数与 CGO
@@ -62,6 +58,25 @@ licensecheck: ## 依赖许可审计，拦 AGPL / SSPL / BUSL 等（依据 TB-16�
 	$(GO) run ./scripts/licensecheck
 
 lint: fmt-check vet staticcheck errcheck archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
+
+# ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
+#
+# 为什么放进流程：没有提交就没有回退点。上一轮 `scripts/tracecheck` 被误删后无从恢复，
+# 只能从会话记录里考古 —— 有版本控制的话那只是一条 `git checkout` 的事。
+commit: ## 提交本轮改动（必须给 MSG="<一句话主题>"）
+	@if [ -z "$(MSG)" ]; then echo '用法：make commit MSG="<一句话主题>"'; echo "MSG 是必需的：提交信息要让半年后的人看懂这轮干了什么。"; exit 1; fi
+	@if [ -z "$$(git status --porcelain)" ]; then echo "没有可提交的改动（工作区已干净）。"; exit 1; fi
+	git add -A
+	git commit -q -m "$(MSG)" -m "验证：make gate 通过（关键输出见 docs/log.md 对应条目）"
+	@echo "已提交：" && git --no-pager log --oneline -1
+
+clean-check: ## 校验工作区干净（收尾的最后一道闸：改动必须已提交）
+	@if [ -n "$$(git status --porcelain)" ]; then echo "工作区不干净 —— 这一轮的改动还没提交："; git status --short; echo '跑 make done MSG="…"（门禁 → 提交 → 校验）或 make commit MSG="…"。'; exit 1; fi
+	@echo "工作区干净：本轮改动都已提交。"
+
+done: gate commit clean-check ## 一轮的收尾：门禁 → 提交 → 校验工作区干净
+	@echo
+	@echo "本轮收尾完成：门禁绿 · 已提交 · 工作区干净。"
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
 test: ## 全部单测，含数据竞争检测（依据 TB-15）

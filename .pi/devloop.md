@@ -39,6 +39,12 @@ change_log: docs/log.md
 # 一键验证命令（含静态检查 + 架构检查 + 追溯检查 + 许可审计 + 单测 -race）
 verify_cmd: make gate
 
+# 一轮的收尾命令：门禁 → 提交 → 校验工作区干净（每轮**必须**跑，见 AGENTS.md §4）
+commit_cmd: make done MSG="<一句话主题>"
+
+# 只提交（不重跑门禁）；缺 MSG 直接失败
+commit_only: make commit MSG="<一句话主题>"
+
 # 追溯检查命令（本项目的实现：scripts/tracecheck/）
 # 它覆盖技能 `audit` §6 的四类：悬空引用（D-3）· 孤儿文档（MD-2 反向检查）· 过期状态标记（TC-2）· 过期豁免（ALLOW）
 trace_cmd: make trace

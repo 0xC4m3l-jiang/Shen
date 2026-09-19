@@ -9,7 +9,47 @@
 
 ---
 
-## 2026-09-19 · 回退 Python/TS 工具链引入 + 修复 tracecheck（自伤恢复）+ `.gitignore`
+## 2026-09-19 · 引入 git 版本控制，把「提交」纳入每轮收尾
+
+**做了什么**：① **初始化 git 仓库**（`git init -b main`）并打**基线提交**（220 个文件：全部文档 · 代码 · 契约 · 部署模板 ·
+门禁工具 · `.pi/` 项目技能）；提交信息里写明了「此前无版本控制」，**不假装有历史**。
+仓库级提交身份设为 `Shen Dev <dev@shen.local>`（不动全局配置；本机原本没有任何 git 身份）。
+② **新增三个目标，把提交变成流程的一部分**：`make commit MSG="…"`（缺 MSG 失败、工作区干净时拒绝空提交、
+正文固定写「验证：make gate 通过」） · `make clean-check`（工作区必须干净，否则列出文件与下一步命令） ·
+`make done MSG="…"`（**一条命令跑完三段：门禁 → 提交 → 校验干净**；`make` 遇错即停，所以门禁不过就不会提交）。
+③ **四份工作流文档同步这条纪律**：`AGENTS.md` §4（循环标题加「→ 提交」、表格新增第 ⑤ 段、
+「三条不能破」→「四条不能破」、「每轮留下五样」→「六样」） · [`.pi/devloop.md`](../../.pi/devloop.md)（新增 `commit_cmd` / `commit_only`） ·
+[`docs/kb/dev-workflow.md`](docs/kb/dev-workflow.md)（时序图新增第 ⑦ 步「提交」，并写明「没有提交就没有回退点」） ·
+[`.pi/skills/dev-loop-project/SKILL.md`](.pi/skills/dev-loop-project/SKILL.md)（入口表与 DoD 各补一条）。
+④ 顺手修正 `Makefile` 里四处**跨行 `if … then \` 守卫** —— shellcheck 报 `SC1089` 解析失败（真告警，会让门禁红），改为单行形式。
+
+> 为什么做这件事：上一轮我把 `scripts/tracecheck` 的十余个函数误删了，**没有任何回退点**，
+> 只能从 pi 会话记录里考古复原。有了提交，那只是一条 `git checkout` 的事。
+
+**改了哪些文件**：`Makefile` · `AGENTS.md` · `.pi/devloop.md` · `docs/kb/dev-workflow.md` · `.pi/skills/dev-loop-project/SKILL.md`
+（新增版本库 `.git/`；基线提交 `abf9a34`）
+
+**对应文档**：[`docs/plans/2026-09-19-git-and-commit-workflow.md`](docs/plans/2026-09-19-git-and-commit-workflow.md)（含追溯矩阵与审视 4 条）
+
+**验证**：`make gate` 通过；`make done MSG="…"` 跑通（门禁 → 提交 → 工作区干净）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 首次提交前核对忽略清单 | 密钥类文件与 `.bin/` 不入库 | ✅ 核对通过（`.gitignore` 生效） |
+| 基线提交 | 有提交且工作区干净 | ✅ `abf9a34`；`git status --porcelain` 为空 |
+| `make clean-check`（脏） | 失败并列文件 | ✅ `工作区不干净 —— 这一轮的改动还没提交：` + `M Makefile` |
+| `make clean-check`（净） | 通过 | ✅ `工作区干净：本轮改动都已提交。` |
+| `make commit` 缺 `MSG` | 失败且不提交 | ✅ `MSG 是必需的…` |
+| `make commit` 无可提交内容 | 失败（拒绝空提交） | ✅ `没有可提交的改动（工作区已干净）。` |
+| `make done` | 门禁 → 提交 → 干净 | ✅ 见变更包 §6 |
+| `Makefile` 跨行 if | shellcheck 不再报 | ✅ `SC1089` 消失，门禁绿 |
+
+**没做 / 遗留**：① **未配远端**（纯本地仓库）—— 机器损坏即历史丢失；你定托管后两行命令即可推上去；
+② 提交信息只要求非空，**无格式规范**（长历史后检索不便）；③ **未加 pre-commit hook**（有人可绕过 `make done` 直接提交）；
+④ 分支/评审策略未定（当前单分支 `main`）；⑤ 仓库 24 MB（含调研材料，目前可接受）。
+
+---
 
 **做了什么**：① 按用户裁定，**撒销我自行引入的 Python/TS 门禁工具链**（删 `pyproject.toml`、`requirements-dev.txt`、`.venv/`，
 以及 `Makefile` 里的 `PY`/`RUFF`/`NPMBIN` 与 `py-tools`/`pyfmt-check`/`pystatic`/`pytest`/`ts-tools`/`ts-check` 六个目标，`lint` 链还原为 Go-only）。
