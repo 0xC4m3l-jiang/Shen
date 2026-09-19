@@ -156,8 +156,11 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFlow 只返回**判定事件**，并把载荷解成结构化字段 —— 这是页面「流量流动」表的数据源。
+//
+// 取数时**显式只要 decision 事件**：否则 limit 会先作用在全部事件上（含 request_judged），
+// 过滤后行数会远少于 limit —— 页面看起来"记录变少了"，其实是被别的类型挤掉了。
 func (s *server) handleFlow(w http.ResponseWriter, r *http.Request) {
-	events, err := s.fetch(r)
+	events, err := s.fetchType(r, decisionEventType)
 	if err != nil {
 		writeErr(w, err)
 		return

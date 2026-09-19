@@ -72,8 +72,11 @@
 ### 3.1 一键起全套（推荐 —— 本机只需要 Docker）
 
 ```sh
-make up          # 构建镜像并起：核心 + 反向代理前置 + 观测控制台 + L4 近线分析 + 演示业务站
+scripts/shen.sh up      # 等价于 make up；会自动等就绪并打印地址
+# 或者： make start
 ```
+
+> **完整的运行说明**（启动 / 检查 / 修复 / 更新 / 产物卫生）在 [`docs/ops/runbook.md`](docs/ops/runbook.md) —— 排障先看它。
 
 启动后：
 

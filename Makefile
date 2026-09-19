@@ -21,7 +21,8 @@ PROTOS := $(shell find api -name '*.proto')
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
         check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen analysis \
-        docker-build up down docker-ps docker-logs docker-log check-ignore
+        docker-build up down docker-ps docker-logs docker-log check-ignore \
+        start status app-smoke verify
 
 # check-ignore 必须用 --no-index：默认行为下 git 认为已入库文件不受忽略规则影响，
 # 于是检查会永远通过 —— 那是**假的防线**（本仓库真的踩过：见 docs/log.md）。
@@ -31,6 +32,18 @@ check-ignore: ## 自检：已入库文件不得被 .gitignore 规则命中（防
 		echo "已入库文件却被 .gitignore 忽略（源码可能被静默排除）："; echo "$$bad"; exit 1; \
 	fi
 	@echo "✓ 忽略清单未误伤任何已入库文件"
+
+start: ## 起全套并等就绪（= scripts/shen.sh up；只需 Docker）
+	@scripts/shen.sh up
+
+status: ## 看容器状态 + 控制台概览
+	@scripts/shen.sh status
+
+app-smoke: ## 经引擎造流量并回显判定结果（验证业务链路）
+	@scripts/shen.sh smoke
+
+verify: ## 仓库级验证：make gate + make dev
+	@scripts/shen.sh check
 
 # ── Docker：一键起全套（本机只需 Docker，不用装 Go / Node / Python）──────────
 COMPOSE := docker compose -f deploy/docker/compose.yaml

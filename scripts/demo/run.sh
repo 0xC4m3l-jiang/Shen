@@ -18,9 +18,13 @@ BUSINESS_PORT="${SHEN_DEMO_BUSINESS_PORT:-19080}"
 
 cd "$ROOT"
 echo "构建（core / proxy / console）…"
-go build -o /tmp/shen-demo-core ./core/cmd/core
-go build -o /tmp/shen-demo-proxy ./edge/proxy/cmd/proxy
-go build -o /tmp/shen-demo-console ./console/cmd/console
+# 所有临时产物统一落在 ${TMPDIR:-/tmp}/shen-<uid>/ —— 仓库里不留任何文件（与 scripts/shen.sh 一致）。
+_TMPBASE=${TMPDIR:-/tmp}
+RUNDIR=${SHEN_RUNDIR:-${_TMPBASE%/}/shen-$(id -u)}
+mkdir -p "$RUNDIR"
+go build -o "$RUNDIR/core" ./core/cmd/core
+go build -o "$RUNDIR/proxy" ./edge/proxy/cmd/proxy
+go build -o "$RUNDIR/console" ./console/cmd/console
 
 pids=()
 cleanup() {
@@ -36,18 +40,18 @@ pids+=($!)
 
 # ② 核心（示例配置：含两条观察用规则；默认影子模式 = 只观测不处置）
 SHEN_CONFIG="${SHEN_CONFIG:-deploy/config/config.example.yaml}" \
-  SHEN_LISTEN="$CORE_LISTEN" /tmp/shen-demo-core &
+  SHEN_LISTEN="$CORE_LISTEN" "$RUNDIR/core" &
 pids+=($!)
 
 # ③ 反向代理接入（形态③）：业务地址指向假站点
 SHEN_PROXY_UPSTREAM="http://127.0.0.1:$BUSINESS_PORT" \
   SHEN_CORE_ADDR="$CORE_LISTEN" \
   SHEN_PROXY_LISTEN="$PROXY_LISTEN" \
-  SHEN_PROXY_POLICY_INTERVAL=60s /tmp/shen-demo-proxy &
+  SHEN_PROXY_POLICY_INTERVAL=60s "$RUNDIR/proxy" &
 pids+=($!)
 
 # ④ 观测控制台（只读）
-SHEN_CORE_ADDR="$CORE_LISTEN" SHEN_CONSOLE_LISTEN="$CONSOLE_LISTEN" /tmp/shen-demo-console &
+SHEN_CORE_ADDR="$CORE_LISTEN" SHEN_CONSOLE_LISTEN="$CONSOLE_LISTEN" "$RUNDIR/console" &
 pids+=($!)
 
 sleep 3

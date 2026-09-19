@@ -9,6 +9,35 @@
 
 ---
 
+## 2026-09-19 · 运行手册 + 一键启动脚本 + 产物卫生
+
+**做了什么**：用户要三件事 —— ① 把「如何启动 / 如何检查 / 如何修复」记录清楚，保证后续启动、更新、验证准确；② 给一个启动脚本；③ 注意本地产物位置，别让无用文件影响项目结构。逐条落地：
+① **运行手册**（新增 `docs/ops/runbook.md`，唯一一份运行说明）：一分钟命令表 · 启动（Docker / 本地 / 「Up ≠ 就绪」）· 检查（四层：容器 → 链路 → 仓库门禁 → 观测接口）· **修复表**（症状 → 原因 → 处理，10 条，含本会话真实踩过的坑）· 更新（代码 / Go 依赖 / Python 依赖 / 基础镜像）· 产物卫生 · 端口变量一览。README 与 docs 导航已指向它。
+② **一键启动脚本**（新增 `scripts/shen.sh`）：`up`（**等就绪后再打印地址**）· `status`（容器 + 控制台概览）· `smoke`（经引擎造三条流量并回显分值/命中信号）· `check`（`make gate` + `make dev`）· `logs`（**不跟随**，取尾部即返回）· `local`（本地进程）· `down`；Makefile 加四个薄别名 `start` / `status` / `app-smoke` / `verify`。
+③ **产物卫生**：临时产物统一落在 `${TMPDIR:-/tmp}/shen-<uid>/`（脚本的 `RUNDIR`），仓库里**不留**二进制/日志/pid；`scripts/demo/run.sh` 也从硬编码 /tmp/shen-demo-* 改到同一目录（并处理 `TMPDIR` 尾斜杠）。启动与验证后 `git status --short` 保持为空。
+④ **顺手修掉两个真缺陷**：控制台 /api/flow?limit=N 原先的 limit 作用在**全部事件**上（含 `request_judged`），过滤后行数远少于 N —— 页面像是"记录变少"，实为被别的类型挤掉；脚本 `smoke` 里内联 python 用 `\"` 转义被当成字面反斜杠（改用 here-doc 传参）。
+
+**改了哪些文件**：`scripts/shen.sh`（新增）· `docs/ops/runbook.md`（新增）· `scripts/demo/run.sh` · `Makefile` · `console/cmd/console/main.go` · `README.md` · `docs/README.md`
+
+**对应文档**：[`docs/plans/2026-09-19-runbook-and-start-script.md`](docs/plans/2026-09-19-runbook-and-start-script.md)（含追溯矩阵与审视 5 条）· [`docs/ops/runbook.md`](docs/ops/runbook.md)
+
+**验证**：`make gate` 通过；`scripts/shen.sh check`（即 gate + dev）全绿；五个子命令逐一实测。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| `scripts/shen.sh up` | 幂等 + 等就绪 + 打印地址 | ✅ 打印控制台/业务入口地址与临时目录 |
+| `scripts/shen.sh smoke` | 三条流量 200 + 回显判定 | ✅ 5 行；探针 `score=0.9 signals=['ua-headless', 'path-probe']` |
+| `scripts/shen.sh logs console` | 取尾部后立即返回 | ✅ 不挂住 |
+| `scripts/shen.sh check` | gate + dev 全绿 | ✅ 含第 6 步 L4 |
+| /api/flow limit 语义 | limit 作用于判定事件 | ✅ 修复前 1 行 → 修复后 5 行 |
+| 启动后仓库状态 | `git status --short` 为空 | ✅ 无产物落进仓库 |
+
+**没做 / 遗留**：① 跨节点部署仍需 mTLS（设计约束）；② 控制台无鉴权（仅本机/内网）；③ `analysis` 镜像 250MB 可再瘦；
+④ 脚本本身未进 CI（需 Docker-in-Docker，靠人工按手册走）；⑤ hadolint 本机没有，Dockerfile 少了独立 lint（需要时可用容器跑）。
+
+---
+
 ## 2026-09-19 · Docker 一键起全套 + 目录工整化（Python 环境归层、依赖离线化）
 
 **做了什么**：用户提出三点要求 —— ① Python 相关配置**不要放仓库根**；② 整个项目要能**在 Docker 里一条命令启动**、对本地依赖最少；③ 文档要准确客观、目录要工整、少一些 `.` 开头的隐藏文件。逐条落地：
