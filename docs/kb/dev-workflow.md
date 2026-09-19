@@ -261,3 +261,24 @@ make smoke   # 在线冒烟：判定面形状 + decision_id 幂等
 # 6. 在别的项目启用同一套规范
 bash ~/.pi/agent/skills/dev-loop/scripts/devloop-init.sh /path/to/project
 ```
+
+## 环境与产物放在哪（避免"某个层的私有工具占满仓库根"）
+
+| 东西 | 位置 | 为什么不放根目录 |
+| --- | --- | --- |
+| L4 的 Python 环境 | `analysis/.venv` | Python 是 L4 的实现选择（`TB-2`/`TB-20`），它的 venv 与依赖属于这一层 |
+| L4 的工具/依赖配置 | `analysis/pyproject.toml` · `analysis/requirements*.txt` | 同上；根目录只留 Go 的 `go.mod`/`go.sum` |
+| 门禁工具二进制 | `scripts/bin/` | 是产物、不入库；放 `scripts/` 下与其它工具同处 |
+| Go 依赖副本 | `vendor/`（**入库**） | 让构建与门禁离线可用；本机访问不了 `proxy.golang.org` |
+| 容器定义 | `deploy/docker/` | 部署物料归 `deploy/`；一键入口是 `make up` |
+| 忽略清单自检 | `make check-ignore` | 防「源码被 .gitignore 静默排除」（必须用 `--no-index`，否则检查永远通过） |
+
+## 起环境的两种方式
+
+```sh
+make up      # Docker 全套（本机只需 Docker）；宿主端口默认 18080 / 19444，可用 SHEN_HTTP_PORT / SHEN_CONSOLE_PORT 改
+make dev     # 本地一键验证（Go + Python）：配置干跑 → 起核心 → 冒烟 → 规则回放 → 跑一轮 L4
+```
+
+看容器日志：`make docker-log S=core`（**不跟随**，取尾部后立即返回）· `make docker-logs S=core`（跟随）。
+> ⚠️ `docker logs -f` / `make docker-logs` 不会自己返回 —— 脚本或自动化里用 `docker-log`。

@@ -1,7 +1,8 @@
 # 忽略清单（依据 ST-20：含密钥的配置文件必须加入忽略清单；工具产物不进版本库）
 #
-# ⚠️ 本仓库当前**还不是 git 仓库**（无版本控制）。这份清单现在就写好，是为了
-#    第一次 `git init` 时不把密钥与工具产物带进去 —— 事后清理历史比事前忽略贵得多。
+# 只忽略两类东西：**密钥/真实配置** 与 **产物/缓存**。源码一律入库。
+# 自检：`make check-ignore` —— 已入库文件若被本清单命中，门禁会直接失败
+#       （用 --no-index 才能查出来：默认行为下 git 认为已入库文件不受忽略规则影响）。
 
 # ── 密钥与真实配置（ST-20 / ST-21）─────────────────────────────────────────
 # 配置模板（*.example.*）入库；由 SHEN_CONFIG 指向的真实配置**禁止**入库。
@@ -13,27 +14,37 @@ deploy/config/*.local.yaml
 .env
 .env.local
 
-# ── 门禁工具与产物（与 .bin/ 同理：版本固定但不入库）───────────────────────
-.bin/
+# ── 门禁工具与产物（版本固定但不入库）────────────────────────────────────
+scripts/bin/
 
 # ── 构建与运行产物 ────────────────────────────────────────────────────────
-/core/core
+# 我们的构建**不往源码树里写二进制**：`make build` 只做编译（产物进 Go 构建缓存），
+# `make up` 走 Docker，工具二进制进 scripts/bin/（已在上面忽略）。
+# 下面几条只是**兜底**：万一有人直接在包目录里手敲 `go build`，会在那里留下同名二进制
+# （如 core/cmd/core/core）—— 那是产物，不该入库。
+#
+# ⚠️ 这些规则只针对「包目录里的同名**文件**」，**不会**影响源码：
+#    `git check-ignore core/cmd/core/main.go` 无输出，即 main.go 正常入库。
+#    想验证「有没有源码被误忽略」：跑 `make check-ignore`（等价于
+#    `git ls-files | git check-ignore --no-index --stdin`，应为空）。
 /core/cmd/core/core
 /edge/proxy/cmd/proxy/proxy
+/console/cmd/console/console
+/edge/mirror/cmd/mirror/mirror
 *.test
 coverage.out
 
 # ── 编辑器与系统 ──────────────────────────────────────────────────────────
 .DS_Store
 *.swp
-# L4（Python）：仓库内 venv 与缓存一律不入库（TB-15 用 .venv/bin 下的锁定工具）
+# L4（Python）：环境与缓存都在 analysis/ 内，一律不入库（TB-15 用 analysis/.venv 下的锁定工具）
 .venv/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.py[cod]
 
-# Python 构建产物（pip install -e . 会在仓库根生成 egg-info；archcheck 已把它排除在源码布局外）
+# Python 构建产物（pip install -e analysis 在 analysis/ 内生成 egg-info；archcheck 已排除在源码布局外）
 *.egg-info/
 build/
 dist/

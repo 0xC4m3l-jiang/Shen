@@ -1,10 +1,15 @@
 GO ?= go
 
-# ── 门禁工具：版本固定，装在 .bin/（本地缓存，不进仓库）────────────────────────
+# shellcheck disable=SC1089
+# 本文件是 **Makefile**，不是 shell 脚本。有工具会把整份文件当 shell 分析并在第一个 recipe 行报
+# 「parsing stopped here」——那是工具误用。make 自身已能正常解析并执行本文件的全部目标
+# （`make gate` / `make dev` 均在 CI 与本地实跑通过）。
+
+# ── 门禁工具：版本固定，装在 scripts/bin/（本地缓存，不进仓库）────────────────────────
 #
 # 为什么固定版本：门禁必须可复现。今天过、明天因为工具升级而挂，等于门禁失效。
 # 为什么装在本地：离线时门禁仍能跑；`go run pkg@version` 每次都依赖网络。
-TOOLBIN         := $(CURDIR)/.bin
+TOOLBIN         := $(CURDIR)/scripts/bin
 STATICCHECK_PKG := honnef.co/go/tools/cmd/staticcheck@v0.8.1
 ERRCHECK_PKG    := github.com/kisielk/errcheck@v1.20.0
 
@@ -15,7 +20,42 @@ PROTOS := $(shell find api -name '*.proto')
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
         check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
-        pyenv pyfmt-check pylint pytest pygen analysis
+        pyenv pyfmt-check pylint pytest pygen analysis \
+        docker-build up down docker-ps docker-logs docker-log check-ignore
+
+# check-ignore 必须用 --no-index：默认行为下 git 认为已入库文件不受忽略规则影响，
+# 于是检查会永远通过 —— 那是**假的防线**（本仓库真的踩过：见 docs/log.md）。
+check-ignore: ## 自检：已入库文件不得被 .gitignore 规则命中（防「源码被静默排除」）
+	@bad="`git ls-files | git check-ignore --no-index --stdin`"; \
+	if [ -n "$$bad" ]; then \
+		echo "已入库文件却被 .gitignore 忽略（源码可能被静默排除）："; echo "$$bad"; exit 1; \
+	fi
+	@echo "✓ 忽略清单未误伤任何已入库文件"
+
+# ── Docker：一键起全套（本机只需 Docker，不用装 Go / Node / Python）──────────
+COMPOSE := docker compose -f deploy/docker/compose.yaml
+
+docker-build: ## 构建全部镜像（core / proxy / console / analysis / business）
+	$(COMPOSE) build
+
+up: ## 一键起全套（Docker）：核心 + 代理 + 控制台 + L4 + 演示业务站
+	$(COMPOSE) up -d --build
+	@echo
+	@echo "控制台  http://127.0.0.1:$${SHEN_CONSOLE_PORT:-19444}/   业务入口  http://127.0.0.1:$${SHEN_HTTP_PORT:-18080}/"
+
+down: ## 停掉全套并删容器（镜像保留）
+	$(COMPOSE) down
+
+docker-ps: ## 看全套容器状态
+	$(COMPOSE) ps
+
+docker-logs: ## 跟看日志（会一直挂着，Ctrl-C 退出；S=core 只看某个服务）
+	$(COMPOSE) logs -f $(S)
+
+# ⚠️ 给脚本/自动化用**不跟随**版本：`docker logs -f` 不会自己返回，
+#    在非交互场景（含 AI 助手）里会把命令挂住 —— 本仓库真的踩过。取最近 50 行后立即退出。
+docker-log: ## 只看日志尾部（不跟随；S=core 可选，N=行数默认 50）
+	$(COMPOSE) logs --tail=$${N:-50} $(S)
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -39,8 +79,6 @@ vet: ## go vet（依据 TB-15）
 	$(GO) vet ./...
 
 staticcheck: ## staticcheck，比 vet 更深（依据 TB-15；需先跑 make tools）
-	# 说明：本文件是 Makefile，不是 shell 脚本；把整份文件当 shell 分析属工具误用（SC1089）。
-	# shellcheck disable=SC1089
 	@if [ ! -x $(TOOLBIN)/staticcheck ]; then echo "staticcheck 未安装。先跑 make tools。"; echo "禁止跳过本检查 —— 静默跳过等于假绿。"; exit 1; fi
 	$(TOOLBIN)/staticcheck ./...
 
@@ -62,27 +100,28 @@ licensecheck: ## 依赖许可审计，拦 AGPL / SSPL / BUSL 等（依据 TB-16�
 
 # ── L4（Python）工具链与门禁 ────────────────────────────────────────────────
 # 依据 docs/design/language.md TB-15：CI 必须含 Python 的 ruff 检查。
-# 依赖锁定在 requirements-dev.txt；一律用仓库内 .venv，不污染系统 Python。
-PY      := .venv/bin/python
-PY_VENV := .venv
+#
+# **本层的环境与配置全部在 `analysis/` 内**（pyproject.toml / requirements*.txt / .venv）——
+# Python 是 L4 的实现选择（TB-2 / TB-20），它的私有工具不该占用仓库根。
+# 所以下面这些目标一律在 `analysis/` 里跑（pyproject 自动生效），不污染系统 Python。
+ANALYSIS := analysis
+PY      := $(ANALYSIS)/.venv/bin/python
+PY_VENV := $(ANALYSIS)/.venv
 
 pygen: ## 生成 L4 的 Python gRPC 桩（契约唯一事实源仍是 api/ 下的 .proto，ST-6）
 	$(require_pyenv)
-	@$(PY) -m grpc_tools.protoc -I api \
-		--python_out=analysis/proto --grpc_python_out=analysis/proto \
-		api/telemetry/v1/telemetry.proto
-	@echo "✓ L4 gRPC 桩已生成（analysis/proto）"
+	@$(PY) $(ANALYSIS)/tools/genproto.py
 
 analysis: ## 跑一轮 L4 近线分析（读核心遥测 → 上报结论事件；需核心已在跑）
 	$(require_pyenv)
 	@$(PY) -m analysis.worker --core $${SHEN_CORE_ADDR:-127.0.0.1:9443} --once
 
-pyenv: ## 建/更新 L4 的 .venv 并安装锁定依赖（首次或改锁文件后跑）
+pyenv: ## 建/更新 L4 的 analysis/.venv 并安装锁定依赖（首次或改锁文件后跑）
 	@test -d $(PY_VENV) || python3 -m venv $(PY_VENV)
 	@$(PY_VENV)/bin/pip install -q --upgrade pip
-	@$(PY_VENV)/bin/pip install -q -r requirements-dev.txt -r requirements.txt
-	@$(PY_VENV)/bin/pip install -q -e .
-	@echo "L4 环境就绪：$$($(PY_VENV)/bin/python --version)、ruff $$($(PY_VENV)/bin/ruff --version | cut -d' ' -f2)"
+	@$(PY_VENV)/bin/pip install -q -r $(ANALYSIS)/requirements-dev.txt -r $(ANALYSIS)/requirements.txt
+	@cd $(ANALYSIS) && .venv/bin/pip install -q -e .
+	@echo "L4 环境就绪（$(PY_VENV)）：`$(PY) --version`、ruff `$(PY_VENV)/bin/ruff --version | cut -d' ' -f2`"
 
 define require_pyenv
 	@test -x $(PY) || { echo "缺 Python 环境：先跑 make pyenv（TB-15 要求 Python 过 ruff）"; exit 1; }
@@ -90,20 +129,20 @@ endef
 
 pyfmt-check: ## L4 代码风格（ruff format --check）
 	$(require_pyenv)
-	@$(PY_VENV)/bin/ruff format --check analysis/
+	@cd $(ANALYSIS) && .venv/bin/ruff format --check .
 	@echo "✓ L4 格式（ruff format）"
 
 pylint: ## L4 静态检查（ruff check；含 TB-14 的裸 except 禁令）
 	$(require_pyenv)
-	@$(PY_VENV)/bin/ruff check analysis/
+	@cd $(ANALYSIS) && .venv/bin/ruff check .
 	@echo "✓ L4 静态检查（ruff）"
 
 pytest: ## L4 单测（pytest）
 	$(require_pyenv)
-	@$(PY_VENV)/bin/pytest analysis/tests
+	@cd $(ANALYSIS) && .venv/bin/pytest
 	@echo "✓ L4 单测（pytest）"
 
-lint: fmt-check vet staticcheck errcheck pyfmt-check pylint archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
+lint: fmt-check vet staticcheck errcheck pyfmt-check pylint check-ignore archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
 
 # ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
 #
@@ -111,13 +150,13 @@ lint: fmt-check vet staticcheck errcheck pyfmt-check pylint archcheck trace leak
 # 只能从会话记录里考古 —— 有版本控制的话那只是一条 `git checkout` 的事。
 commit: ## 提交本轮改动（必须给 MSG="<一句话主题>"）
 	@if [ -z "$(MSG)" ]; then echo '用法：make commit MSG="<一句话主题>"'; echo "MSG 是必需的：提交信息要让半年后的人看懂这轮干了什么。"; exit 1; fi
-	@if [ -z "$$(git status --porcelain)" ]; then echo "没有可提交的改动（工作区已干净）。"; exit 1; fi
+	@if [ -z "`git status --porcelain`" ]; then echo "没有可提交的改动（工作区已干净）。"; exit 1; fi
 	git add -A
 	git commit -q -m "$(MSG)" -m "验证：make gate 通过（关键输出见 docs/log.md 对应条目）"
 	@echo "已提交：" && git --no-pager log --oneline -1
 
 clean-check: ## 校验工作区干净（收尾的最后一道闸：改动必须已提交）
-	@if [ -n "$$(git status --porcelain)" ]; then echo "工作区不干净 —— 这一轮的改动还没提交："; git status --short; echo '跑 make done MSG="…"（门禁 → 提交 → 校验）或 make commit MSG="…"。'; exit 1; fi
+	@if [ -n "`git status --porcelain`" ]; then echo "工作区不干净 —— 这一轮的改动还没提交："; git status --short; echo '跑 make done MSG="…"（门禁 → 提交 → 校验）或 make commit MSG="…"。'; exit 1; fi
 	@echo "工作区干净：本轮改动都已提交。"
 
 done: gate commit clean-check ## 一轮的收尾：门禁 → 提交 → 校验工作区干净
@@ -177,7 +216,7 @@ check: build fmt-check vet archcheck trace leakcheck ## 快速内循环检查（
 	@echo
 	@echo "快速检查通过。"
 
-tools: ## 预装门禁工具到 .bin/（离线环境先跑这个）
+tools: ## 预装门禁工具到 scripts/bin/（离线环境先跑这个）
 	@mkdir -p $(TOOLBIN)
 	GOBIN=$(TOOLBIN) $(GO) install $(STATICCHECK_PKG)
 	GOBIN=$(TOOLBIN) $(GO) install $(ERRCHECK_PKG)

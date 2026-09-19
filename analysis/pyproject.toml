@@ -1,0 +1,70 @@
+# L4 分析决策层（Python）—— 本层的工具链与配置**全部放在本目录内**，不占用仓库根。
+#
+# 为什么收在本目录：Python 是 L4 的能力与实现选择（docs/design/language.md §1、TB-2/TB-20），
+# 它的虚拟环境、依赖与门禁配置都属于这一层；放在根目录会让根被"某一层的私有工具"污染。
+#
+# 依赖锁定：requirements.txt（运行期）· requirements-dev.txt（门禁）。
+# 依据：TB-15（CI 必须含 Python 的 ruff 检查）· TB-14（禁止裸 except）。
+
+[build-system]
+# 让 analysis 成为**可编辑安装**的包：import 不依赖 cwd，资源随包分发（AR-24）。
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shen-analysis"
+version = "0.0.0"
+description = "Shen L4 分析决策层：意图识别 / 攻击链 / 策略生成 / LLM 契约纪律"
+requires-python = ">=3.13"
+
+[tool.setuptools]
+# 包根就是本目录：外部仍以 `analysis.*` 导入（`import analysis.worker`）。
+packages = [
+  "analysis",
+  "analysis.llm",
+  "analysis.intent",
+  "analysis.chain",
+  "analysis.strategy",
+  # 生成物（make pygen）：作为普通包，按 analysis.proto.telemetry.v1.* 导入
+  "analysis.proto",
+  "analysis.proto.telemetry",
+  "analysis.proto.telemetry.v1",
+]
+package-dir = { "analysis" = "." }
+
+[tool.setuptools.package-data]
+"analysis.llm" = ["resources/*.yaml", "resources/prompts/*.md"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+# 生成物（proto 桩）不守本仓库风格，与 Go 侧生成物同理。
+extend-exclude = [".venv", "proto"]
+
+[tool.ruff.lint]
+# TB-14：禁止裸 except（E722）
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RET", "ARG", "PTH", "C4", "RUF"]
+ignore = [
+  "RUF001", # 全角标点：中文注释与文案里是刻意的
+  "RUF002",
+  "RUF003",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.pyright]
+# 静态检查器（basedpyright/pyright）在本仓库的导入解析不可靠：绝对导入与包内相对导入都报
+# reportMissingImports，而运行时**两种 cwd 都导入成功**、pytest 全过（已可编辑安装为包）。
+# 权威判据是运行时：缺导入会在 pytest 里真炸。故此处只关掉这一条噪音规则，其余类型检查保留。
+include = ["."]
+extraPaths = ["."]
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+reportMissingImports = "none"

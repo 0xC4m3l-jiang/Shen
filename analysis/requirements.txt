@@ -1,0 +1,7 @@
+# L4 分析决策层的**运行期**依赖（锁定版本：便于复现与升级审查）
+#
+# grpcio / protobuf：worker 通过遥测面（api/telemetry/v1）读事件、上报结论 —— 这是本层唯一的 I/O。
+# PyYAML：黑名单资源（analysis/llm/resources/blacklist.yaml）随版本分发（AR-24）。
+grpcio==1.84.0
+protobuf==7.36.2
+pyyaml==6.0.3

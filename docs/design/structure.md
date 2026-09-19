@@ -19,15 +19,20 @@ Shen/
 ├── AGENTS.md                   # 强制规范（pi 自动加载）
 ├── Makefile                    # 开发入口：generate / build / test / vet / lint / run
 ├── go.mod  go.sum              # ★ Go 模块根（module 名 shen）—— 编辑器工作区根即仓库根
+├── vendor/                     # Go 依赖副本（入库）：构建与门禁**离线可用**，不依赖 Go 代理
+│                               #   （本机访问不了 proxy.golang.org；没有它连依赖都下不动）
 ├── .pi/                        # Agent 工作流（skills）
 ├── docs/                       # 设计、决策、背景材料
 ├── api/                        # ★ 契约单一事实源：.proto + 生成的 Go（无业务逻辑）
 ├── core/                       # 核心 —— 判定与响应生成的唯一实现（Go）
 ├── edge/                       # L1 数据平面 —— 四个接入形态的适配器 + L1 处置（Go / 配置）
 ├── deception/                  # L2+L3 执行平面 —— 蜜罐、假 shell、网络策略（Go / Rust / 声明式）
-├── analysis/                   # L4 分析平面 —— 意图 / 攻击链 / 策略 / LLM 组件（Python）
+├── analysis/                   # L4 分析平面 —— 意图 / 攻击链 / 策略 / LLM 契约 + 近线 worker（Python）
+│                               #   本层的工具链与配置**全部收在本目录**：pyproject.toml · requirements*.txt · .venv/
 ├── console/                    # 控制平面 —— 控制台（TypeScript）
-├── deploy/                     # 部署物料（helm / compose / config）
+├── deploy/                     # 部署物料
+│   ├── docker/                 #   Dockerfile × 3 · compose.yaml · README（一键起全套：make up）
+│   └── config/                 #   配置模板
 └── scripts/                    # 自检与运维工具（archcheck / gate / sentinel / doctor / check-leak）
 ```
 
@@ -35,6 +40,8 @@ Shen/
 > `core` = 核心 · `edge` = 数据平面 L1 · `deception` = 执行平面 L2+L3 · `analysis` = 分析平面 L4 · `console` = 控制平面。
 > 这样"代码在哪"与"架构图上的哪一块"是同一个答案。
 >
+> **顶层目录之外的形态约定**：`vendor/`（Go 依赖副本，入库以支持离线构建）与 `scripts/bin/`（门禁工具二进制，不入库）
+> 都不是源码平面，`make archcheck` 已把它们排除在「顶层目录白名单」之外。
 > **阶段未到的目录不预建**（`MD-21`）：顶层目录只在**进入其实施阶段**时才建。
 > 当前状态：`core/` `edge/` `deception/` `analysis/` `console/` **均已建**；`honeypot-shell` 与蜜罐协议栈内容按用户裁定**推迟**。
 

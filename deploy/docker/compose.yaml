@@ -1,0 +1,89 @@
+# Shen 一键启动栈（Docker Compose）
+#
+# 一条命令起全套：核心 + 反向代理前置（接入形态③）+ 观测控制台 + L4 近线分析 + 演示假业务站。
+#
+#   make up                 # 等价于下面这条（推荐）
+#   docker compose -f deploy/docker/compose.yaml up -d --build
+#
+# 启动后（都只绑本机回环，不把控制面暴露到网络）：
+#   http://127.0.0.1:19444/  观测控制台 —— 概览 / 告警 / 流量访问与流动 / L4 分析结论
+#   http://127.0.0.1:18080/  业务入口（经引擎；首次上线即影子模式：只观测、不处置，INT-11）
+#
+# 宿主端口可改（容器内端口固定）：本机 8080/9444 常被别的项目占用，所以默认避开它们。
+#   SHEN_HTTP_PORT=8080 SHEN_CONSOLE_PORT=9444 make up
+#
+# ⚠️ 为什么除 core 之外的服务都写 `network_mode: service:core`：
+#   核心的判定面是**明文 gRPC**，设计规则只允许它监听回环地址（`assertPlaintextListenIsLocal` 兜底；
+#   跨节点部署必须换 mTLS，见 docs/design/structure.md §4）。让其它容器**加入 core 的网络命名空间**，
+#   它们就与核心共享同一个回环 —— 「同机部署」这个前提在容器里依然成立，规则不必破。
+#   端口发布也因此写在 core 上：发布的是那个共享命名空间里的监听。
+#
+# 想换成你自己的业务：把 proxy 的 `SHEN_PROXY_UPSTREAM` 指向你的服务地址，并去掉 business 服务。
+name: shen
+
+services:
+  # ── 核心：判定与响应生成的唯一实现（AR-2）；拥有本栈的网络命名空间 ──────────────
+  core:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go.Dockerfile
+      args: {SERVICE: ./core/cmd/core}
+    environment:
+      SHEN_CONFIG: /etc/shen/config.yaml
+      SHEN_LISTEN: 127.0.0.1:9443
+    volumes:
+      # 用示例配置启动（只读挂载）。换成自己的配置：改这里，或另配 SHEN_CONFIG 的文件。
+      - ../config/config.example.yaml:/etc/shen/config.yaml:ro
+    ports:
+      # 宿主端口可配（默认避开常被占用的 8080 / 9444）；容器内仍是 8080 / 9444。
+      - "127.0.0.1:${SHEN_HTTP_PORT:-18080}:8080" # 业务入口（由 proxy 监听，见上）
+      - "127.0.0.1:${SHEN_CONSOLE_PORT:-19444}:9444" # 观测控制台（由 console 监听）
+    restart: unless-stopped
+
+  # ── L1 适配器：反向代理前置（形态③）。首次上线必须影子模式（INT-11）─────────────
+  proxy:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go.Dockerfile
+      args: {SERVICE: ./edge/proxy/cmd/proxy}
+    network_mode: service:core
+    depends_on: [core]
+    environment:
+      # 指向演示假业务站；换成自己的业务地址即可（不改业务代码，INT-7）
+      SHEN_PROXY_UPSTREAM: http://127.0.0.1:19080
+      SHEN_CORE_ADDR: 127.0.0.1:9443
+      SHEN_PROXY_LISTEN: 0.0.0.0:8080
+      SHEN_PROXY_SHADOW: "true"
+    restart: unless-stopped
+
+  # ── 控制台：只读观测（不参与请求级判定，AR-10）────────────────────────────────
+  console:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go.Dockerfile
+      args: {SERVICE: ./console/cmd/console}
+    network_mode: service:core
+    depends_on: [core]
+    environment:
+      SHEN_CORE_ADDR: 127.0.0.1:9443
+      SHEN_CONSOLE_LISTEN: 0.0.0.0:9444
+    restart: unless-stopped
+
+  # ── L4 分析：近线 worker（读遥测 → 结论上报；不在业务路径上，挂了不影响业务 NI-1）──
+  analysis:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/analysis.Dockerfile
+    network_mode: service:core
+    depends_on: [core]
+    command: ["--core", "127.0.0.1:9443", "--interval", "20"]
+    restart: unless-stopped
+
+  # ── 演示用假业务站（不是产品的一部分；真实部署请指向你自己的服务）──────────────
+  business:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/business.Dockerfile
+    network_mode: service:core
+    depends_on: [core]
+    restart: unless-stopped

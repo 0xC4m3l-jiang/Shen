@@ -1,5 +1,0 @@
-# L4 分析决策层的开发与门禁依赖（**锁定版本**：便于复现与升级审查）
-# 依据：docs/design/language.md TB-15（CI 必须含 Python 的 ruff 检查）
-# 安装：make pyenv（在仓库内 .venv）
-ruff==0.16.8
-pytest==9.1.1

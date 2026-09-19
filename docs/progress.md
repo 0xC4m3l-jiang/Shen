@@ -11,6 +11,7 @@
 | 文档规则 | `MD-2`（一模块一文件）· `MD-17`（实现前必须创建）· `MD-18`（新增模块须先改清单） |
 | 模块文档模板 | [`modules/_template.md`](modules/_template.md) |
 | 阶段图例 | `1` = MVP（只观察）· `2a` = 接管与引流打通 · `2b` = 处置内容 · `3` = 高交互与智能 |
+| 起环境 | `make up`（Docker 全套：核心 + 代理 + 控制台 + L4 + 演示业务站）· `make dev`（本地一键验证） |
 
 > **本清单共 24 行**（第 12 行已合并 ⇒ **23 个有效模块**）。
 > 阶段 2b 起新增 `decoy`（诱饵面，[ADR-0010](background/decisions/0010-functional-camouflage.md)）与

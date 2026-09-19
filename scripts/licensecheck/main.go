@@ -236,16 +236,33 @@ func selfModulePath() (string, error) {
 }
 
 // moduleDir 取模块在本地缓存里的目录。未下载时返回错误 —— 不静默当成「无许可文件」。
+// moduleDir 返回模块在**本地**的目录。
+//
+// 优先 `vendor/`：仓库带 vendor 时，被编译的就是那份副本，许可证文件也在里面；
+// 而且这让许可审计**不再依赖 Go 模块缓存**（离线也能跑 —— 本机访问不了 proxy.golang.org，
+// 没有 vendor 时连依赖都下不动）。vendor 里没有才回退到模块缓存。
 func moduleDir(path string) (string, error) {
+	if dir, ok := vendorDir(path); ok {
+		return dir, nil
+	}
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", path).Output()
 	if err != nil {
 		return "", err
 	}
 	dir := strings.TrimSpace(string(out))
 	if dir == "" {
-		return "", errors.New("模块未下载到本地缓存")
+		return "", errors.New("模块未下载到本地缓存，且仓库里没有 vendor/ 副本")
 	}
 	return dir, nil
+}
+
+// vendorDir 判断 vendor/<模块路径> 是否为目录（Go 的 vendor 布局与模块路径一一对应）。
+func vendorDir(path string) (string, bool) {
+	dir := filepath.Join("vendor", filepath.FromSlash(path))
+	if info, err := os.Stat(dir); err == nil && info.IsDir() {
+		return dir, true
+	}
+	return "", false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

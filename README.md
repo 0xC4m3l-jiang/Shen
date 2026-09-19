@@ -36,7 +36,7 @@
 └───────────────┬──────────────────────────────────────────────┘
                 │
                 ▼
-   L2 协议仿真蜜罐 · L3 网络欺骗 · L4 LLM 意图分析（阶段 3，未实现）
+   L2 蜜罐框架（接入架构）· L3 网络欺骗（声明式）· L4 意图 / 攻击链 / 策略（Python，已接近线 worker）
 ```
 
 **三条不可妥协**（细节见 [`docs/design/`](docs/design/README.md)）：
@@ -63,33 +63,59 @@
 > 仍未接通的是**诱饵资产与预生成响应正文**：要先在核心侧定下它们「谁产出、存在哪」。
 > 详见 [ADR-0018](docs/background/decisions/0018-policy-plane-pull-model.md) 与 [`docs/spec/policy-payload.md`](docs/spec/policy-payload.md)。
 
-规模：**23 个有效模块**（[`docs/design/modules.md`](docs/design/modules.md) §1.1）· 已实现 15 个包 · **203 个测试函数** · 规则 **153 条**。
+规模：**23 个有效模块**（[`docs/design/modules.md`](docs/design/modules.md) §1.1）· 已实现 **18 个 Go 包 + 4 个 Python 模块** · **266 个测试函数**（Go 229 + Python 37）· 规则 **153 条**。
 
 ---
 
-## 3. 快速上手（5 分钟）
+## 3. 快速上手
 
-前置：**Go 1.26+**（`go version`）。仓库无外部服务依赖 —— 存储用内存实现。
+### 3.1 一键起全套（推荐 —— 本机只需要 Docker）
 
 ```sh
-# ① 快速内循环检查：构建 + 格式化 + vet + 架构 + 追溯 + 泄漏（不需要下载工具）
+make up          # 构建镜像并起：核心 + 反向代理前置 + 观测控制台 + L4 近线分析 + 演示业务站
+```
+
+启动后：
+
+| 地址 | 是什么 |
+| --- | --- |
+| http://127.0.0.1:19444/ | **观测控制台** —— 概览 · 告警 · 流量访问与流动 · L4 分析结论 |
+| http://127.0.0.1:18080/ | **业务入口**（经引擎；默认影子模式：只观测、不处置，`INT-11`） |
+
+```sh
+curl -s -A "HeadlessChrome/120" http://127.0.0.1:18080/.git/config   # 探针：控制台应显示高分与命中信号
+curl -s -A "Mozilla/5.0"        http://127.0.0.1:18080/               # 正常浏览器：应为低分
+```
+
+其它命令：`make docker-ps`（状态）· `make docker-log S=core`（日志尾部 50 行，不跟随）· `make down`（停掉）。
+宿主端口被占用时：`SHEN_HTTP_PORT=8080 SHEN_CONSOLE_PORT=9444 make up`。
+细节与「为什么容器共享网络命名空间」见 [`deploy/docker/README.md`](deploy/docker/README.md)。
+
+### 3.2 本地开发（Go / Python 直接跑）
+
+前置：**Go 1.26+**；开发 L4 与跑门禁另需 **Python 3.13+**（环境建在 `analysis/.venv`，见下）。无外部服务依赖 —— 存储用内存实现。
+
+```sh
+# ① 快速内循环检查：构建 + 格式化 + vet + 架构 + 追溯 + 泄漏
 make check
 
-# ② 一轮的验收命令：上面的全部 + staticcheck/errcheck + 许可审计 + 全部单测（含 -race）
-make tools      # 首次：把门禁工具装到 .bin/（离线可重复）
+# ② 一轮的验收命令：上面的全部 + staticcheck/errcheck + Python 门禁 + 许可审计 + 全部单测（含 -race）
+make tools      # 首次：把门禁工具装到 scripts/bin/（离线可重复）
+make pyenv      # 首次：建 analysis/.venv 并装锁定依赖
 make gate
 
-# ③ 一键开发验证：配置干跑 → 起核心 → 在线冒烟 → 规则回放 → 关核心
+# ③ 一键开发验证：配置干跑 → 起核心 → 在线冒烟 → 规则回放 → L4 近线分析
 make dev
 ```
 
-看全部命令：`make help`。
+看全部命令：`make help`。依赖已 **vendor 入库**（`vendor/`），Go 侧构建与门禁**不需要网络**。
 
 **跑起核心**（默认影子模式：只算判定、不处置，`INT-11` 要求首次上线必须如此）：
 
 ```sh
 make run                                        # 监听 127.0.0.1:9443
 make smoke                                      # 另开一个终端：对判定面发三个样本
+SHEN_CORE_ADDR=127.0.0.1:9443 make analysis      # 跑一轮 L4（结论进控制台「分析结论」块）
 SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 \
   go run ./edge/proxy/cmd/proxy                 # 起反向代理前置（③），业务地址指向真实服务
 ```
@@ -157,15 +183,22 @@ code=200 http=2
 
 ```text
 api/          契约的唯一事实源（.proto；客户端必须生成，禁止手写）
+vendor/       Go 依赖副本（入库 ⇒ 构建与门禁离线可用，不需要 Go 代理）
 core/         核心：判定 · 决策 · 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
                └ internal/<模块>/  一模块一目录（iface.go + 实现 + 单测）
                └ cmd/core/         核心进程入口
 edge/         L1 边缘：proxy（③前置 + ④边车，内嵌 Caddy）· mirror（①旁路镜像）· dns（②纯配置）· injection（处置）
 deception/    L2/L3：协议仿真蜜罐 · 蜜网（阶段 3）
-analysis/     L4：意图 · 攻击链 · 策略生成 · LLM 组件（阶段 3）
-console/      控制台（阶段 2b 之后）
-scripts/      门禁工具：archcheck · tracecheck · check-leak · licensecheck · gate · devcheck · doctor(待建) · sentinel(待建)
-deploy/       部署与配置模板
+analysis/     L4（Python）：意图 · 攻击链 · 策略生成 · LLM 契约纪律 · 近线 worker
+               └ pyproject.toml / requirements*.txt / .venv   ← 本层的工具链与配置全部收在本目录
+               └ proto/                由 make pygen 生成的 gRPC 桩
+               └ tools/genproto.py     生成脚本（让生成物成为 analysis.proto.* 普通包）
+console/      控制台：只读观测（Web UI + 4 个接口；语言偏离见 ADR-0020）
+scripts/      门禁与运维工具：archcheck · tracecheck · check-leak · licensecheck · devcheck · demo/（本地演示环境）
+               └ bin/                 门禁工具二进制缓存（不入库）
+deploy/       部署物料
+               └ docker/              Dockerfile × 3 · compose.yaml · README（一键起全套）
+               └ config/              配置模板（config.example.yaml）
 docs/         全部文档（入口见下）
 ```
 

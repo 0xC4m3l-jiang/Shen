@@ -9,6 +9,40 @@
 
 ---
 
+## 2026-09-19 · Docker 一键起全套 + 目录工整化（Python 环境归层、依赖离线化）
+
+**做了什么**：用户提出三点要求 —— ① Python 相关配置**不要放仓库根**；② 整个项目要能**在 Docker 里一条命令启动**、对本地依赖最少；③ 文档要准确客观、目录要工整、少一些 `.` 开头的隐藏文件。逐条落地：
+① **Python 工具链归层**：`pyproject.toml` · `requirements*.txt` · `.venv` · proto 桩 · 生成脚本**全部收进 `analysis/`**（Python 是 L4 的实现选择，不该占用仓库根）；根目录只剩 `AGENTS.md` `Makefile` `README.md` `go.mod` `go.sum` 与源码平面，隐藏条目从 8 个减到 3 个（`.git` `.gitignore` `.pi`）。合并掉 `pyrightconfig.json`（并入 `analysis/pyproject.toml`），删掉 `.vscode/`，门禁工具二进制从 `.bin/` 挪到 `scripts/bin/`。
+② **Docker 一键起**（`make up`）：三个镜像定义（Go 三入口共用一个 `go.Dockerfile`、L4 的 `analysis.Dockerfile`、演示业务站）+ `deploy/docker/compose.yaml`：核心 + 反向代理前置 + 观测控制台 + L4 近线分析 + 演示业务站。**关键设计**：除核心外都 `network_mode: service:core` —— 核心判定面是明文 gRPC 且规则只允许回环（`assertPlaintextListenIsLocal`），共享核心的网络命名空间后「同机」前提在容器里依然成立，规则不必放宽；宿主端口可配（默认 18080 / 19444，避开常被占用的 8080/9444）。
+③ **依赖离线化**：本机**访问不了 `proxy.golang.org`**（HTTP 000），容器里 `go mod download` 会永远卡住 —— 这正是此前"构建一直不完成"的真因。改为 **vendor 入库**（63MB / 5661 文件）并删掉该步骤；`licensecheck` 相应改为**优先从 `vendor/` 读许可证**（审计离线可用，且审的是真正参与构建的副本）。
+④ **修掉四个真缺陷**：`grpcio` 只装在 venv、**没进锁文件**（换机器必崩）；生成桩的顶层名 `telemetry` 与本层 `analysis/telemetry.py` **撞名**（容器内启动即崩）；新版 protobuf 的生成物**需先导入 well-known types**（`AddSerializedFile` 报错）；Dockerfile 的 `go mod download` 在无代理网络下卡死。
+⑤ **忽略清单**：删掉空转的 /core/core、补齐二进制兜底条目并写明「不影响源码」；顶部过期的「本仓库还不是 git 仓库」改准。新增门禁自检 `make check-ignore`（已入库文件不得被忽略规则命中）—— 注意**必须用 `--no-index`**：默认行为下 git 认为已入库文件不受忽略影响，检查会永远通过（我第一版就是**假的防线**，被反向测试抓到并修正）。
+⑥ **文档**：`README.md`（一键 Docker 优先 + 目录结构 + 规模数字）· `docs/integrate/quickstart.md` · `docs/design/structure.md` §1.1（`vendor/` 与各层配置位置）· `docs/kb/dev-workflow.md`（环境放哪 + Docker 命令）· `docs/progress.md` · `deploy/docker/README.md`。
+
+**改了哪些文件**：`analysis/pyproject.toml` · `analysis/requirements.txt` · `analysis/requirements-dev.txt` · `analysis/tools/genproto.py` · `analysis/telemetry.py` · `analysis/proto/`（重新生成为普通包） ·
+`deploy/docker/go.Dockerfile` · `deploy/docker/analysis.Dockerfile` · `deploy/docker/business.Dockerfile` · `deploy/docker/compose.yaml` · `deploy/docker/README.md` · `.dockerignore` · `vendor/` ·
+`scripts/licensecheck/main.go` · `scripts/archcheck/main.go` · `Makefile` · `.gitignore` ·
+`README.md` · `docs/integrate/quickstart.md` · `docs/design/structure.md` · `docs/kb/dev-workflow.md` · `docs/progress.md`
+
+**对应文档**：[`docs/plans/2026-09-19-docker-and-repo-layout.md`](docs/plans/2026-09-19-docker-and-repo-layout.md)（含追溯矩阵与审视 11 条）· [`deploy/docker/README.md`](deploy/docker/README.md)
+
+**验证**：`make gate` 通过；**容器内端到端**实测（5 容器 · 真流量 · 控制台可见分值/信号 · L4 结论落入控制台）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 镜像构建 | 5 个全成、0 报错 | ✅ core 29.8MB · proxy 83.9MB · console 31.1MB · analysis 250MB · business 203MB |
+| 起全套 | 5 容器 Up | ✅ `make docker-ps` |
+| 经引擎访问 | 业务 200（影子模式） | ✅ 三条流量全 200 |
+| L4 在容器内 | 结论进控制台 | ✅ /api/analysis 2 条；概览 `l4_conclusions: 2`；再跑一轮 `新 0 / 重复 2`（`AR-11` 幂等） |
+| 忽略清单自检 | 正反两向 | ✅ 当前通过；故意加 `/core/cmd/core` 时精确报出 3 个文件并退出非 0 |
+| 门禁 | 全绿 | ✅ `make gate` |
+
+**没做 / 遗留**：① 跨节点部署仍需 mTLS（设计约束，未实现）；② 控制台无鉴权（`ADR-0020`）；③ `analysis` 镜像 250MB 可再瘦；
+④ vendor 让仓库变大（若代理可达可去掉）；⑤ 按用户要求**已停掉本机 cairn 项目的容器**（stop，未删除）以释放 8080。
+
+---
+
 ## 2026-09-19 · 修复：L4 证据缓存命名空间错位（`make dev` 第 6 步抓到）+ archcheck 放过构建产物
 
 **做了什么**：给 `make dev` 加了第 6 步「跑一轮 L4」之后，它**立刻红了**，并抓到一个上一轮没暴露的**真 bug**——

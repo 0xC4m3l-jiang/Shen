@@ -56,23 +56,19 @@ class TelemetryPort(Protocol):
         ...
 
 
+def _load_well_known_types() -> None:
+    """先把 **well-known types** 导入进来，再导入生成的桩。
+
+    新版 protobuf 的生成物是在运行期解析依赖的：`telemetry.proto` 里
+    `import "google/protobuf/timestamp.proto"`；若不先把这个模块导进来，`AddSerializedFile` 会报
+    `Depends on file 'google/protobuf/timestamp.proto', but it has not been loaded`
+    （容器里就真踩到了：宿主机的环境恰好先加载过，属于撞巧）。
+    """
+    import google.protobuf.timestamp_pb2  # noqa: F401  —— 导入即注册，必须早于生成物
+
+
 class TelemetryUnavailable(RuntimeError):
     """遥测面不可达 —— L4 **降级为不分析**（近线，不在业务路径上，`NI-1`）。"""
-
-
-def ensure_proto_path() -> None:
-    """把生成的 gRPC 桩目录放进 `sys.path`。
-
-    生成物（`analysis/proto`）内部的导入是**绝对**的（`from telemetry.v1 import telemetry_pb2`），
-    所以桩目录必须在搜索路径上。放在这里而不是依赖 `PYTHONPATH`，是为了 `make analysis`
-    与 `python -m analysis.worker` 两种调用方式都成立。
-    """
-    import pathlib
-    import sys
-
-    proto_dir = str(pathlib.Path(__file__).with_name("proto"))
-    if proto_dir not in sys.path:
-        sys.path.insert(0, proto_dir)
 
 
 class GrpcTelemetryClient:
@@ -83,8 +79,8 @@ class GrpcTelemetryClient:
             import grpc
         except ModuleNotFoundError as exc:  # 显式失败，不静默降级（AR-15）
             raise TelemetryUnavailable(f"缺少 grpc（跑 make pyenv 安装锁定依赖）：{exc}") from exc
-        ensure_proto_path()
-        from telemetry.v1 import telemetry_pb2_grpc  # type: ignore[import-not-found]
+        _load_well_known_types()
+        from analysis.proto.telemetry.v1 import telemetry_pb2_grpc
 
         self._grpc = grpc
         self._target = target
@@ -96,7 +92,7 @@ class GrpcTelemetryClient:
     def list_events(
         self, *, limit: int = 200, since: str | None = None, event_type: str = ""
     ) -> Sequence[WireEvent]:
-        from telemetry.v1 import telemetry_pb2  # type: ignore[import-not-found]
+        from analysis.proto.telemetry.v1 import telemetry_pb2
 
         request = telemetry_pb2.ListEventsRequest(limit=limit, event_type=event_type)
         if since:
@@ -127,7 +123,7 @@ def _from_proto(item: Any) -> WireEvent:
 
 
 def _to_proto(event: WireEvent) -> Any:
-    from telemetry.v1 import telemetry_pb2  # type: ignore[import-not-found]
+    from analysis.proto.telemetry.v1 import telemetry_pb2
 
     item = telemetry_pb2.TelemetryEvent(
         event_id=event.event_id,

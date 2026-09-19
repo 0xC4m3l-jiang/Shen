@@ -1,0 +1,17 @@
+# 构建上下文瘦身（compose 的 context 是仓库根）。
+#
+# 为什么放仓库根：Docker 只在**上下文根目录**读 .dockerignore，放在别处不生效。
+# 排除的是「构建不需要的东西」：版本库、文档、Python 虚拟环境与缓存、工具二进制。
+
+.git
+.pi
+docs
+AGENTS.md
+scripts/bin
+**/.venv
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+coverage.out
+*.test
