@@ -6,7 +6,7 @@
 | 所属层 | `L2`（依据 MD-1） |
 | 实现语言 | `Go` / `Rust`（依据 [`../design/language.md`](../design/language.md) §1） |
 | 负责人 | — |
-| 状态 | 设计（阶段 3）—— **可选自研**（[ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md)） |
+| 状态 | ⏸ **推迟（2026-09-19，用户裁定）**：先交付**蜜罐接入架构**（入口 · 后端池 · 协议契约 · 生命周期），命令表 / 内存文件系统 / 会话水印等**内容层**待专项调研后再设计。依据 [ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md)（可选自研，默认接第三方） |
 | 最后更新 | 2026-09-18 |
 
 ---

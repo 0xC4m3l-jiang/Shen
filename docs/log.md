@@ -9,6 +9,41 @@
 
 ---
 
+## 2026-09-19 · 转发/欺骗路径硬化：修掉对外可见面的代理栈指纹（`OH-2`）+ 蜜罐范围裁定
+
+**做了什么**：① 按用户裁定把**蜜罐范围收窄为「接入架构」**（入口 · 后端池 · 协议契约 · 生命周期），
+命令表 / 内存文件系统 / 会话水印 / 真实协议栈等内容层**推迟到专项调研**（同步了模块文档状态、进度表与根 README）。
+② 按同一句话的要求**实测式复查前置的流量转发**（不看代码猜，直接起真进程看客户端收到什么），查出并修掉两处 **`OH-2` 违规**：
+`Via: 1.1 Caddy` 会被透给对手、上游不可达的 502 带 `Server: Caddy`。
+修法分两处（缺一不可）：中间件里新增 `headerSanitizer`（**一律**删 `Via`；`Server` **仅当**等于 Caddy 默认值时删，
+上游给的值原样保留），并在 `BuildConfig` 的 `errors` 路由里删头 —— 因为实测证明**错误响应由 Caddy 服务器层写出、不经过中间件**；
+请求侧也删 `Via`，免得幻境后端回显请求头时把我们的栈指纹带上屏。
+③ 顺带查清一个坑并记录：`caddyhttp.ServerHeader` 是**包级变量且在 init 时已拷贝**，运行时改它无效（避免后人重复尝试）。
+④ 新增 4 个测试（5 子例的清洗器语义 + 错误路径端到端 + 转发语义补 `Via` 断言）。
+
+**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/embed.go` · `edge/proxy/proxy_test.go` · `edge/proxy/embed_test.go` ·
+`docs/modules/adapter-proxy.md` · `docs/modules/honeypot-shell.md` · `docs/progress.md` · `README.md`
+
+**对应文档**：[`docs/plans/2026-09-19-forwarding-deception-hardening.md`](docs/plans/2026-09-19-forwarding-deception-hardening.md)（含追溯矩阵与审视 5 条）
+
+**验证**：`make gate` 通过（含 `make trace` / `make leakcheck` / `make archcheck` / 单测 `-race`）；真进程实测三种情形。
+
+**证据**：
+| 场景 | 修复前（实测） | 修复后（实测） |
+| --- | --- | --- |
+| 正常转发（上游带 `Server`） | 有 `Via: 1.1 Caddy` | ✅ 无 `Via`；上游 `Server` 原样透传 |
+| 上游不带 `Server` | `Via` + `Server: Caddy` | ✅ 无 `Via`、无 `Server: Caddy` |
+| 上游不可达（502） | `Via` + `Server: Caddy` | ✅ 502 · 无 `Server` · 无 `Via` |
+| 业务响应其他头与状态码 | —— | ✅ 一个字不改（`TestHeaderSanitizerKeepsOtherHeaders`） |
+| 清洗器语义（5 子例） | —— | ✅ `TestHeaderSanitizer*` |
+| 错误路径端到端 | —— | ✅ `TestNoProxyFingerprintOnErrorPath` |
+
+**没做 / 遗留**：① **蜜罐内容层推迟**（按你的裁定）；② HTTP/3 与 WebSocket 未实测（清洗器透传 `Hijack`/`Flush`，但没跑过）；
+③ `Alt-Svc`（h3 广播）保持默认 —— 真实站点启用 h3 时也有，暂判正常；④ 流式（SSE/分块）与大文件传输未在本轮复测；
+⑤ 上游发多行 `Server` 时原样透传（未去重）。
+
+---
+
 ## 2026-09-19 · L2 第一批：`honeypot-protocol` 框架落地
 
 **做了什么**：实现 `deception/` 下的第一个模块（此前只有设计文档），交付**契约 + 确定性框架**，

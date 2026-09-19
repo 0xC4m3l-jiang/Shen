@@ -274,17 +274,24 @@ func (h *Handler) DroppedEvents() uint64 { return h.dropped.Load() }
 // 流程：① 白名单先于引流判定（INT-25）→ ② 派生 decision_id 并查本地缓存
 // → ③ 未命中则调核心判定（失败折叠成放行）→ ④ 异步上报 → 按结果路由。
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	// ⓪ 对外可见面卫生（OH-2 适用位置表）：
+	//    · Caddy 在**服务器层无条件**写 `Server: Caddy`，reverse_proxy 还会加 `Via: x.y Caddy`；
+	//    · 两者都会出现在**对手的屏幕上** —— 按 OH-2 的判据（会不会出现在攻击者的屏幕上）必须清掉。
+	//    · `Server` 的规则是「与上游一致或直接透传」：上游给了就保留（下面按值判断），我们的默认值删掉。
+	sw := &headerSanitizer{ResponseWriter: w}
+	r.Header.Del("Via") // 也不让上游 / 幻境后端看到我们的栈指纹
+
 	// ① 白名单先于改道判定（INT-25）—— 命中则不调核心，直接透传。
 	// 本地白名单（env）与远端白名单（策略面）取**并集**：护栏只增不减（见 applyEdgePolicy）。
 	ip := clientIP(r, h.TrustXFF)
 	if whitelisted(ip, h.whitelist) || h.remoteWhitelisted(ip) {
-		return h.forward(w, r, next, targetOrigin)
+		return h.forward(sw, r, next, targetOrigin)
 	}
 
 	// ② 派生 decision_id（ST-10）并查本地判定缓存（AR-6 第 2 件事）。
 	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
 	if act, backend, ok := h.cache.get(id); ok {
-		return h.dispatch(w, r, next, act, backend)
+		return h.dispatch(sw, r, next, act, backend)
 	}
 
 	// ③ 调核心判定。任何失败都已折叠成「放行」（NI-3 / NI-4 / NI-5）。
@@ -294,7 +301,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// ④ 异步上报（AR-6 第 4 件事）—— 不阻塞请求。
 	h.enqueueEvent(r, id, act, err)
 
-	return h.dispatch(w, r, next, act, backend)
+	return h.dispatch(sw, r, next, act, backend)
 }
 
 // dispatch 按决策结果选择路径。
@@ -589,6 +596,63 @@ func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 // ── trackingWriter ──────────────────────────────────────────────────────────
+
+// caddyDefaultServerHeader 是 Caddy 在服务器层给我们加上的 `Server` 值。
+//
+// 它必须被清掉：规则要求 `Server` 头**与上游一致或直接透传**（`OH-2` 适用位置表）。
+// 上游自己带了 `Server`（例如 nginx）时我们**原样保留** —— 那才是「与上游一致」。
+const caddyDefaultServerHeader = "Caddy"
+
+// headerSanitizer 在响应写出前清掉会暴露我们代理栈的头。
+//
+// 它只做两件最小的事，避免误伤业务响应（`INT-8`：业务侧响应不得改写）：
+//  1. 删 `Via` —— 那是**我们这一跳**的产物，任何情况下都不该让对手看到；
+//  2. 只在 `Server` 恰好等于 Caddy 默认值时删它 —— 上游的值一律保留。
+type headerSanitizer struct {
+	http.ResponseWriter
+	done bool
+}
+
+func (s *headerSanitizer) WriteHeader(code int) {
+	s.sanitize()
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *headerSanitizer) Write(b []byte) (int, error) {
+	s.sanitize()
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *headerSanitizer) sanitize() {
+	if s.done {
+		return
+	}
+	s.done = true
+	h := s.ResponseWriter.Header()
+	h.Del("Via")
+	if strings.EqualFold(strings.TrimSpace(h.Get("Server")), caddyDefaultServerHeader) {
+		h.Del("Server")
+	}
+}
+
+// Unwrap 让 Caddy 仍能找到被包住的 ResponseWriter（保留其可选接口）。
+func (s *headerSanitizer) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Flush 透传：流式响应（SSE / 分块）不能被这层包装破坏。
+func (s *headerSanitizer) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack 透传：协议升级（WebSocket / 101）必须仍然可用。
+func (s *headerSanitizer) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("proxy: 底层 ResponseWriter 不支持 Hijack")
+	}
+	return hj.Hijack()
+}
 
 // trackingWriter 记录「是否已经向客户端写出过字节」。
 //

@@ -635,3 +635,75 @@ func TestTrackingWriterIsHijackable(t *testing.T) {
 		t.Fatal("trackingWriter 必须实现 Unwrap（让 Caddy 找到底层 writer 的可选接口）")
 	}
 }
+
+// ── ⑮ 对外可见面卫生（OH-2）：不得暴露代理栈指纹 ────────────────────────────
+
+func TestHeaderSanitizerStripsProxyFingerprints(t *testing.T) {
+	cases := []struct {
+		name       string
+		server     string
+		wantServer string
+	}{
+		{"Caddy 的默认值必须删掉", caddyDefaultServerHeader, ""},
+		{"上游自己的 Server 必须原样保留", "nginx/1.24.0", "nginx/1.24.0"},
+		{"大小写不敏感", "caddy", ""},
+		{"带空白的也要认出来", " Caddy ", ""},
+		{"上游值恰好像我们的默认值也照删（那本来就是我们的）", "Caddy", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			rec.Header().Set("Server", tc.server)
+			rec.Header().Set("Via", "1.1 Caddy") // reverse_proxy 会加这个
+
+			s := &headerSanitizer{ResponseWriter: rec}
+			s.WriteHeader(http.StatusOK)
+
+			if got := rec.Header().Get("Server"); got != tc.wantServer {
+				t.Errorf("Server 头：期望 %q，实际 %q", tc.wantServer, got)
+			}
+			if got := rec.Header().Get("Via"); got != "" {
+				t.Errorf("Via 是我们这一跳的产物，必须删掉，实际 %q", got)
+			}
+		})
+	}
+}
+
+// TestHeaderSanitizerAlsoCleansOnWrite：有些处理器不显式 WriteHeader，只 Write。
+func TestHeaderSanitizerAlsoCleansOnWrite(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Server", caddyDefaultServerHeader)
+	rec.Header().Set("Via", "1.1 Caddy")
+
+	s := &headerSanitizer{ResponseWriter: rec}
+	if _, err := s.Write([]byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.Header().Get("Server"); got != "" {
+		t.Errorf("Write 路径也必须清洗 Server，实际 %q", got)
+	}
+	if got := rec.Header().Get("Via"); got != "" {
+		t.Errorf("Write 路径也必须清洗 Via，实际 %q", got)
+	}
+}
+
+// TestHeaderSanitizerKeepsOtherHeaders：只动这两个头，别的（含业务自定义头）一律不动。
+func TestHeaderSanitizerKeepsOtherHeaders(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "text/html")
+	rec.Header().Set("X-Origin-Marker", "yes")
+	rec.Header().Set("Server", "nginx")
+
+	s := &headerSanitizer{ResponseWriter: rec}
+	s.WriteHeader(http.StatusCreated)
+
+	if got := rec.Header().Get("Content-Type"); got != "text/html" {
+		t.Errorf("业务响应头不得被改写（INT-8）：Content-Type=%q", got)
+	}
+	if got := rec.Header().Get("X-Origin-Marker"); got != "yes" {
+		t.Errorf("业务自定义头必须保留：%q", got)
+	}
+	if rec.Code != http.StatusCreated {
+		t.Errorf("状态码不得被改写：%d", rec.Code)
+	}
+}

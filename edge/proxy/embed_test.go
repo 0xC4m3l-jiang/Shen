@@ -356,6 +356,9 @@ func TestForwardingSemanticsWithTLS(t *testing.T) {
 	if string(respBody) != "ORIGIN-PAYLOAD" {
 		t.Errorf("业务侧响应体**禁止**改写（INT-8），实际 %q", respBody)
 	}
+	if v := resp.Header.Get("Via"); v != "" {
+		t.Errorf("正常转发也不得暴露 Via（那是我们这一跳的指纹），实际 %q", v)
+	}
 }
 
 // TestTLSConfigValidate 覆盖 SHEN_PROXY_TLS_MODE 的三种取值与非法值
@@ -396,5 +399,50 @@ func TestBuildConfigRejectsBadOptions(t *testing.T) {
 	}
 	if _, err := BuildConfig(Options{Listen: ":8081", Handler: &Handler{}, TLS: TLSConfig{Mode: TLSModeManual}}); err == nil {
 		t.Error("manual 缺证书应当报错")
+	}
+}
+
+// TestNoProxyFingerprintOnErrorPath：上游不可达时的错误响应**不得**暴露我们的代理栈。
+//
+// 这条走的是 Caddy 的**错误路径**（不经过我们的中间件），因此清洗点在 BuildConfig 的
+// `errors` 路由里 —— 与中间件里的 headerSanitizer 是两处，必须分别验证（OH-2）。
+func TestNoProxyFingerprintOnErrorPath(t *testing.T) {
+	deadPort := freePort(t) // 这个端口上没有服务
+	h := &Handler{
+		Upstream:        "http://127.0.0.1:" + deadPort,
+		DecisionTimeout: caddy.Duration(3 * time.Millisecond),
+		CacheTTL:        caddy.Duration(time.Minute),
+		Window:          caddy.Duration(time.Minute),
+		ReportQueue:     8,
+		CoreAddr:        "127.0.0.1:" + deadPort, // 核心同样不可达 → 走 fail-open 到业务
+	}
+	port := freePort(t)
+	cfg, err := BuildConfig(Options{
+		Listen:  "127.0.0.1:" + port,
+		Handler: h,
+		TLS:     TLSConfig{Mode: TLSModeOff},
+	})
+	if err != nil {
+		t.Fatalf("BuildConfig 失败：%v", err)
+	}
+	if err := caddy.Run(cfg); err != nil {
+		t.Fatalf("caddy.Run 失败：%v", err)
+	}
+	t.Cleanup(func() { _ = caddy.Stop() })
+
+	resp, err := http.Get("http://127.0.0.1:" + port + "/")
+	if err != nil {
+		t.Fatalf("请求失败：%v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("上游不可达应返回 502，实际 %d", resp.StatusCode)
+	}
+	if v := resp.Header.Get("Server"); v != "" {
+		t.Errorf("错误路径不得暴露 Server 头（OH-2），实际 %q", v)
+	}
+	if v := resp.Header.Get("Via"); v != "" {
+		t.Errorf("错误路径不得暴露 Via 头（OH-2），实际 %q", v)
 	}
 }

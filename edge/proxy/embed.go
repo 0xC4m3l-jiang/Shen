@@ -102,6 +102,18 @@ func BuildConfig(opts Options) (*caddy.Config, error) {
 		}},
 	}
 
+	// 错误路径的可见面卫生（OH-2）：Caddy 在**服务器层**无条件写 `Server: Caddy`，
+	// 而错误响应（上游不可达的 502 等）**不经过**我们的中间件 —— 只能在这里删。
+	// 正常响应的清洗在我们的中间件里做（见 handler.go 的 headerSanitizer），
+	// 那里能按「上游是否给了 Server」精确判断，这里只能一律删。
+	server.Errors = &caddyhttp.HTTPErrorConfig{
+		Routes: caddyhttp.RouteList{{
+			HandlersRaw: []json.RawMessage{
+				json.RawMessage(`{"handler":"headers","response":{"delete":["Server","Via"]}}`),
+			},
+		}},
+	}
+
 	// TLS 监听策略必须在序列化 http app **之前**就绪（否则 useTLS 判为 false，仍回明文）。
 	// 同时禁掉 auto-HTTPS 的跳转：本代理用自定义端口（非 80/443），
 	// 80/443 的跳转由客户自己的 L0 负责，Caddy 不得擅自去绑 80 端口。
