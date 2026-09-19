@@ -132,7 +132,8 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | [`integrate/`](integrate/README.md) ✅ | 接入方 + 运维 + 做人工测试的人 | `README`（总览）· `quickstart`（5 分钟）· `business-onboarding`（怎么把业务接进来）· `observability`（看告警/流量/流动）· `manual-test`（一轮 15 分钟） |
 | [`ops/`](ops/runbook.md) ✅ | 运维 + 任何要验证的人 | `runbook.md`（启动/检查/**修复表**/更新/产物卫生）· `functional-verification.md`（整体功能验证 + **缺口清单** + 环境验不了什么） |
 | `analytics/` ⏳ 未建 | 运营 | 待建：`dashboards.md`（每个指标在哪看 + 怎么读 + 异常怎么办）· `playbook.md`（影子 → 放开的晋升判据）；规则来源 `INT-12` · `INT-18` |
-| `integrate/doctor.md` ⏳ 未建 | 接入方 | [`scripts/doctor`](../scripts/) 的用法与结果解读（工具本身也还是占位） |
+| [`integrate/doctor.md`](integrate/doctor.md) ✅ | 接入方 | 接入自检五项（`INT-17`）的用法 · 四种结果状态怎么读 · 与 `traffic`/哨兵的分工（**工具已实现**：`scripts/shen.sh doctor`） |
+| `scripts/sentinel` ⏳ 占位 | 接入方 | 差异哨兵（真实业务 vs 幻境逐字段 diff 12 项） |
 
 **✅ 已创建，但文件待补**：
 

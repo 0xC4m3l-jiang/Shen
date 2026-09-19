@@ -39,6 +39,9 @@ start: ## 起全套并等就绪（= scripts/shen.sh up；只需 Docker）
 status: ## 看容器状态 + 控制台概览
 	@scripts/shen.sh status
 
+doctor: ## 接入自检（INT-17 五项：body 可读 / TLS 方式 / 会话粘性 / 实境与幻境 / 是否在路径上）
+	@scripts/shen.sh doctor $(ARGS)
+
 app-smoke: ## 快速链路验证：经引擎造三条流量并回显判定
 	@scripts/shen.sh smoke
 

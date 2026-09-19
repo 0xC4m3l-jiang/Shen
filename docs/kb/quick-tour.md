@@ -72,6 +72,7 @@
 scripts/shen.sh up          # 起全套（只需 Docker）：核心 + 代理 + 控制台 + L4 + 演示业务站
 scripts/shen.sh traffic     # 发伪造流量并核对判定（33 场景；含缺口清单）
 scripts/shen.sh verify      # 一键端到端：状态 + 全量流量 + L4 核对 + 报告 + 定位线索
+scripts/shen.sh doctor      # 接入自检（INT-17 五项）：链路到底通不通、body 能不能读、会话粘不粘
 ```
 
 | 地址 | 是什么 |

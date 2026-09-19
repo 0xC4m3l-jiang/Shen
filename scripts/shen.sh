@@ -12,6 +12,7 @@
 #   scripts/shen.sh smoke       造三条流量并回显判定结果（快速验证链路）
 #   scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 scripts/traffic/）
 #   scripts/shen.sh check       仓库级验证：make gate + make dev
+#   scripts/shen.sh doctor      接入自检（INT-17 五项）
 #   scripts/shen.sh verify      一键端到端验证：状态 + 全量伪造流量 + L4 核对 + 报告
 #   scripts/shen.sh logs [svc]  看日志尾部（不跟随；svc 如 core/proxy/console/analysis）
 #   scripts/shen.sh local       不用 Docker，本地进程起（开发用）
@@ -141,6 +142,11 @@ cmd_restart() {
 	echo "✅ 已整栈重建（不要单独 restart core —— 见 docs/ops/functional-verification.md §4）"
 }
 
+cmd_doctor() {
+	# 接入自检（INT-17 五项）：body 可读 / TLS 终结方式 / 会话粘性 / 实境与幻境可区分 / 引擎是否在请求路径上。
+	exec python3 "${ROOT}/scripts/doctor/doctor.py" --entry "${ENTRY}" --console "${CONSOLE}" "$@"
+}
+
 cmd_verify() {
 	# 一键验证：容器与观测面 → 全量伪造流量（含 L4 核对）→ 报告 + 定位线索。
 	# 报告落在 RUNDIR（临时目录），不进仓库。
@@ -191,11 +197,12 @@ status) shift; cmd_status "$@" ;;
 smoke) shift; cmd_smoke "$@" ;;
 traffic) shift; cmd_traffic "$@" ;;
 check) shift; cmd_check "$@" ;;
+doctor) shift; cmd_doctor "$@" ;;
 verify) shift; cmd_verify "$@" ;;
 logs) shift; cmd_logs "$@" ;;
 local) shift; cmd_local "$@" ;;
 restart) shift; cmd_restart "$@" ;;
 down) shift; need_docker; compose down ;;
 help | -h | --help) usage ;;
-*) die "未知子命令：$1（可用：up status smoke traffic verify check logs local restart down help）" ;;
+*) die "未知子命令：$1（可用：up status smoke traffic doctor verify check logs local restart down help）" ;;
 esac
