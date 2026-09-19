@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package telemetry.v1;
+
+option go_package = "shen/api/telemetry/v1;telemetryv1";
+
+import "google/protobuf/timestamp.proto";
+
+// 遥测面 —— 异步、批量、幂等（AR-11）
+service DeceptionTelemetry {
+  rpc Report(TelemetryEvent) returns (ReportAck);
+  rpc ReportBatch(TelemetryBatch) returns (ReportAck);
+}
+
+message TelemetryEvent {
+  // 幂等键：重复上报不产生重复记录（AR-11 / ST-9）
+  string event_id = 1;
+  string event_type = 2;
+  string actor_id = 3;
+  string session_id = 4;
+  bytes payload = 5;
+  // 由调用方注入（MD-6：核心禁止依赖系统时钟做判定）
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message TelemetryBatch {
+  repeated TelemetryEvent events = 1;
+}
+
+message ReportAck {
+  uint32 accepted = 1;
+  uint32 duplicated = 2;
+}

@@ -1,0 +1,85 @@
+# 形态 ④ · Sidecar —— adapter-proxy 的 Kubernetes 注入模板
+#
+# 与形态 ③ 是**同一份二进制**，差别只在 SHEN_PROXY_UPSTREAM 指向同 Pod 内的业务端口。
+#
+# 依据：INT-4 · INT-11 · NI-7（资源上限）· ST-17（探针语义）
+#
+# 用法：把下面两个片段并入业务 Deployment。
+#   1) 加一个 sidecar 容器；2) 业务容器的流量改为经 127.0.0.1:8081 出入。
+#   **不要改业务代码**（INT-7）。
+
+# ── 片段 1：sidecar 容器 ────────────────────────────────────────────────────
+- name: shen-sidecar
+  image: shen-proxy:0.1.0          # 静态单文件镜像，无运行时依赖
+  args: []
+  env:
+    # ★ 边车的 upstream 是同 Pod 内的业务端口。
+    #   这也意味着「哪个端口是业务端口」必须显式写死，不能靠自动发现。
+    - name: SHEN_PROXY_UPSTREAM
+      value: "http://127.0.0.1:9000"
+
+    - name: SHEN_PROXY_LISTEN
+      value: "0.0.0.0:8081"
+
+    - name: SHEN_CORE_ADDR
+      value: "shen-core.shen.svc.cluster.local:9443"
+
+    - name: SHEN_PROXY_MIRAGE
+      value: "honeypot-a=http://shen-honeypot.shen.svc.cluster.local:8080"
+
+    # 同 Pod 内的探针与 Pod 网段不该被判成攻击者。按集群实际网段填（INT-25）。
+    - name: SHEN_PROXY_WHITELIST
+      value: "10.244.0.0/16,10.96.0.0/12"
+
+    # ★ 首次上线必须 true（INT-11）。
+    - name: SHEN_PROXY_SHADOW
+      value: "true"
+
+    # 策略面（S4）：从核心拉取改道后端表与白名单，无需重启边车（ADR-0018）。
+    # 0 = 不拉，只用上面的本地 env。
+    - name: SHEN_PROXY_POLICY_INTERVAL
+      value: "60s"
+    - name: SHEN_PROXY_ADAPTER_ID
+      value: "proxy@$(POD_NAME)"
+
+    # 边车与核心常跨节点 ⇒ 明文 gRPC 不适用（代码已加启动闸门：非回环监听直接失败）。
+    # mTLS 未实现 —— 跨节点部署前必须先做（见 docs/design/structure.md §4）。
+
+  ports:
+    - name: shen-proxy
+      containerPort: 8081
+
+  # NI-7：引擎必须以独立进程运行并施加资源上限，不与业务抢资源。
+  resources:
+    requests: {cpu: "50m", memory: "32Mi"}
+    limits: {cpu: "500m", memory: "128Mi"}
+
+  # ⚠️ ST-17（存活/就绪探针）**尚未实现**：本进程目前不暴露任何探针端点，
+  #    因此这里不写 livenessProbe / readinessProbe —— 写了就是模板声称代码没有的东西。
+  #    落地前不要依赖本模板里的探针配置（见 docs/modules/adapter-proxy.md §8）。
+
+  securityContext:
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities: {drop: ["ALL"]}
+
+# ── 片段 2：业务容器只需改端口，不改代码 ────────────────────────────────────
+# - name: app
+#   ports:
+#     # 业务端口不再直接暴露，只被同 Pod 的 sidecar 访问
+#     - name: app
+#       containerPort: 9000
+#   env:
+#     - name: PORT
+#       value: "9000"
+#
+# Service 的选择器与端口指向 sidecar 的 8081，流量便全部经过引擎。
+# 若业务 Pod 需要直接对外，则把 Service targetPort 指回 9000，
+# 此时边车只做旁路 —— 但那样边车就不在请求路径上了，属于形态 ① 而非 ④。
+
+# ── 探针实现状态（ST-17）──────────────────────────────────────────
+# ⚠️ 本进程**没有实现**存活/就绪探针，因此本模板**不提供**探针配置。
+#    在它落地前，k8s 只能用 TCP 探活（它分不出「进程活着」与「依赖可用」两种语义）。
+#    落地时要先定一件事：探针端点是否开在对外监听上（任何客户端都能请求到它，判据见 `OH-2`）。
+#    设计缺口登记在 docs/modules/adapter-proxy.md §8 未决项 12。

@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package policy.v1;
+
+option go_package = "shen/api/policy/v1;policyv1";
+
+// 策略面 —— 版本化、可灰度、可回滚、带回执（AR-13 / ST-8）
+service DeceptionPolicy {
+  rpc Pull(PolicyPullRequest) returns (PolicySnapshot);
+  rpc Watch(PolicyWatchRequest) returns (stream PolicyDelta);
+  rpc Ack(PolicyAck) returns (PolicyAckReply);
+}
+
+message PolicyPullRequest {
+  string policy_id = 1;
+}
+
+message PolicySnapshot {
+  string policy_id = 1;
+  uint64 version = 2;   // 单调递增；回滚即发布新版本
+  bytes payload = 3;    // 适配器可直接消费的策略体（文档：docs/spec/policy-payload.md）
+  string checksum = 4;  // 对上方 payload **字节**的 SHA-256（十六进制）：适配器先验完整性再应用
+  uint32 gray_pct = 5;  // 灰度比例
+}
+
+message PolicyWatchRequest {
+  string policy_id = 1;
+  uint64 known_version = 2;
+}
+
+message PolicyDelta {
+  PolicySnapshot snapshot = 1;
+}
+
+// 回执，用于版本对账（AR-13）
+message PolicyAck {
+  string policy_id = 1;
+  uint64 version = 2;
+  bool applied = 3;
+  // 上报回执的适配器标识（例：proxy@10.0.0.5:8081）。
+  // 没有它就只知道「有人应用了」，不知道「谁应用了」—— 版本对账会变成一笔糊涂账。
+  string adapter_id = 4;
+  // applied=false 时的原因（校验和不匹配 / 载荷非法 / 后端建不出来）。
+  string reason = 5;
+}
+
+message PolicyAckReply {
+  bool ok = 1;
+}

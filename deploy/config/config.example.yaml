@@ -1,0 +1,104 @@
+---
+# 核心配置示例 —— 仅占位符；真实密钥禁止入库。
+#
+# 字段全表、约束与规范性 JSON Schema 见 docs/spec/config.md。
+# 本文件必须始终通过那里的全部校验（有单测守着：core/internal/policy 的 TestExampleConfigLoads）。
+# 策略是数据：规则随配置下发，不编译进代码（ST-24）。
+#
+# 用法：SHEN_CONFIG=deploy/config/config.example.yaml make run
+#
+# ⚠️ 本期（阶段 2a）只消费 policy 与 rules 两段；其余段会被解析与校验但暂不消费，
+#    消费方分别是：core.listen/session → 接入物料与启动参数；thresholds/whitelist → director。
+
+core:
+  listen: "127.0.0.1:9443"      # 也要用 SHEN_LISTEN 环境变量可覆盖
+
+# 影子模式 —— 首次上线必须如此：只观测、不处置、不回写。
+# 必须为 true；放开必须按「仅观测 → 只对高置信 Agent 误导 → 放开阈值 → 全量」逐级推进（INT-11 / INT-12）。
+shadow: true
+
+# 会话身份提取：三级优先级的第 ① 级（业务自身的 session cookie）。
+session:
+  cookie_name: "sid"            # 业务自身的 session cookie 名
+
+# 判定阈值与去重窗口集中定义，可由配置覆盖（ST-23 / INT-24）。
+thresholds:
+  route_mirage: 0.70            # 超过此分才考虑引流（director 消费）
+  block: 0.95                   # 超过此分才拦截（director 消费）
+
+# 误调度率上限 —— 「不影响原始业务」的首要约束。
+guard:
+  false_route_budget: 0.001     # 0.1%
+
+# 存储（本期用内存，真实存储接入时换驱动）
+store:
+  driver: "memory"              # 本期只接受 memory
+  redis: {addr: "", password: ""}
+  clickhouse: {addr: "", database: ""}
+  postgres: {dsn: ""}
+
+# 策略标识与版本（AR-13 / ST-8）。
+# version 必须显式声明且严格递增；回滚 = 用旧内容 + 更高的版本号重新发布（ADR-0009）。
+# gray_pct 本期只携带（0..100），消费方是 director。
+policy:
+  policy_id: "core-rules"
+  version: 1
+  gray_pct: 0
+
+# 规则集 —— 数据，不是代码（ST-24）。
+# 键必须存在：空数组合法，但启动会打印「规则集为空」告警。
+# 算符与字段的允许值见 docs/spec/config.md §2.4。
+rules: []
+#  - id: "ua-headless"
+#    weight: 0.6
+#    match: { field: "user_agent", op: "contains", value: "HeadlessChrome" }
+#  - id: "path-probe"
+#    weight: 0.3
+#    match: { field: "path", op: "prefix", value: "/.git" }
+
+# 白名单（INT-25 预留）—— 本期只解析与校验，不消费。
+# 消费方是 director 的引流判定前置：内部 IP / 健康检查 / 监控探针必须在引流判定前放行。
+whitelist:
+  source_cidrs: []
+  user_agents: []
+  path_prefixes: []
+
+# 诱饵面（ADR-0010：功能性伪装是欺骗的核心机制）。
+# 资产是**数据**（ST-24），不是代码分支。**可选段**：不写 = 不投诱饵。
+# kind 允许：developer_api（开发者 API）· instruction_file（指令文件）·
+#            mcp（MCP 诱饵）· dataset（消耗战数据集）· bait（三类蜜饵 + SSRF）
+# 诱饵面必须 observe-only（MD-25）—— 在诱饵面上不得产出 challenge / isolate / block。
+decoys:
+  assets:
+    - id: "dev-api"
+      kind: "developer_api"
+      path: "/portal/api/content"
+      content: "site-developer-api"   # 内容模板标识（模板随代码分发，ST-22）
+      enabled: false                   # 默认关：先影子观察，再逐级放开（INT-11 / INT-12）
+
+# 幻境后端池（ADR-0011：**只做入口，不实现具体蜜罐**）。
+# 逻辑名 name 就是 director 在 route_mirage 时给出的 Backend。
+# 默认全部 off：蜜罐是幻境后端，必须显式启用。
+# type 必须属于已登记类型（见 docs/modules/honeypot.md §1）：
+#   ssh / mysql / redis / ftp / elasticsearch / nginx-admin /
+#   web-clone / internal-wiki / database
+# 未启用或不健康的后端不会被解析 —— 此时 route_mirage 回落真实业务（NI-5）。
+honeypots: []
+#  - name: "mirage"
+#    type: "ssh"
+#    addr: "10.0.0.9:2222"
+#    enabled: false
+
+# 响应改写规则（可选）：注入到**改道侧** HTML 响应的片段（INT-8，业务侧一律原样透传）。
+#
+# 整个段不写 = 不下发给适配器（适配器继续用本地 env 的 SHEN_PROXY_INJECT）；
+# 写成空数组 = 显式下发「无规则」—— 运营籍此主动关掉注入。
+#
+# kind 只用于组织与审计（不改变注入行为），登记值：
+#   developer_api / instruction_file / hidden_link / dataset
+# marker 为空时执行方用 </body>；找不到标记的规则会被跳过（不阻断响应）。
+# 数组顺序即执行顺序。
+injects: []
+#  - kind: "developer_api"
+#    snippet: "<!-- 站点 API 文档：/api/v1 -->"
+#    marker: "</body>"

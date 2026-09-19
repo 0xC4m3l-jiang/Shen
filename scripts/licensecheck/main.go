@@ -1,0 +1,365 @@
+// Command licensecheck 审计依赖许可，拦住传染性或限制性许可。
+//
+// 依据 TB-16：依赖必须经许可与漏洞审计；禁止引入 AGPL / SSPL / BSL 等
+// 传染性或限制性许可的依赖。理由不是洁癖 —— 通过 HTTP 提供服务即触发
+// AGPL 的披露义务，那会把这个产品的源码变成必须公开的。
+//
+// 两条设计决策：
+//
+//  1. **只审真正参与构建的模块。** `go list -m all` 给出的是完整模块图，
+//     里面有大量不进二进制的间接依赖。审它们没有意义，还会把门禁淹掉。
+//
+//  2. **白名单式判定。** 认得出的宽松许可放行、认得出的限制性许可拦下，
+//     其余一律报「需人工判定」并以失败退出。反过来做（黑名单式）会让
+//     没见过的许可静默通过 —— 许可识别错的代价是法律风险，不是构建失败。
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 许可判定
+// ─────────────────────────────────────────────────────────────────────────────
+
+// verdict 是判定结果。
+type verdict int
+
+const (
+	ok         verdict = iota
+	unknown            // 认不出 —— 必须人工判定
+	restricted         // 认得出且禁止 —— 确定失败
+)
+
+func (v verdict) String() string {
+	switch v {
+	case ok:
+		return "允许"
+	case restricted:
+		return "禁止"
+	default:
+		return "需人工判定"
+	}
+}
+
+// sig 是一条许可特征：在许可文本里找到任何 sub 就判定为该许可。
+//
+// **顺序即优先级**：AGPL 必须排在 GPL 之前、LGPL 排在 GPL 之前，
+// 否则 "GNU AFFERO GENERAL PUBLIC LICENSE" 会被 GPL 那条先命中。
+type sig struct {
+	id     string
+	subs   []string
+	effect verdict
+	why    string
+}
+
+var signatures = []sig{
+	// ── 明确的传染性 / 限制性许可：拦下 ──────────────────────────────────
+	{"AGPL-3.0", []string{"GNU AFFERO GENERAL PUBLIC LICENSE"}, restricted,
+		"通过网络提供服务即触发源码披露义务"},
+	{"SSPL", []string{"Server Side Public License"}, restricted,
+		"要求公开整个服务栈的源码"},
+	{"BUSL-1.1", []string{"Business Source License", "BUSINESS SOURCE LICENSE"}, restricted,
+		"商用受限，若干年后才转开源"},
+	{"Elastic-2.0", []string{"ELASTIC LICENSE"}, restricted,
+		"禁止把本产品作为托管服务提供"},
+	{"Commons-Clause", []string{"Commons Clause"}, restricted,
+		"禁止转售"},
+	{"CC-BY-NC", []string{"NonCommercial", "NONCOMMERCIAL", "Non-Commercial"}, restricted,
+		"禁止商用"},
+	{"JSON", []string{"Good, not Evil"}, restricted,
+		"许可条款含用途限制，不是自由许可"},
+	{"LGPL", []string{"GNU LESSER GENERAL PUBLIC LICENSE"}, restricted,
+		"Go 是静态链接，LGPL 要求的可重链接无法满足"},
+	{"GPL-2.0", []string{"GNU GENERAL PUBLIC LICENSE", "Version 2, June 1991"}, restricted,
+		"强传染，静态链接即需开源"},
+	{"GPL-3.0", []string{"GNU GENERAL PUBLIC LICENSE", "Version 3, 29 June 2007"}, restricted,
+		"强传染，静态链接即需开源"},
+	{"RPL-1.5", []string{"Reciprocal Public License"}, restricted, "传染性"},
+	{"OSL-3.0", []string{"Open Software License"}, restricted, "传染性"},
+	{"CPAL-1.0", []string{"Common Public Attribution License"}, restricted, "传染性 + 署名义务"},
+
+	// ── 宽松许可：放行 ───────────────────────────────────────────────────
+	{"Apache-2.0", []string{"Apache License", "apache.org/licenses/LICENSE-2.0"}, ok,
+		"宽松，需保留声明"},
+	{"MIT", []string{"MIT License", "Permission is hereby granted, free of charge"}, ok,
+		"宽松，需保留声明"},
+	{"BSD-3-Clause", []string{"Redistribution and use in source and binary forms", "Neither the name"}, ok,
+		"宽松，禁止用作者名背书"},
+	{"BSD-2-Clause", []string{"Redistribution and use in source and binary forms"}, ok, "宽松"},
+	{"ISC", []string{"Permission to use, copy, modify, and/or distribute this software for any purpose"}, ok, "宽松，等价 MIT"},
+	{"MPL-2.0", []string{"Mozilla Public License"}, ok, "文件级弱传染，只影响其自身文件"},
+	{"Unlicense", []string{"This is free and unencumbered software released into the public domain"}, ok, "等同公共领域"},
+	{"0BSD", []string{"Zero-Clause BSD"}, ok, "宽松"},
+	{"Zlib", []string{"altered source versions must be plainly marked"}, ok, "宽松"},
+	{"PSF-2.0", []string{"PYTHON SOFTWARE FOUNDATION LICENSE"}, ok, "宽松"},
+	{"CC0-1.0", []string{"CC0 1.0 Universal", "Creative Commons Legal Code"}, ok, "放弃著作权"},
+	{"BlueOak-1.0.0", []string{"Blue Oak Model License"}, ok, "宽松"},
+	{"WTFPL", []string{"DO WHAT THE FUCK YOU WANT"}, ok, "无限制"},
+	{"X11", []string{"X11 License"}, ok, "宽松"},
+}
+
+// licenseFileNames 是探针文件名（不区分大小写的前缀匹配）。
+var licenseFileNames = []string{"LICENSE", "LICENCE", "COPYING", "NOTICE"}
+
+// classify 读一个目录下全部许可文件，给出判定。
+//
+// 取**最严格**的那条：双许可（如 Apache-2.0 + MIT）取宽松的没问题，
+// 但 Apache-2.0 + GPL 这种组合必须取 GPL 侧 —— 用得上的一定是较严的那份。
+func classify(dir string) (id string, v verdict, why string, files []string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", unknown, fmt.Sprintf("读不到目录：%v", err), nil
+	}
+	var texts []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		up := strings.ToUpper(e.Name())
+		for _, want := range licenseFileNames {
+			if strings.HasPrefix(up, want) {
+				b, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+				if rerr != nil {
+					continue
+				}
+				texts = append(texts, string(b))
+				files = append(files, e.Name())
+				break
+			}
+		}
+	}
+	if len(texts) == 0 {
+		return "", unknown, "模块里找不到任何许可文件", nil
+	}
+
+	// 取**最严格**的那条：多份许可（双许可）时，用得上的一定是较严的那份。
+	//
+	// 注意不能用「默认值 + 比大小」来挑 —— 若默认值的等级恰好等于命中项的等级，
+	// 比较永远不成立，结果会退化成「认不出」，也就是把许可静默放过。
+	var worst *sig
+	for _, t := range texts {
+		s, hit := match(t)
+		if !hit {
+			continue
+		}
+		if worst == nil || s.effect > worst.effect {
+			hit := s
+			worst = &hit
+		}
+	}
+	if worst == nil {
+		return "", unknown, "许可文本无法识别 —— 必须人工判定后加入白名单", files
+	}
+	return worst.id, worst.effect, worst.why, files
+}
+
+// match 按 signatures 的顺序找第一条命中的特征。
+func match(text string) (sig, bool) {
+	for _, s := range signatures {
+		for _, sub := range s.subs {
+			if strings.Contains(text, sub) {
+				return s, true
+			}
+		}
+	}
+	return sig{}, false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 依赖枚举
+// ─────────────────────────────────────────────────────────────────────────────
+
+// buildModule 是一个真正参与构建的模块。
+type buildModule struct {
+	Path    string // 模块路径
+	Version string // 版本
+	Dir     string // 本地缓存目录（空 = 未下载）
+	Own     bool   // 是不是本项目自己
+}
+
+// buildModules 用包级依赖反推模块 —— 只有进了二进制的东西才需要审。
+func buildModules() ([]buildModule, error) {
+	out, err := exec.Command("go", "list", "-deps",
+		"-f", "{{if .Module}}{{.Module.Path}}\t{{.Module.Version}}{{end}}", "./...").Output()
+	if err != nil {
+		return nil, fmt.Errorf("go list -deps 失败：%w", err)
+	}
+	seen := map[string]buildModule{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		path, version, _ := strings.Cut(line, "\t")
+		if _, dup := seen[path]; dup {
+			continue
+		}
+		seen[path] = buildModule{Path: path, Version: version}
+	}
+
+	self, err := selfModulePath()
+	if err != nil {
+		return nil, err
+	}
+
+	mods := make([]buildModule, 0, len(seen))
+	for _, m := range seen {
+		m.Own = m.Path == self
+		if !m.Own {
+			dir, derr := moduleDir(m.Path)
+			if derr != nil {
+				m.Dir = ""
+			} else {
+				m.Dir = dir
+			}
+		}
+		mods = append(mods, m)
+	}
+	sort.Slice(mods, func(i, j int) bool { return mods[i].Path < mods[j].Path })
+	return mods, nil
+}
+
+func selfModulePath() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Path}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("取本模块路径失败：%w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// moduleDir 取模块在本地缓存里的目录。未下载时返回错误 —— 不静默当成「无许可文件」。
+func moduleDir(path string) (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", path).Output()
+	if err != nil {
+		return "", err
+	}
+	dir := strings.TrimSpace(string(out))
+	if dir == "" {
+		return "", errors.New("模块未下载到本地缓存")
+	}
+	return dir, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 主流程
+// ─────────────────────────────────────────────────────────────────────────────
+
+// row 是一行审计结果，也用来生成台账。
+type row struct {
+	Module  string
+	Version string
+	License string
+	Verdict verdict
+	Note    string
+	Files   []string
+	Own     bool // 本项目自身：它没有许可证不是「依赖问题」
+}
+
+func main() {
+	ledger := flag.Bool("ledger", false, "输出 markdown 台账到标准输出，不做审计")
+	flag.Parse()
+
+	mods, err := buildModules()
+	if err != nil {
+		fail("枚举依赖失败：%v", err)
+	}
+
+	var rows []row
+	for _, m := range mods {
+		if m.Own {
+			rows = append(rows, row{
+				Module: m.Path, Version: "（本项目）", License: "未声明", Own: true,
+				Verdict: unknown, Note: "本项目自身尚无 LICENSE 文件；属产品决策，交付前必须定",
+			})
+			continue
+		}
+		if m.Dir == "" {
+			rows = append(rows, row{
+				Module: m.Path, Version: m.Version, License: "未知",
+				Verdict: unknown, Note: "模块未下载到本地缓存，无法判定",
+			})
+			continue
+		}
+		id, v, why, files := classify(m.Dir)
+		if id == "" {
+			id = "未识别"
+		}
+		rows = append(rows, row{
+			Module: m.Path, Version: m.Version, License: id,
+			Verdict: v, Note: why, Files: files,
+		})
+	}
+
+	if *ledger {
+		printLedger(rows)
+		return
+	}
+
+	// 审计模式：本项目自身缺 LICENSE 只提示、不失败（不是 TB-16 的管辖范围）
+	var bad []row
+	for _, r := range rows {
+		if r.Verdict != ok && !r.Own {
+			bad = append(bad, r)
+		}
+	}
+
+	fmt.Printf("依赖许可审计：%d 个模块参与构建\n\n", len(rows))
+	for _, r := range rows {
+		mark := "✓"
+		if r.Verdict != ok {
+			mark = "✗"
+		}
+		fmt.Printf("  %s %-52s %-14s %s\n", mark, r.Module, r.License, r.Verdict)
+		if r.Verdict != ok {
+			fmt.Printf("      %s\n", r.Note)
+		}
+	}
+	fmt.Println()
+
+	if len(bad) > 0 {
+		fmt.Fprintf(os.Stderr, "许可审计发现 %d 个问题：\n\n", len(bad))
+		for _, r := range bad {
+			fmt.Fprintf(os.Stderr, "  ✗ %s %s\n    %s：%s\n\n",
+				r.Module, r.Version, r.Verdict, r.Note)
+		}
+		fmt.Fprintln(os.Stderr, "禁止的许可必须换依赖；「需人工判定」的经评审确认后加入")
+		fmt.Fprintln(os.Stderr, "scripts/licensecheck 的白名单，并在注释里写清依据。")
+		os.Exit(1)
+	}
+	fmt.Println("许可审计通过：没有传染性或限制性许可。")
+}
+
+func printLedger(rows []row) {
+	fmt.Println("# 依赖许可台账")
+	fmt.Println()
+	fmt.Println("> ⚠️ **本文件由 `make license-ledger` 生成，禁止手改。**")
+	fmt.Println("> 依据 `TB-16`（依赖必须经许可与漏洞审计）。审计逻辑见 [`../../scripts/licensecheck/`](../../scripts/licensecheck/)；")
+	fmt.Println("> 门禁项见 `make gate`。")
+	fmt.Println()
+	fmt.Println("| 模块 | 版本 | 许可 | 判定 | 说明 |")
+	fmt.Println("| --- | --- | --- | --- | --- |")
+	for _, r := range rows {
+		fmt.Printf("| `%s` | %s | %s | %s | %s |\n",
+			r.Module, r.Version, r.License, r.Verdict, r.Note)
+	}
+	fmt.Println()
+	fmt.Println("**判定口径**：只审**真正参与构建**的模块（`go list -deps` 反推），")
+	fmt.Println("完整模块图里的间接依赖不进二进制，不需要审。")
+	fmt.Println()
+	fmt.Println("认不出的许可一律报「需人工判定」并让门禁失败 —— 许可识别错的代价是法律风险，")
+	fmt.Println("比构建失败严重得多，因此宁可多报一次。")
+}
+
+func fail(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "licensecheck: "+format+"\n", args...)
+	fmt.Fprintln(os.Stderr, "审计未执行完毕 —— 视为失败，不静默放行。")
+	os.Exit(1)
+}

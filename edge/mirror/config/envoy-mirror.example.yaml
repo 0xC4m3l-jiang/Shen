@@ -1,0 +1,78 @@
+---
+# 形态 ① · 旁路镜像 —— Envoy request_mirror_policy 配置模板
+#
+# 依据：INT-1 · INT-6
+#
+# 与 nginx 模板的关键差别：Envoy **原生支持按比例采样**（runtime_fraction），
+# 不需要 split_clients 那种拼装。
+
+static_resources:
+  listeners:
+    - name: ingress
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 80}
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                # @type 是绝对类型 URL，必然超长 —— 用折叠标量断行，
+                # 解析出的字符串与写在一行完全相同。
+                "@type": >-
+                  type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress
+                route_config:
+                  name: local
+                  virtual_hosts:
+                    - name: app
+                      domains: ["example.com"]
+                      routes:
+                        - match: {prefix: "/"}
+                          route:
+                            cluster: real_backend
+                            # ★ 镜像策略：按比例把请求副本发给引擎
+                            request_mirror_policies:
+                              - cluster: shen_mirror_receiver
+                                # 10%：全量镜像在高流量站点上代价不小。
+                                # 用 runtime 可**不重启**调整比例。
+                                runtime_fraction:
+                                  default_value:
+                                    numerator: 10
+                                    denominator: HUNDRED
+                                  runtime_key: shen.mirror.percent
+                # 采样基于请求特征做一致性哈希，同一客户端不会随机进出采样集。
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": >-
+                        type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: real_backend
+      type: STRICT_DNS
+      load_assignment:
+        cluster_name: real_backend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: {address: 10.0.0.20, port_value: 9000}
+
+    - name: shen_mirror_receiver
+      type: STRICT_DNS
+      load_assignment:
+        cluster_name: shen_mirror_receiver
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: {address: 10.0.0.40, port_value: 8080}
+      # ★ 引擎不可用不能影响镜像源。
+      #   Envoy 的镜像请求失败默认只记统计、不影响主请求 —— 这正是我们要的语义。
+      #   但仍要限制它，免得引擎卡住时连接池被占满。
+      circuit_breakers:
+        thresholds:
+          - priority: DEFAULT
+            max_connections: 128
+            max_pending_requests: 128
+            max_requests: 1024
+      connect_timeout: 0.05s

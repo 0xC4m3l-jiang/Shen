@@ -1,0 +1,12 @@
+{
+    "pendant.showThinking": true,
+    "pendant.thinkingDisplayMode": "collapsed",
+    "pendant.voice.language": "zh",
+    "pendant.customTools": [],
+    "pendant.chat.promptSuggestionsEnabled": true,
+    "pendant.chat.promptSuggestions": {
+        "model": "deepseek/deepseek-flash",
+        "thinking": "high"
+    },
+    "pendant.chat.promptSuggestionLanguage": "zh-cn"
+}
