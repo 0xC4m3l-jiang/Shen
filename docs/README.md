@@ -2,10 +2,18 @@
 
 **唯一入口。** 回答「什么时候看哪个目录下的哪份文档」。
 
-> 🚪 **刚接触项目、想先知道「它是什么 / 怎么跑 / 效果什么样」** → 先看根 [`README.md`](../README.md)。
+> 🚪 **三个最快入口**：
+> ① 想**快速了解项目并定位能力点** → [`kb/quick-tour.md`](kb/quick-tour.md)（速览 · 能力点定位表 · 五分钟跑起来 · 定位三招）
+> ② 想**跑起来 / 验证 / 排障 / 升级** → [`ops/runbook.md`](ops/runbook.md)（`scripts/shen.sh up|verify|traffic`）
+> ③ 想**知道某能力在哪个模块、怎么接** → [`modules/_map.md`](modules/_map.md)
+>
+> 想先知道「它是什么 / 效果什么样」→ 看根 [`README.md`](../README.md)。
 > 本文件是**开发与设计**的导航：规则在哪、模块文档在哪、每轮的改动怎么复核。
 
-**现状**：153 条规则已确认 · 阶段 1（MVP）完成 · **阶段 2a 完成**（判定 → 决策 → 引流已闭环）· **阶段 2b 模块已实现并单测**（`decoy` / `responder` / `honeypot` 已装配但**未接上边缘**）。
+**现状**（2026-09-19）：153 条规则已确认 · 阶段 1（MVP）完成 · **阶段 2a 完成**（判定 → 决策 → 引流闭环）·
+**策略面（`S4`）已落地**（核心 → 适配器下发改道后端表 / 白名单 / 注入规则）· **L4 已接入近线 worker** · **控制台可用**（只读观测）。
+**未接通的**：诱饵资产与预生成响应正文到边缘的通路；蜜罐只做接入架构（内容待专项调研）。
+**能力缺口清单**（查询串不参与判定等）见 [`ops/functional-verification.md`](ops/functional-verification.md) §2。
 
 > ✅ **策略面（`api/policy/v1`）已落地（2026-09-19）**：`Pull` 轮询 + `Ack` 回执，下发改道后端表与白名单（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)）。
 > 🟡 **仍未接通的是处置内容**（诱饵资产 / 预生成响应 / 注入片段）—— 需先在核心侧定下它们的来源与归属。
@@ -50,7 +58,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | [`plans/`](plans/README.md) | **实施计划 = 变更包**（设计访谈的产物）。**不作实现依据**；模板 [`_change-package.md`](plans/_change-package.md) | ✅ 多份（每轮一份）—— 索引见 [`plans/README.md`](plans/README.md) |
 | [`progress.md`](progress.md) | **模块规划进度**：全部模块清单 · 实现方式 · 阶段状态 —— 完成度的**唯一维护处**，与 [`log.md`](log.md) 同在 `docs/` 供人工审计对照 | ✅ 已建；每轮开发落地后同步更新 |
 | [`log.md`](log.md) | **变更日志**：每轮开发追加一条（做了什么 / 改了哪些文件 / 对应文档 / 验证 / 证据 / 遗留） | ✅ 最新在最上面；`make trace` 核最新条目的形状 |
-| [`kb/`](kb/README.md) | **功能知识库**：FAQ · 已知问题 · 踩坑 | ✅ 3 份 |
+| [`kb/`](kb/README.md) | **功能知识库**：速览与能力定位 · FAQ · 已知问题（含现行/历史分类）· 开发链路 | ✅ 6 份；新人从 [`kb/quick-tour.md`](kb/quick-tour.md) 开始 |
 | [`background/`](background/README.md) | **背景材料**：ADR · 讨论稿 · 调研 | ✅ 3 子目录 / 19 份 |
 | [`../.pi/skills/`](../.pi/skills/) | 本项目的 Agent 工作流**实例化**（通用规范在全局 `~/.pi/agent/skills/`）—— 开工前必须加载 `dev-loop`（全局通用）+ [`dev-loop-project`](../.pi/skills/dev-loop-project/SKILL.md)（本项目实例化）；另有 [`evidence-and-decisions`](../.pi/skills/evidence-and-decisions/SKILL.md)（调研/决策/基准）与 `threat-model` | ✅ 3 个（全部自建 · 纯 Markdown，**无可执行代码**） |
 | [`../.pi/devloop.md`](../.pi/devloop.md) | **项目适配面**：文档路径 / 验证命令 / 追溯工具 / 编号体系（通用技能 `dev-loop` §1 的字段） | ✅ 已建 |
@@ -99,13 +107,16 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | **新增 / 改字段或事件** | [`design/constraints.md`](design/constraints.md) 的 `OH` 段 | [`design/structure.md`](design/structure.md) §3 数据模型 |
 | **做技术选型** | [`background/decisions/`](background/decisions/README.md) 有无现成 ADR | [`background/notes/implementation-discussion.md`](background/notes/implementation-discussion.md) §6 议题清单 |
 
-**运维 · 运营 · 接入方** —— 专用文档**待建**（见 §3），规则源头已在 `design/`：
+**运维 · 运营 · 接入方**：
 
-| 角色 | 规则源头 |
-| --- | --- |
-| 运维（部署 / 回滚 / 故障 / 容量） | [`design/integration.md`](design/integration.md) 的上线步骤 · [`design/constraints.md`](design/constraints.md) 的 `NI-1`…`NI-14` |
-| 运营（看识别量 / 判断能否放开误导） | [`design/integration.md`](design/integration.md) 的 `INT-12` · [`design/constraints.md`](design/constraints.md) 的 `SB-1` / `SB-2` |
-| 接入方（站点接进来 / 接完验证） | [`design/integration.md`](design/integration.md)（四种形态 + `INT-17` 自检） |
+| 角色 | 去哪 | 规则源头 |
+| --- | --- | --- |
+| 运维（部署 / 升级 / 故障 / 容量） | [`ops/runbook.md`](ops/runbook.md)（启动 · 检查 · 修复表 · 更新 · 产物落在哪） | `NI-1`…`NI-14` · `V-1…V-5` |
+| 要验证"整体功能有没有问题" | [`ops/functional-verification.md`](ops/functional-verification.md)（跑法 · **缺口清单** · 环境验不了什么） | `NI-1` · `ST-7` · `AR-12` |
+| 接入方（站点接进来 / 接完验证） | [`integrate/business-onboarding.md`](integrate/business-onboarding.md)（形态选择 + 最小步骤）· [`integrate/quickstart.md`](integrate/quickstart.md) | `INT-1`…`INT-25` |
+| 看告警 / 流量 / 流动 / L4 结论 | [`integrate/observability.md`](integrate/observability.md) | `ST-7` · `AR-10` |
+| 人工测试（一轮 15 分钟） | [`integrate/manual-test.md`](integrate/manual-test.md) + [`../scripts/traffic/README.md`](../scripts/traffic/README.md) | — |
+| 运营（看识别量 / 判断能否放开误导） | 指标与看板**待建**（`analytics/`）；当前用控制台 + [`spec/logs.md`](spec/logs.md) 的定位手法 | `INT-12` · `SB-1` / `SB-2` |
 
 **任何人**：
 
@@ -114,15 +125,14 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | 想知道**对手是谁 · 我们怎么被识破** | [`background/notes/threat-model.md`](background/notes/threat-model.md)（草案）→ [`background/research/knowledge-base-audit.md`](background/research/knowledge-base-audit.md) 的 G3 |
 | 找某条规则 ID 是什么 | [`design/README.md`](design/README.md) §1 的前缀表 → 对应文档的规则表 |
 
-## 3. 待建的目录
+## 3. 面向「跑与用」的目录（⚠️ 原「待建」已在 2026-09-19 建成）
 
-**⏳ 未创建** —— 需要时再建，并同时建立「首份文件」列出的文档：
-
-| 目录 | 受众 | 首份文件必须包含什么 | 规则来源 |
-| --- | --- | --- | --- |
-| `integrate/` | 接入方 + 运维 | `quickstart.md`：四种形态的**选择树** + 最小可跑通步骤 + 每形态一份配置；`doctor.md`：五项检查的用法与结果解读 | `INT-1`…`INT-25` |
-| `ops/` | 运维 | `runbook.md` 按症状索引（症状 → 判定 → 动作 → 升级路径）；`rollback.md` 依据 `NI-11` 的回滚步骤 + 验证方法 | `NI-1`…`NI-14` · `V-1…V-5` |
-| `analytics/` | 运营 | `dashboards.md` 每个指标**在哪看 + 怎么读 + 异常怎么办**；`playbook.md` 影子模式 → 放开的晋升判据 | `INT-12` · `INT-18` · `SB-1` / `SB-2` |
+| 目录 | 受众 | 现在有什么 |
+| --- | --- | --- |
+| [`integrate/`](integrate/README.md) ✅ | 接入方 + 运维 + 做人工测试的人 | `README`（总览）· `quickstart`（5 分钟）· `business-onboarding`（怎么把业务接进来）· `observability`（看告警/流量/流动）· `manual-test`（一轮 15 分钟） |
+| [`ops/`](ops/runbook.md) ✅ | 运维 + 任何要验证的人 | `runbook.md`（启动/检查/**修复表**/更新/产物卫生）· `functional-verification.md`（整体功能验证 + **缺口清单** + 环境验不了什么） |
+| `analytics/` ⏳ 未建 | 运营 | 待建：`dashboards.md`（每个指标在哪看 + 怎么读 + 异常怎么办）· `playbook.md`（影子 → 放开的晋升判据）；规则来源 `INT-12` · `INT-18` |
+| `integrate/doctor.md` ⏳ 未建 | 接入方 | [`scripts/doctor`](../scripts/) 的用法与结果解读（工具本身也还是占位） |
 
 **✅ 已创建，但文件待补**：
 
@@ -162,6 +172,3 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | 业务系统的核心模块 | ❌ **不是** | `NI-7`（必须独立进程运行），不嵌入业务进程 |
 | **独立前置服务 / 旁路组件** | ✅ **是** | `INT-1`…`INT-4` · `INT-9` |
 
-| **启动 / 验证 / 排障 / 升级**（怎么跑起来、怎么查、怎么修） | [`ops/runbook.md`](ops/runbook.md) |
-| **目录与模块地图**（谁在哪 · 能力是什么 · 怎么接起来） | [`modules/map.md`](modules/_map.md) |
-| **日志字典**（谁记什么 · 字段 · 开关 · 怎么用它排查） | [`spec/logs.md`](spec/logs.md) |

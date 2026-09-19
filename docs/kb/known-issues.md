@@ -5,6 +5,14 @@
 
 ---
 
+## 分类（现行 / 历史）
+
+**现行**（今天仍会撞上）：`K-1` `K-2` `K-3` `K-4` `K-5` `K-6` `K-7` `K-8` · `K-12` `K-13` · `K-14` `K-15` `K-16` · `K-17` `K-18` `K-19` `K-20` · `K-21` `K-22` `K-23`
+
+**历史**（那个方案已经不在了，保留是为记录当时的理由）：`K-9` `K-10` `K-11` —— 都属于 **ext_proc / Envoy WASM 方案**；
+该方案已被 [`../background/decisions/0017-caddy-l1-base.md`](../background/decisions/0017-caddy-l1-base.md) 取代（L1 转发改用内嵌 Caddy），
+代码里已无 ext_proc。**不要按它们改今天的代码。**
+
 ## K-1 · 根目录放 `go.work` 会让 `go build ./...` 失效
 
 **症状**（原始报错）：
@@ -117,7 +125,7 @@ protoc -I api \
 
 ---
 
-## K-9 · ext_proc 流不 drain 到 EOF 会泄漏（`CloseSend` 不够）
+## K-9 ·（历史）ext_proc 流不 drain 到 EOF 会泄漏（`CloseSend` 不够）
 
 **症状**：客户端开 200 条 ext_proc 流、每条都 `CloseSend()`，但 goroutine 数从 6 涨到 211，**不回落**。
 
@@ -143,7 +151,7 @@ for {
 
 ---
 
-## K-10 · ext_proc 收到未识别的阶段必须失败关闭
+## K-10 ·（历史）ext_proc 收到未识别的阶段必须失败关闭
 
 **症状**：不适用 —— 这是**要主动防**的，不是撞到的坑。`E1` spike 里作为测试固化下来了。
 
@@ -166,7 +174,7 @@ default:
 
 ---
 
-## K-11 · 每个响应分支必须与请求阶段配对
+## K-11 ·（历史）每个响应分支必须与请求阶段配对
 
 **症状**：写 ext_proc 服务时最容易犯的错 —— `request_body` 回了 `ResponseHeadersResponse`。
 
@@ -441,3 +449,37 @@ $ curl -A "HeadlessChrome/120" -H "Cookie: sid=normal-user-1" http://<引擎>/?u
 因此：**不要**在适配器侧「顺手」把 UA 拼进 `decision_id`（那会改掉已确认的 `ST-10`，
 且让跨适配器缓存一致性无从谈起）。正确做法是单独一轮，在「缓存键 × 误调度预算」之间做一次明确取舍，
 并把结论写成规则。现状见 [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) 的「未解决」。
+
+## K-21 · 单独 `docker compose restart core` 会让整栈"容器都 Up 但端口不通"
+
+**症状**：`docker compose ps` 五个容器全是 `Up`，但控制台/业务入口 `curl` 得到 HTTP 000（连接被拒）；日志里没有任何报错。
+
+**原因**：`core` 是这套 compose 的**网络命名空间持有者**（其它服务用 `network_mode: service:core` 加入它）。
+单独重启它 = 重建命名空间，兄弟服务仍挂在**旧**命名空间上；宿主端口映射指向新命名空间，而里面没有监听者。
+
+**结论**：整栈重建 —— `scripts/shen.sh restart`（等价 `docker compose ... up -d --force-recreate`）。**永远不要单独 restart core**。
+
+---
+
+## K-22 · 改了代码但行为/日志没变 —— `--force-recreate` 不重建镜像
+
+**症状**：新加的日志一行都不出现、改的逻辑没生效，但容器确实重启过了。
+
+**原因**：`docker compose up -d --force-recreate` 只**重建容器**，用的是**旧镜像**；代码改动没进镜像。
+
+**结论**：用带构建的方式 —— `scripts/shen.sh restart`（已含 `--build`）或 `make docker-build` 后再 `up -d`。
+判据：`docker images` 里 `shen-*` 的时间戳应晚于你最后一次改代码。
+
+---
+
+## K-23 · 查询串里的攻击"看不见"（当前已知能力缺口，别当 bug 查）
+
+**症状**：`/download?file=../../etc/passwd`、`/search?q=union+select` 这类请求判定 **0 分 0 信号**；
+但把同样的载荷放进**路径**（如 `/../../etc/passwd`）就有分。
+
+**原因**：判定用的观测字段 `path` **不含查询串**（实测确认，见 [`../spec/config.md`](../spec/config.md) §2.4）；
+规则又是按原始字符串匹配，所以 URL 编码一次（`%2e%2e%2f`）也能绕过。
+
+**结论**：这是**已登记的能力缺口**，不是判错。缺口清单与关闭路径见
+[`../ops/functional-verification.md`](../ops/functional-verification.md) §2（#1 / #2）。修复前不要指望参数型攻击被判到。
+

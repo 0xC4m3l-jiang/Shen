@@ -97,3 +97,35 @@ make vet        # 静态检查
 make generate   # 由 api/*.proto 生成 Go 代码
 make run        # 本地起核心（影子模式）
 ```
+
+## Q9 · 为什么所有请求的分数都是 0？
+
+配置里的 `rules` 为空（或规则都没命中）。分数 = 命中规则权重之和，没有规则就恒为 0。
+先看 `deploy/config/config.example.yaml` 的 `rules`；改完配置要 `scripts/shen.sh restart`（带 `--build` 不是必需，但配置是挂载进去的，需重启进程）。
+
+## Q10 · 为什么控制台的「告警」永远是 0？
+
+`severity` 档位**尚未定义**（设计里的未决项），核心当前一律输出 `none`；影子模式下也不会产出 `block`，
+而控制台的告警口径是「`block` **或** `severity` 非 `none`」。所以告警恒为 0 是**当前设计状态**，不是漏报。
+要看引擎判了什么，看「流量访问与流动」的**分值**与**命中信号**。
+
+## Q11 · 为什么我改了代码，跑起来却没变化？
+
+见 [`known-issues.md`](known-issues.md) `K-22`：`--force-recreate` 不重建镜像。用 `scripts/shen.sh restart`（带 `--build`）。
+
+## Q12 · 为什么我把 SQLi / 穿越放在 URL 参数里，引擎完全不判？
+
+查询串**不参与判定**（`path` 字段不含 query），而且规则按原始字符串匹配 ⇒ 编码一次也能绕过。
+这是已登记的能力缺口（不是 bug）：见 [`known-issues.md`](known-issues.md) `K-23` 与
+[`../ops/functional-verification.md`](../ops/functional-verification.md) §2。
+
+## Q13 · 怎么加一条自己的验证场景？
+
+在 [`../../scripts/traffic/scenarios.json`](../../scripts/traffic/scenarios.json) 里照格式加一条（`id` / `group` / `method` / `path` / `headers` / `expect`）。
+先写成 `observe_only` 看引擎实际怎么判，再收紧成断言（`min_score` / `signals_all` / `action`）。
+字段含义见 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md)。
+
+## Q14 · 想看「还有哪些能力没做 / 做不到」，去哪？
+
+[`../ops/functional-verification.md`](../ops/functional-verification.md)：§2 缺口清单（含怎么关）· §3 当前环境验不了的能力 ·
+§4 运维陷阱 · §5 方法论边界。完成度看 [`../progress.md`](../progress.md)。
