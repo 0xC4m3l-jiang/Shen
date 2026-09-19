@@ -47,7 +47,9 @@
 - 白名单（内部 IP / 健康检查 / 监控探针）**必须先于**引流判定生效（`INT-25`）；
 - 透传真实来源 IP（`INT-23`），不得因接入导致业务侧丢失客户端 IP；
 - **对外可见面卫生**（`OH-2`）：清掉会暴露我们代理栈的响应头 —— `Via` 一律删除；
-  `Server` 只在上游给出时保留（上游没给就删掉 Caddy 的默认值）；**错误响应同样不能带指纹**。
+  `Server` 只在上游给出时保留（上游没给就删掉 Caddy 的默认值）；**错误响应同样不能带指纹**；
+- **协议与流式的边界行为**（已实测锁定）：客户端↔本进程协商到 **HTTP/2**；本进程↔上游默认 **HTTP/1.1**（`reverse_proxy` 默认，与 nginx/Envoy 同类；上游协议版本对攻击者不可见）；
+  **协议升级（WebSocket 101）与流式（SSE / 分块）透传**；**大响应不缓冲**（超过 1 MiB 不注入、原样透传）；**不读请求体**（8 MiB 上传原样送达上游）。
 
 ### 明确不做什么
 
@@ -198,6 +200,7 @@
 | 单元（响应改写规则） | 字段缺省 → 保留本地规则 · 显式空数组 → 关掉注入 · 非空 → 远端规则接管且本地规则不再注入 · 远端规则真的改写改道侧响应 | 同上（`TestApplyEdgePolicyInjectSemantics` · `TestRemoteInjectRuleRewritesDivertedResponse`） |
 | 单元（可见面卫生） | `Via` 一律删除 · `Server` 为 Caddy 默认值时删除、为上游值（含大小写/空白差异）时保留 · 业务响应头与状态码**不得**被改写 | `edge/proxy/proxy_test.go`（`TestHeaderSanitizer*`） |
 | 集成（错误路径指纹） | 上游不可达 → 502 且无 `Server` / `Via` | `edge/proxy/embed_test.go`（`TestNoProxyFingerprintOnErrorPath`） |
+| 集成（转发边界） | **协议升级**（101 后仍可双向收发）· **流式不被全量缓冲**（首块到达时间）· **大响应（2 MiB）不注入不截断** · **大上传（8 MiB）完整送达** · **观测不含 body** · **h2 下行 / h1.1 上行** | `edge/proxy/forwarding_test.go` |
 
 > `MD-22`：本模块的测试**必须独立可运行**，用替身实现 `JudgeClient` / `TelemetryClient`，
 > **禁止**依赖真实核心或真实存储。
@@ -229,3 +232,4 @@
 | 2026-09-19 | **接策略面**（`S4`）：`Pull` 拉取改道后端表与白名单（远端覆盖本地 · 白名单并集）· `Ack` 回执（`AR-13`）· 新增 `SHEN_PROXY_POLICY_INTERVAL` / `SHEN_PROXY_POLICY_ID` / `SHEN_PROXY_ADAPTER_ID`；测试 **30 → 37** | [`../plans/2026-09-19-policy-plane.md`](../plans/2026-09-19-policy-plane.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |
 | 2026-09-19 | **策略面下发响应改写规则**：载荷新增可选 `inject_rules`（缺省 = 用本地 env；显式空数组 = 关掉注入）；注入器改为**按请求读当前规则**（支持远端热变更）；测试 **37 → 39** | [`../plans/2026-09-19-content-path-injects.md`](../plans/2026-09-19-content-path-injects.md) · 用户确认（9 项推荐） |
 | 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/2026-09-19-forwarding-deception-hardening.md) |
+| 2026-09-19 | **转发边界实测锁定**：协议升级（WebSocket）· 流式不被缓冲 · 2 MiB 响应不注入不截断 · 8 MiB 上传完整送达 · 观测不含 body · h2 下行 + h1.1 上行；新增 6 例集成测试 | [`../plans/2026-09-19-forwarding-boundary-verification.md`](../plans/2026-09-19-forwarding-boundary-verification.md) |

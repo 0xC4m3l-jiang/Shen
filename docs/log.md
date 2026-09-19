@@ -9,6 +9,38 @@
 
 ---
 
+## 2026-09-19 · 转发路径边界行为实测锁定（升级 · 流式 · 大响应 · 大上传 · 协议版本）
+
+**做了什么**：把上一轮列的「转发未覆盖项」全部**实测**并锁成断言（本轮**产品代码零改动**，只把已成立的行为变成被断言的行为）：
+① **协议升级（WebSocket）**：真 raw TCP 打 `101`，并验证升级后仍能双向收发（说明我们这层的 `Hijack` 没被破坏）；
+② **流式（SSE）**：用**首块到达时间**证明没有被全量缓冲（内容全对不能证明这一点，只有时间能）；
+③ **大响应**（2 MiB HTML，跨过注入缓冲上限）：**不注入、不截断**，长度逐字节一致；
+④ **大上传**（8 MiB）：上游收到完整字节数 —— 证明我们**不读请求体**；
+⑤ **观测构造**不含 body 内容；
+⑥ **协议版本**：客户端↔我们 = HTTP/2，我们↔上游 = **HTTP/1.1**（实测发现，核实为 `reverse_proxy` 默认行为，与 nginx/Envoy 同类 —— **不是缺陷**，改为断言并写进模块文档，不加无谓开关）。
+期间修掉我自己造的两处错（占位的 `judgev1OriginResponse`、`%d` 格式化字符串），并把一次**误判**（把上游 h1.1 当 bug）纠正为文档化行为。
+
+**改了哪些文件**：`edge/proxy/forwarding_test.go`（新增，6 例）· `docs/modules/adapter-proxy.md`
+
+**对应文档**：[`docs/plans/2026-09-19-forwarding-boundary-verification.md`](docs/plans/2026-09-19-forwarding-boundary-verification.md)（含追溯矩阵与审视 3 条）
+
+**验证**：`make gate` 通过（含 `make trace` / `make leakcheck` / `make archcheck` / 单测 `-race`）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| WebSocket 升级 | 101 + 升级后双向收发 | ✅ `TestWebSocketUpgradePassesThrough` |
+| SSE 流式 | 首块早于「全部产完」 | ✅ 首块 < 2×间隔（全程 0.45s） |
+| 2 MiB HTML（配了注入规则） | 不注入、不截断 | ✅ 长度一致且无注入片段 |
+| 8 MiB 上传 | 上游收满 8 MiB | ✅ `TestLargeUploadReachesUpstreamIntact` |
+| 观测构造 | 不含 body 内容 | ✅ `TestObservationDoesNotCarryBody` |
+| 协议版本 | 客户端 h2 / 上游 h1.1 | ✅ `TestClientUsesHTTP2UpstreamUsesHTTP11` |
+
+**没做 / 遗留**：① **HTTP/3（QUIC）未实测**（要引 QUIC 客户端依赖；风险低：同一路由的另一协议）；② WebSocket over h2（RFC 8441）未测；
+③ 上游要求 h2 的后端目前无法表达（需要时再加开关）；④ ⚠️ **`E2` 的「TLS 终结归属」仍待你裁决**（上一轮提出，关系 `A2` 与 `ADR-0017`）。
+
+---
+
 ## 2026-09-19 · `E2`（TLS 指纹一致性）工具落地 + 主臂初测：**不可对齐**
 
 **做了什么**：把 P0 实验 `E2` 从「设计」推进到「可复现工具 + 有结论」。新增 `scripts/fingerprint`（只依赖 Go 标准库 + 自写握手解析）：
