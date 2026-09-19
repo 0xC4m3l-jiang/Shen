@@ -183,6 +183,8 @@ BUILD OK        # 全仓
 | 2 | `docs/progress.md` 第 14 行「代码」列写 ⏳、模块文档状态写「设计」 | 过期状态 | 同上 | 两处改准（框架 + 7 例；协议栈待设计） | ✅ |
 | 3 | 根 `README.md` 把「阶段 3」整行写「未开始」，且规模计数为 14 包 / 196 测试 | 过期计数 | `cat core/internal/*/*_test.go edge/*/*_test.go core/deception 2>/dev/null` → 203 | 改为「已起步」并更新计数 | ✅ |
 | 4 | 模块文档 §7 的测试表把 `MD-14` 的专项测试写成「待建」，未区分**子进程形态**与进程内框架 | 叙述误导 | `docs/modules/honeypot-protocol.md` §7 | 拆成「已实现 5 类（框架）」+「待补 2 类（子进程/压力）」并注明适用条件 | ✅ |
+| 6 | 测试替身 `recordingSession` 没加锁：`Serve` 在服务端 goroutine 里写转录、测试 goroutine 读它会**数据竞争** | **缺陷（-race 抓到）** | `make gate` → `WARNING: DATA RACE` + `--- FAIL: TestBannerServesAndRecordsBothDirections` | 替身加 `sync.Mutex` + `recorded()` 快照读；`go test -race ./deception/...` 通过 | ✅ |
+| 7 | 日志条目里写了 `Start/Stop/Addr/Stats`（带斜杠）—— `DEV-2` 把它当路径核，报「引用的路径不存在」 | 记录形状（自查工具做对了事） | `make trace` → `✗ DEV-2 … Start/Stop/Addr/Stats` | 改为 `Start` · `Stop` · `Addr` · `Stats`；门禁绿 | ✅ |
 | 5 | 首次写 `iface.go` 时引用了未定义符号（`errNilProtocol` 等），且留下一行 `ErrNotImplemented` 变量与后来的函数重复 | 编译红（自伤） | `go build ./deception/...` 报 `undefined` | 补 `errors.go` 集中错误值；删重复变量；`go build` + `go vet` 干净 | ✅ |
 
 > 历史记录类文件（`docs/background/` · `docs/plans/` · `docs/log.md` · `docs/kb/`）不在审视范围。
