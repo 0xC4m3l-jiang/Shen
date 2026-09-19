@@ -14,7 +14,7 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev commit clean-check done
+        check-config replay smoke dev commit clean-check done fp-capture fp-diff
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -77,6 +77,16 @@ clean-check: ## 校验工作区干净（收尾的最后一道闸：改动必须�
 done: gate commit clean-check ## 一轮的收尾：门禁 → 提交 → 校验工作区干净
 	@echo
 	@echo "本轮收尾完成：门禁绿 · 已提交 · 工作区干净。"
+
+# ── 实验工具：TLS 指纹采集与对比（E2）────────────────────────────────────────
+# 为什么单独给目标：E2 是 P0 实验（结论可能推翻欺骗命题），必须能一条命令复现。
+fp-capture: ## TLS 指纹采集（E2）：make fp-capture ADDR=host:443 [SNI=name] [OUT=x.json]
+	@if [ -z "$(ADDR)" ]; then echo '用法：make fp-capture ADDR=host:443 [SNI=name] [OUT=x.json]'; exit 1; fi
+	$(GO) run ./scripts/fingerprint -mode capture -addr "$(ADDR)" $(if $(SNI),-sni "$(SNI)",) $(if $(OUT),-out "$(OUT)",)
+
+fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
+	@if [ -z "$(A)" ] || [ -z "$(B)" ]; then echo '用法：make fp-diff A=real.json B=ours.json'; exit 1; fi
+	$(GO) run ./scripts/fingerprint -mode diff -a "$(A)" -b "$(B)"
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
 test: ## 全部单测，含数据竞争检测（依据 TB-15）

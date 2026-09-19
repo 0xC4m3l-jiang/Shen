@@ -9,6 +9,42 @@
 
 ---
 
+## 2026-09-19 · `E2`（TLS 指纹一致性）工具落地 + 主臂初测：**不可对齐**
+
+**做了什么**：把 P0 实验 `E2` 从「设计」推进到「可复现工具 + 有结论」。新增 `scripts/fingerprint`（只依赖 Go 标准库 + 自写握手解析）：
+① `capture` 采集协商版本 · 套件 · ALPN · 会话恢复 · OCSP · **ServerHello 扩展序列** · ClientHello 形状 · 证书链形状；
+② `diff` 由代码判定三种结论（不可区分 / 可区分可调齐 / 不可对齐），**判定标准写死在 `diff.go`**（E2 要求不可事后调整），
+最坏结论用**退出码 2** 拦住后续动作；③ `Makefile` 加 `fp-capture` / `fp-diff` 两个入口；④ 10 例单测（解析 · 截断容错 · JA3/JA3S 口径 · GREASE 过滤 · 三种判定）。
+**主臂初测（真跑）**：A 组 = `example.com:443`（公有站 OpenSSL 系栈），B 组 = 本机内嵌 Caddy（Go 标准库 crypto/tls）。
+一致：TLS 1.3 · 套件 · ALPN · 会话恢复；**本质差异：ServerHello 扩展序列 `51-43` vs `43-51`**（JA3S `772,4865,51-43` vs `772,4865,43-51`）；
+OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 判定标准，威胁模型 `R-1` 必须重估**。
+原始数据入仓 `docs/background/research/e2-tls-fingerprint/`，结论与**局限**写进 `docs/background/notes/pending-experiments.md`。
+工具开发中修掉两处自己造的问题：解析器遇截断字节直接放弃（测试暴露）、初版用 MD5 算 JA3 哈希（改为输出规范原文，比对更实用）。
+
+**改了哪些文件**：`scripts/fingerprint/main.go` · `scripts/fingerprint/tls.go` · `scripts/fingerprint/diff.go` ·
+`scripts/fingerprint/fingerprint_test.go` · `scripts/fingerprint/README.md`（均新增）· `Makefile` ·
+`docs/background/notes/pending-experiments.md` · `docs/background/research/README.md` ·
+`docs/background/research/e2-tls-fingerprint/2026-09-19-example.com.json` · `docs/background/research/e2-tls-fingerprint/2026-09-19-ours-caddy.json`
+
+**对应文档**：[`docs/plans/2026-09-19-e2-tls-fingerprint-tool.md`](docs/plans/2026-09-19-e2-tls-fingerprint-tool.md)（含追溯矩阵与审视 4 条）·
+[`docs/background/notes/pending-experiments.md`](docs/background/notes/pending-experiments.md) 的 `E2` 结果段
+
+**验证**：`make gate` 通过；`go test ./scripts/fingerprint/ -count=1` → 10 例全绿；真跑两次采集 + 一次对比（退出码 2）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 采真实站 | 出 JSON + JA3S | ✅ `TLS 1.3` · `JA3S: 772,4865,51-43` |
+| 采我方栈 | 同上 | ✅ `TLS 1.3` · `JA3S: 772,4865,43-51` |
+| 对比判定 | 出结论 + 后续动作 | ✅ `不可对齐`（本质差异：服务端扩展序列），退出码 `2` |
+| 解析与判定单测 | 10 例全绿 | ✅ `ok shen/scripts/fingerprint` |
+| 截断容错 | 半条记录也能解析 | ✅（该测试首次失败 → 修好） |
+
+**没做 / 遗留**：① ⚠️ **「TLS 终结归属」待你裁决** —— 候选：交客户 L0 终结（与真实站同款栈 ⇒ 指纹天然一致，且仍满足 `INT-22`）/ 保持自终结接受可区分 / 换同款 TLS 实现；
+② A 组只采 1 站 1 次（结论对「客户站栈是否与我方同款」高度敏感，**不得当最终结论**）；③ JA4 未做；④ 「我方→上游」方向未做真实对比。
+
+---
+
 ## 2026-09-19 · 转发/欺骗路径硬化：修掉对外可见面的代理栈指纹（`OH-2`）+ 蜜罐范围裁定
 
 **做了什么**：① 按用户裁定把**蜜罐范围收窄为「接入架构」**（入口 · 后端池 · 协议契约 · 生命周期），

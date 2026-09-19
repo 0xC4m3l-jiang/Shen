@@ -12,6 +12,16 @@
 
 ---
 
+## 0.1 实验原始数据（`E2` · TLS 指纹）
+
+| 位置 | 内容 | 证据级 |
+| --- | --- | --- |
+| [`e2-tls-fingerprint/`](e2-tls-fingerprint/) | 两组 TLS 握手采集 JSON（A 组 `example.com` / B 组我方栈），由 [`scripts/fingerprint/`](../../../scripts/fingerprint/README.md) 产出；结论与局限写在 [`../notes/pending-experiments.md`](../notes/pending-experiments.md) 的 `E2` 结果段 | **A**（工具可复现，命令与参数写在 JSON 元信息里） |
+
+> 这是**本目录第一份「我们自己产出的实验数据」**（此前都是外部材料）。产它的原因：`E2` 是 P0，且它的结论可能推翻整个命题。
+
+---
+
 ## 1. 材料清单
 
 | 文件 | 行数 | 性质 | 证据级 | 讲了什么 |
