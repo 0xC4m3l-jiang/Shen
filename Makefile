@@ -14,7 +14,7 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench
+        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -87,6 +87,21 @@ fp-capture: ## TLS 指纹采集（E2）：make fp-capture ADDR=host:443 [SNI=nam
 fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
 	@if [ -z "$(A)" ] || [ -z "$(B)" ]; then echo '用法：make fp-diff A=real.json B=ours.json'; exit 1; fi
 	$(GO) run ./scripts/fingerprint -mode diff -a "$(A)" -b "$(B)"
+
+# ── Caddy 耦合面（升级时先看它）──────────────────────────────────────────────
+# 为什么做成目标而不是写在文档里：文档会腐烂，这里的结果**永远来自代码**。
+# 升级流程：make caddy-surface → 对着 Caddy 的 changelog 核这些 API → make gate（兼容锁在 tests 里）
+caddy-surface: ## 列出我们对 Caddy 的 API 依赖（升级 Caddy 前先看它）
+	@echo "我们对 Caddy 的依赖面（自动从代码提取）："
+	@echo
+	@echo "  · 引用的包："
+	@grep -rhoE 'github.com/caddyserver/caddy/v2[a-z/]*' --include='*.go' edge/ core/ | sort -u | sed 's/^/      /'
+	@echo
+	@echo "  · 用到的导出符号："
+	@grep -rhoE '\b(caddy|caddyhttp|caddytls|caddyconfig|reverseproxy)\.[A-Z][A-Za-z]*' --include='*.go' edge/ core/ | sort -u | sed 's/^/      /'
+	@echo
+	@echo "  · 以字符串引用的模块 ID（改了就启动失败或静默失效）："
+	@grep -rhoE '"http\.(handlers|error_handlers)\.[a-z_]+"' --include='*.go' edge/ core/ | sort -u | sed 's/^/      /'
 
 # ── 基准：AR-29 的空载下界（直连 vs 经引擎）────────────────────────────────
 # 它只给下界；AR-29 的 P99 ≤ 5ms 要在接入演练里按真实载荷实测（实验 E3）。

@@ -81,6 +81,13 @@ ADR-0008 决定「L1 用 Go、`net/http/httputil.ReverseProxy` 做转发底座�
 
 ## 未解决
 
+- **Caddy 升级的耦合面与检查表**：耦合面用 `make caddy-surface` 自动提取；
+  其中三类依赖（模块 ID 字符串 · 默认 `Server` 头值 · `caddy.Duration` 单位）**不会造成编译失败**，
+  只会静默失效 —— 已用 [`../../edge/proxy/caddy_compat_test.go`](../../edge/proxy/caddy_compat_test.go) 锁住，
+  升级流程见 [`../../modules/adapter-proxy.md`](../../modules/adapter-proxy.md) §3.1；
+- **是否把 Caddy 绑定收进更小的边界**（把 `handler.go` 拆成「Caddy 模块外壳」与「纯逻辑」两个文件、
+  让 `policy.go` 不再出现 Caddy 类型）：属**可选的降耦增强**，当前耦合面已可枚举且有测试兜底。
+
 - **`acme` 模式的证书签发细节**（邮箱 / issuer 选择 / 80-443 入站前提）—— 本轮实现 `manual` 为主路径，
   `acme` 仅提供 `AutomateLoader` 骨架，签发策略与存储留待公网接入轮实测。
 - **Caddy 内嵌的二进制体积控制**（`-trimpath` / 剥离可选模块）—— 本轮未做，体积评估留待接入演练。

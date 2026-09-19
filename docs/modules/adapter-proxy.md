@@ -93,7 +93,7 @@
 | 允许依赖 | 原因 |
 | --- | --- |
 | `api/judge/v1` · `api/telemetry/v1` · `api/policy/v1` | `ST-3` 规定的**唯一**调核心方式（判定 / 遥测 / 策略三个面） |
-| `github.com/caddyserver/caddy/v2`（Apache-2.0） | **转发与 TLS 终结的底座**（`AR-3`：复用现成组件）；台账见 [`../spec/dependencies.md`](../spec/dependencies.md) |
+| `github.com/caddyserver/caddy/v2`（Apache-2.0） | **转发与 TLS 终结的底座**（`AR-3`：复用现成组件）；台账见 [`../spec/dependencies.md`](../spec/dependencies.md)。**耦合面与升级检查表见 §3.1** |
 | `edge/injection` | L1 处置模块，`ST-5` 要求它**被适配器引用、不独立部署**；`handler.go` 的 `Provision` 用它建注入器。**不是**适配器之间的依赖（`MD-4` 禁止的是 `adapter-*` 互依） |
 | Go 标准库 `net/http` / `net` / `time` | 判定胶水、观测构造、超时 |
 | `google.golang.org/grpc` | 生成 stub 的运行时（间接依赖，非新增） |
@@ -103,6 +103,33 @@
 | `core/internal/*` | `ST-3`，**编译期强制**（Go 的 `internal/` 规则） |
 | 任何数据库驱动（Redis / ClickHouse / PostgreSQL） | `MD-20` 规定核心唯一的 I/O 出口是 `store`；适配器更不得直连 |
 | 任何判定 / 规则引擎库 | `AR-7` 禁止在适配器实现判定 |
+
+### 3.1 与 Caddy 的耦合面与升级检查表
+
+**耦合面（自动提取，别手抄）**：`make caddy-surface`。
+
+| 类别 | 我们的依赖 | 升级时的风险 |
+| --- | --- | --- |
+| 包 | `caddy/v2` · `/caddyconfig` · `/modules/caddyhttp` · `/modules/caddyhttp/reverseproxy` · `/modules/caddytls` · `/modules/standard` | 路径改名 → 编译失败（**可见**） |
+| Caddy 模块契约 | `caddy.Module` / `Provisioner` / `Validator` / `CleanerUpper` / `caddyhttp.MiddlewareHandler` | 接口变化 → 编译失败（**可见**） |
+| 配置类型 | `caddy.Config` · `caddyhttp.Server/RouteList/App` · `caddytls.TLS/ConnectionPolicies/FileLoader/AutomateLoader` · `caddyconfig.JSON` | 字段改名 → 编译失败（**可见**） |
+| 以字符串引用的模块 ID | `http.handlers.shen_proxy`（我们自己）· `http.handlers.headers`（错误路径删头）· `http.handlers.reverse_proxy` | **不会编译失败** → 启动失败或**静默失效** |
+| 默认值假设 | `caddyhttp.ServerHeader == "Caddy"`（`headerSanitizer` 按值判断才删） | **不会编译失败** → 指纹清洗静默失效（违反 `OH-2`） |
+| 单位假设 | `caddy.Duration` = 纳秒（我们所有超时/TTL 字段） | **不会编译失败** → 阈值整体错位 |
+
+**升级流程（四条命令，一条都不能省）**：
+
+```sh
+make caddy-surface     # ① 先看耦合面：对着 Caddy 的 changelog 逐条核
+go get github.com/caddyserver/caddy/v2@<新版本>
+make gate              # ② 兼容锁在 edge/proxy/caddy_compat_test.go —— 红了会直接告诉你哪条假设变了
+make bench             # ③ AR-29 空载下界不能明显退化
+make dev               # ④ 端到端（核心 + 冒烟 + 回放）
+```
+
+> **禁止**只跑 `go build` 就宣布升级完成：上表里带「不会编译失败」的三类正是升级最容易静默坏的地方，
+> 其中「默认 `Server` 头」直接关系 `OH-2`（对手可见面不得暴露我们的栈）。
+> 安全网位置：[`../../edge/proxy/caddy_compat_test.go`](../../edge/proxy/caddy_compat_test.go)（编译期断言 + 四类假设断言）。
 
 > 规则 `MD-4`：依赖方向**必须**单向（适配器 → 核心 → 数据面）。
 > 本模块**禁止**被核心反向依赖，**禁止**依赖其他适配器（`edge/mirror` · `edge/dns`）。

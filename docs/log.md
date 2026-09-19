@@ -9,6 +9,40 @@
 
 ---
 
+## 2026-09-19 · 降低 Caddy 耦合的可见性：耦合面自动提取 + 升级兼容锁
+
+**做了什么**（用户要求：*Caddy 不要耦合太深，升级要快且保证功能支持*）：
+① **耦合面实测**：4 个非测试文件依赖 Caddy，用到的导出符号与模块 ID 逐条列出；
+② **`make caddy-surface`**：把耦合面做成**从代码自动提取**的命令（包 / 导出符号 / 字符串引用的模块 ID）—— 不手写，故不会腐烂；
+③ **升级兼容锁**（`edge/proxy/caddy_compat_test.go`）：五条编译期契约断言 + **四类「不会编译失败」的假设**断言 ——
+默认 `Server` 头值（我们的 `OH-2` 清洗按值判断才删）· `caddy.Duration` 单位 · 三个模块 ID（`headers` / `reverse_proxy` / 我们自己的）；
+失败信息里**直接写「该改哪里」**，升级后一红就知道动哪一行；
+④ **模块文档新增 §3.1 升级检查表**：耦合面风险分级（编译可见 vs 静默失效）+ **四条命令的升级流程**，并写明
+「**禁止**只跑 go build 就宣布升级完成」的理由（带「不会编译失败」的三类正是最容易静默坏的地方，其中默认 `Server` 头直接关系 `OH-2`）；
+⑤ ADR-0017 的「未解决」补上升级视角，并把「是否进一步收窄 Caddy 绑定」列作**可选增强**（见下）。
+
+**改了哪些文件**：`edge/proxy/caddy_compat_test.go`（新增）· `Makefile` · `docs/modules/adapter-proxy.md` ·
+`docs/background/decisions/0017-caddy-l1-base.md`
+
+**对应文档**：[`docs/plans/2026-09-19-caddy-coupling-guardrails.md`](docs/plans/2026-09-19-caddy-coupling-guardrails.md)（含追溯矩阵与审视 3 条）
+
+**验证**：`make gate` 通过；`go test ./edge/proxy/ -run CaddyAssumptions` 通过；`make caddy-surface` 可用。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 默认 `Server` 头值 | 仍为 `Caddy` | ✅ `TestCaddyAssumptionsStillHold` |
+| `caddy.Duration` 单位 | 纳秒往返一致 | ✅ 同上 |
+| 三个模块 ID 注册 | 都在 | ✅ 同上 |
+| Handler 五条契约 | 编译期断言 | ✅ `caddy_compat_test.go` |
+| 耦合面提取 | 一条命令列出 | ✅ `make caddy-surface` |
+
+**没做 / 遗留**：① **未做物理降耦**（`handler.go` 仍含「Caddy 模块契约 + 判定胶水」、`policy.go` 仍出现 `caddyhttp.MiddlewareHandler`）——
+属**可选增强**，需单独一轮承担回归风险，已登记在变更包 §7；② 上游字段顺序 / `ResponseHeaderTimeout` 语义未单独锁；
+③ ⚠️ **`E2` 的「TLS 终结归属」仍待你裁决**。
+
+---
+
 ## 2026-09-19 · `NI-12` 的 `V-1…V-4` 自动化 + `AR-29` 空载下界（把 NI-1 从承诺变成证据）
 
 **做了什么**：`NI-1` 是**最高优先级**约束、`NI-12` 要求它的强制测试 `V-1…V-5` **必须纳入 CI** —— 而此前只有「待补」两个字。
