@@ -175,6 +175,11 @@ docs/         全部文档（入口见下）
 
 | 我想… | 去哪 |
 | --- | --- |
+| **起一个能看的本地环境**（核心 + 假业务 + 代理 + 观测台） | `make demo`（或 `scripts/demo/run.sh`），然后开 http://127.0.0.1:19461/ |
+| **看告警 / 流量 / 请求在引擎里怎么流动** | [`docs/integrate/observability.md`](docs/integrate/observability.md) |
+| **把业务接进来**（选形态、改什么、怎么验） | [`docs/integrate/business-onboarding.md`](docs/integrate/business-onboarding.md) |
+| **做人工测试**（一轮 15 分钟） | [`docs/integrate/manual-test.md`](docs/integrate/manual-test.md) |
+| --- | --- |
 | 读**技术基线**（已确认的 153 条规则，动手前必读） | [`docs/design/`](docs/design/README.md) 八份 |
 | 看**某个模块**的设计（一模块一文件，固定九章） | [`docs/modules/`](docs/modules/README.md) |
 | 看**进度 / 还差什么** | [`docs/progress.md`](docs/progress.md) |

@@ -1,0 +1,26 @@
+# 运行时检测（Tetragon）—— 基于 eBPF 的行为检测与阻断
+#
+# 依据：docs/modules/netpolicy.md §1（运行时检测）· ADR-0011（蜜罐接第三方）
+# 用法：kubectl apply -f 本文件（需集群已装 Tetragon）
+#
+# 设计意图：幻网里的行为**我们要看得见**，但**不参与请求级判定**（AR-2）。
+# 检测到的事件应经适配器上报到遥测面（api/telemetry/v1），与控制台看到的流量对齐。
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: shen-mirage-process-exec
+spec:
+  kprobes:
+    - call: "sys_execve"
+      syscall: true
+      args:
+        - index: 0
+          type: "string"
+      # 只关心幻网命名空间里的执行行为 —— 蜜罐里出现的进程本身就是情报
+      selectors:
+        - matchNamespaces:
+            - namespace: shen-mirage
+              operator: In
+      # ⚠️ 只**观察**，不阻断：蜜罐里的行为要尽量放它跑（采集优先），阻断会掐断情报源
+      # （与 MD-25「诱饵面 observe-only」同一精神）。
+      action: Post

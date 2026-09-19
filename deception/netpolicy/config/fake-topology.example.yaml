@@ -1,0 +1,52 @@
+# 假拓扑 —— 构造看起来真实的内网结构（假主机 / 假服务）
+#
+# 依据：docs/modules/netpolicy.md §1（假拓扑）
+# 用法：kubectl apply -f 本文件
+#
+# 设计意图：对手扫内网时看到的**命名与结构**要像真的 ——
+# 命名沿用行业惯例（db-01 / cache-02 / jenkins / gitlab），
+# 而不是 honey-1 / decoy-2 这类自曝名（OH-1）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  namespace: shen-mirage
+  labels:
+    app: gitlab           # 资产管理 / 代码库：横向移动的常见目标
+spec:
+  selector:
+    app: fake-gitlab
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: shen-mirage
+  labels:
+    app: jenkins          # CI：凭证与部署权限的常见目标
+spec:
+  selector:
+    app: fake-jenkins
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-01
+  namespace: shen-mirage
+  labels:
+    app: mysql
+spec:
+  selector:
+    app: fake-db
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306

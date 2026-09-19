@@ -6,8 +6,8 @@
 | 所属层 | `L3`（依据 MD-1） |
 | 实现语言 | 声明式 + eBPF（依据 [`../design/language.md`](../design/language.md) §1） |
 | 负责人 | — |
-| 状态 | 设计（阶段 3） |
-| 最后更新 | 2026-09-18 |
+| 状态 | 🟡 **声明式产物已就绪**（阶段 3）：`config/` 三份模板（微隔离 / 假拓扑 / 运行时检测）· **无源码**（复用 Cilium / Tetragon，`TB-24` 禁 CGO） |
+| 最后更新 | 2026-09-19 |
 
 ---
 
@@ -71,11 +71,16 @@
 
 ## 7. 测试
 
+> **本模块无源码**，产物是声明式策略：验证靠**集群侧校验**（`kubectl apply --dry-run=server` / `cilium policy` / `tetragon` 加载），
+> 以及运行时事件是否经适配器回流到遥测面。当前为**文档级约定**（见 [`../../deception/netpolicy/README.md`](../../deception/netpolicy/README.md)）。
+
+
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 策略编译与校验 | `deception/netpolicy/`（待建） |
-| 集成 | 微隔离生效 / 白名单 | 同上 |
-| 故障注入 | eBPF 加载失败 → 降级 | 同上 |
+| 语法 | 三份声明式产物可被 YAML 解析、`kind` 正确 | `deception/netpolicy/config/`（已交付） |
+| 集群校验 | `kubectl apply --dry-run=server` / `cilium policy` / Tetragon 加载 | 接入演练（需真实集群） |
+| 失效路径 | eBPF 加载失败 → **降级为无隔离，绝不阻断业务** | Cilium/Tetragon 自身行为（`NI-1`） |
+| 事件回流 | 运行时事件经适配器进遥测面 | 未接（文档级约定） |
 
 ## 8. 未决项
 

@@ -1,0 +1,55 @@
+# 微隔离（Cilium）—— 限制幻网内的东西向流量
+#
+# 依据：docs/modules/netpolicy.md §1（微隔离）
+#       design/constraints.md SB-5（禁止向业务之外投递载荷或发起连接）
+# 用法：kubectl apply -f 本文件（需集群已装 Cilium）
+#
+# 设计意图：幻网**默认拒绝**东西向，只放行「伪造站点要看起来像真的」
+#           所必需的那几条关系。
+# 这样即使攻击者在幻网里横向移动，也走不出我们给他画的那张图。
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: shen-mirage-default-deny
+  namespace: shen-mirage
+spec:
+  # 幻网内所有 Pod：默认拒绝入站，只允许同网内的既定关系
+  endpointSelector: {}
+  ingress:
+    - fromEndpoints:
+        # 只允许**同幻网**的流量进来（横向移动仍在这张图里）
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": shen-mirage
+  egress:
+    - toEndpoints:
+        # 只允许出到幻网自身；禁止出到业务网段与公网（SB-5）
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": shen-mirage
+    - toEndpoints:
+        # 允许回控制/遥测面（核心），否则事件上报不出去
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": shen-core
+      toPorts:
+        - ports:
+            - port: "9443"
+              protocol: TCP
+---
+# 单条“看起来真”的东西向关系示例：假数据库允许假应用连它。
+# 真实站点里应用连数据库是常态 —— 幻网要**复刻这种常态**，否则一眼可辨（A2 不可区分性）。
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: shen-mirage-app-to-db
+  namespace: shen-mirage
+spec:
+  endpointSelector:
+    matchLabels:
+      app: fake-db
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: fake-app
+      toPorts:
+        - ports:
+            - port: "3306"
+              protocol: TCP

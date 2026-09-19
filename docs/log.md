@@ -9,6 +9,35 @@
 
 ---
 
+## 2026-09-19 · 剩余模块（非代码类）：`adapter-dns` 配置收口 · `netpolicy` 声明式产物 · `console` 文档与偏离登记
+
+**做了什么**：目标要求「按设计完成所有模块（除细节蜜罐）」。本轮补齐**不需要写数据面代码**的三块：
+① **`adapter-dns`（纯配置，`AR-3` 禁自研 DNS）**：重写 README —— 怎么用 · **怎么确认分流生效（两条 `dig`：可疑来源得引擎 IP、其他来源得业务 IP）** · 怎么回退（`NI-11`：改回业务 IP，TTL 压到 30s 就是为了回退快）· **配错影响面**（本形态 `NI-1` 风险最高：解析被接管后引擎即业务可达性前置）；模块文档状态改准并写明「无源码 ⇒ 验证靠 dig」。
+② **`netpolicy`（声明式 + 复用 Cilium/Tetragon）**：新增三份可直接 `kubectl apply` 的产物 —— 微隔离（**默认拒绝东西向**，只放行幻网内既定关系；出站禁止到业务网段，`SB-5`）· 假拓扑（用 `gitlab` / `jenkins` / `db-01` 等**行业惯例命名**，不出现自曝名 `OH-1`）· 运行时检测（Tetragon `TracingPolicy`，`action: Post` **只观察不阻断** —— 与 `MD-25`「诱饵面 observe-only」同精神）；另写明事件应经适配器回流遥测面。
+③ **`console`**：模块文档补状态/测试方式/偏离登记；新增 [ADR-0020](docs/background/decisions/0020-console-minimal-static-ui.md) 记录「Go 进程 + 静态页（无前端构建）」的取舍与**失效条件**（页面复杂化 / 需要写能力 / 前端门禁被引入时重开），并写明 `language.md` 的控制台行在本记录生效期内**暂缓**（长期仍是 TypeScript）。
+④ 同步：决策索引 · `docs/progress.md` 三行（13/16/21）· 根 `README.md` 增四个入口（起环境 / 看观测 / 接入 / 人工测试）。
+
+**改了哪些文件**：`edge/dns/README.md` · `deception/netpolicy/README.md`（新增）· `deception/netpolicy/config/microsegmentation.example.yaml`（新增）·
+`deception/netpolicy/config/fake-topology.example.yaml`（新增）· `deception/netpolicy/config/runtime-detect.example.yaml`（新增）·
+`docs/modules/adapter-dns.md` · `docs/modules/netpolicy.md` · `docs/modules/console.md` ·
+`docs/background/decisions/0020-console-minimal-static-ui.md`（新增）· `docs/background/decisions/README.md` · `docs/progress.md` · `README.md`
+
+**对应文档**：[`docs/plans/2026-09-19-remaining-modules-config-and-declarative.md`](docs/plans/2026-09-19-remaining-modules-config-and-declarative.md)（含追溯矩阵与审视 4 条）
+
+**验证**：`make gate` 通过（含 `make trace` / `make leakcheck`）；三份 YAML 解析验证通过。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| netpolicy 三份产物 | 可 YAML 解析、kind 正确 | ✅ `CiliumNetworkPolicy`×2 · `Service`×3 · `TracingPolicy`×1 |
+| 模板不含自曝名 | 行业惯例命名 | ✅ `make leakcheck` 通过 |
+| 文档与状态 | 三份模块文档状态与产物一致 | ✅ `docs/progress.md` 行 13/16/21 已同步 |
+
+**没做 / 遗留**：① ⚠️ **`analysis/*` 四个模块（`intent` / `chain` / `strategy` / `llm-components`）仍未实现** —— 设计为 **Python**，而此前用户裁定**不引入 Python 工具链**，两者冲突，需先裁（这是目标「完成所有模块」的最后一块）；
+② netpolicy 未接真实 Cilium/Tetragon；③ 控制台无鉴权、单实例；④ 蜜罐细节（`honeypot-shell` / 协议栈内容）**目标明确排除**，保持推迟。
+
+---
+
 ## 2026-09-19 · 观测面读路径 + 控制台（Web UI）+ 一键人工测试环境 + 接入/使用文档
 
 **做了什么**：先把「看不见」的**根因**查清并修掉，再交付「能看」的环境与文档。

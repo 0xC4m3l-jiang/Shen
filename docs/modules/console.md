@@ -6,8 +6,8 @@
 | 所属层 | `控制台`（依据 MD-1） |
 | 实现语言 | `TypeScript`（依据 [`../design/language.md`](../design/language.md) §1） |
 | 负责人 | — |
-| 状态 | 设计（阶段 2b） |
-| 最后更新 | 2026-09-18 |
+| 状态 | ✅ **已实现（最小可用）**（阶段 2b）：Go 进程 + 静态页（`go:embed`，**无前端构建步骤**）；只读观测 · `docs/integrate/observability.md` 是使用说明 |
+| 最后更新 | 2026-09-19 |
 
 ---
 
@@ -72,6 +72,16 @@
 | 后端不可达 | 只读视图显示陈旧数据并标注 | ✅ | —— |
 
 ## 7. 测试
+
+| 类型 | 覆盖什么 | 位置 |
+| --- | --- | --- |
+| 集成（人工） | 起核心 + 控制台 → 经引擎发流量 → 页面/`api` 能看到**分值 + 命中信号** | [`../../docs/integrate/manual-test.md`](../integrate/manual-test.md) |
+| 接口 | `/api/summary` · `/api/flow` · `/api/events` · `healthz` 的返回形状 | 实跑（`scripts/demo/run.sh`） |
+| 安全 | 页面渲染攻击者可控字符串用 DOM + `textContent`（**禁止** `innerHTML` 拼接） | [`../../console/web/index.html`](../../console/web/index.html) 顶部注释 |
+
+> ⚠️ **语言偏离设计**：设计写 TypeScript，本轮实现为 Go + 静态页（按用户裁定不引入前端工具链）——
+> 见 [`../background/decisions/0020-console-minimal-static-ui.md`](../background/decisions/0020-console-minimal-static-ui.md)。
+
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
