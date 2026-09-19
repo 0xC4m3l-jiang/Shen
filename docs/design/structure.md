@@ -108,7 +108,8 @@ edge/
 | `edge/proxy/` | ✅ 已建（③前置 + ④边车的同一份实现，39 测试：内嵌 Caddy 转发 + TLS + 策略面消费） |
 | `edge/dns/` | 🟡 [`Corefile.example`](../../edge/dns/config/Corefile.example) 已建（② 纯配置，无源码） |
 | `edge/injection/` | ✅ 已建（阶段 2b，含单测；被适配器引用，**不独立部署** `ST-5`） |
-| `deception/*` · `analysis/*` · `console/` | ⏳ 阶段 2 / 3 |
+| `deception/honeypot/` | ✅ 已建（阶段 3 **框架**：协议注册表 · 运行框架 · 最小适配器 + 7 例单测；**真实协议栈待设计**） |
+| `deception/shell/` · `deception/netpolicy/` · `analysis/*` · `console/` | ⏳ 阶段 2 / 3 |
 | `scripts/*` | 🟡 部分已建：`archcheck/` `gate/` `licensecheck/` `tracecheck/` `check-leak/` ✅ 已实现；`devcheck/`（开发期在线冒烟）+ `dev/smoke.sh`（一键验证）✅ 已实现；`sentinel/` `doctor/` 仍只有说明 |
 | `deploy/` | 🟡 配置示例已建；helm / compose 未建 |
 

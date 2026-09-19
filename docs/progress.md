@@ -35,7 +35,7 @@
 | 11 | **`adapter-proxy`**（③前置 + ④边车） | **同一实现**：拦截 → 调核心 → 按决策选 upstream → 异步上报；转发与 TLS 终结用内嵌 Caddy（[ADR-0017](background/decisions/0017-caddy-l1-base.md)）；改道后端表与白名单可经**策略面**下发（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)） | L1 | Go | `edge/proxy/` | ✅ [`modules/adapter-proxy.md`](modules/adapter-proxy.md) | ✅ 39 测试（含 `-race`、内嵌 Caddy 端到端与策略应用语义） | 2a |
 | ~~12~~ | ~~`adapter-sidecar`~~ | ❌ 已合并入第 11 行（同一份代码的另一种部署形态） | —— | —— | ❌ 已合并入第 11 行 | —— | —— | —— |
 | 13 | `adapter-dns` | **② DNS 引流**：按来源解析到引擎或真实服务（**纯配置，无源码**） | L1 | 配置 | `edge/dns/` | ✅ [`modules/adapter-dns.md`](modules/adapter-dns.md) | 🟡 Corefile 模板已就绪 | 2a |
-| 14 | `honeypot-protocol` | 协议仿真（SSH / MySQL / Redis / FTP…）+ 交互捕获；**可选自研** | L2 | Go / Rust | `deception/honeypot/` | ✅ [`modules/honeypot-protocol.md`](modules/honeypot-protocol.md)（设计） | ⏳ | 3 |
+| 14 | `honeypot-protocol` | 协议仿真（SSH / MySQL / Redis / FTP…）+ 交互捕获；**可选自研** | L2 | Go / Rust | `deception/honeypot/` | ✅ [`modules/honeypot-protocol.md`](modules/honeypot-protocol.md) | ✅ **框架 + 7 例单测**（协议栈待设计，见模块文档 §8） | 3 |
 | 15 | `honeypot-shell` | 命令表分发 + 内存文件系统 + 文件投递（含会话水印）；**可选自研** | L2 | Go / Rust | `deception/shell/` | ✅ [`modules/honeypot-shell.md`](modules/honeypot-shell.md)（设计） | ⏳ | 3 |
 | 16 | `netpolicy` | 微隔离 + 假拓扑 + 运行时检测（复用 Cilium / Tetragon） | L3 | 声明式 + eBPF | `deception/netpolicy/` | ✅ [`modules/netpolicy.md`](modules/netpolicy.md)（设计） | ⏳ | 3 |
 | 17 | `intent` | **意图识别**（侦察 / 利用 / 横向 / 窃取） | L4 | Python | `analysis/intent/` | ✅ [`modules/intent.md`](modules/intent.md)（设计） | ⏳ | 3 |

@@ -9,7 +9,47 @@
 
 ---
 
-## 2026-09-19 · 引入 git 版本控制，把「提交」纳入每轮收尾
+## 2026-09-19 · L2 第一批：`honeypot-protocol` 框架落地
+
+**做了什么**：实现 `deception/` 下的第一个模块（此前只有设计文档），交付**契约 + 确定性框架**，
+把「真实协议栈」留作**核心逻辑接缝**（这正是你说的「只留下后续要设计的核心逻辑」）：
+① **契约**（`deception/honeypot/iface.go`）：`Protocol`（适配器）· `Session`（会话录制口，会话 ID **一等字段**，`AR-25`）·
+`SessionFactory`（由消费方提供，生产实现将来接 `api/telemetry/v1`）· `Registry`（名字唯一：重名必须报错，
+否则「哪个实现生效」取决于注册顺序）。
+② **运行框架**（`runner.go`）：`Start` · `Stop` · `Addr` · `Stats`；**并发上限必须存在且超限即拒并计数**（`MD-16`）；
+**停止时对称回收**（`MD-15`）：停收新连接 → 等宽限期 → 强制关闭在途连接 → 等 goroutine 退出。
+③ **最小真实适配器**（`banner.go`）：问候 + 双向录制 —— 它既让框架可跑可测，本身就是可用的协议门牌仿真。
+④ **显式接缝**（`errors.go`）：`NotImplemented(what)` 返回「尚未实现」错误 —— **故意失败**，不静默返回空结果。
+⑤ **7 例单测**：注册表三态 · banner 双向录制 · 超限拒绝与计数 · 未知协议/重复启动 · `Stop` 对称性与监听关闭 · 未接缝错误。
+⑥ 同步文档：模块文档（状态/§7 测试拆分/§8 未决 3·4/§9）· `docs/design/structure.md` §1.5（`deception/honeypot/` 拆成 ✅）·
+`docs/progress.md` 第 14 行 · 根 `README.md`（阶段 3 「已起步」+ 计数 14→15 包 / 196→203 测试）。
+
+**改了哪些文件**：`deception/honeypot/iface.go` · `deception/honeypot/errors.go` · `deception/honeypot/runner.go` ·
+`deception/honeypot/banner.go` · `deception/honeypot/protocol_test.go`（均为新增）· `docs/modules/honeypot-protocol.md` ·
+`docs/design/structure.md` · `docs/progress.md` · `README.md`
+
+**对应文档**：[`docs/plans/2026-09-19-deception-l2-l3-frameworks.md`](docs/plans/2026-09-19-deception-l2-l3-frameworks.md)
+（含追溯矩阵与审视 5 条）· [`docs/modules/honeypot-protocol.md`](docs/modules/honeypot-protocol.md)
+
+**验证**：`make gate` 通过（含 `make trace` / `make leakcheck` / `make archcheck` / 单测 `-race`）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 注册表 nil/空名/重名 | 三者都报错，重名带协议名 | ✅ `TestRegistryRejectsNilEmptyAndDuplicate` |
+| banner 会话 | 问候 + 我方发与对手写的**都被录制**，会话 ID 非空 | ✅ `TestBannerServesAndRecordsBothDirections` |
+| 并发上限（`MD-16`） | 超限连接被立即关闭且计数 | ✅ `TestRunnerRejectsConnectionsOverLimit`（`Rejected=1`） |
+| 对称回收（`MD-15`） | 宽限期内返回、监听关闭 | ✅ `TestRunnerStopIsSymmetricAndClosesListener` |
+| 无出站拨号（`SB-6`） | 代码里没有 `net.Dial` | ✅ `grep -n "Dial" deception/honeypot/*.go` → 空 |
+| 分层 import 纪律 | 不 import `core/internal` 与 `api/` | ✅ `make archcheck` |
+| 测试与包数 | 196 → 203 · 14 → 15 包 | ✅ `ok shen/deception/honeypot` |
+
+**没做 / 遗留**：① ⚠️ **真实协议栈未实现**（SSH 密钥交换 / MySQL 握手 / Redis RESP / 凭证捕获 / 命令解释）—— 即本模块的核心逻辑接缝；
+② `honeypot-shell`（命令表 / 内存 FS / 水印）· `netpolicy`（声明式）· `adapter-dns`（配置收口）**属本批剩余三项**，下一轮继续；
+③ `MD-14` 的**进程组回收**只适用于子进程形态，本框架不是子进程（已在文档写明，不假装做到）；
+④ `Session` 的生产实现（接 `api/telemetry/v1` + 保留期 `NI-13`）未做，单测用的是替身。
+
+---
 
 **做了什么**：① **初始化 git 仓库**（`git init -b main`）并打**基线提交**（220 个文件：全部文档 · 代码 · 契约 · 部署模板 ·
 门禁工具 · `.pi/` 项目技能）；提交信息里写明了「此前无版本控制」，**不假装有历史**。
