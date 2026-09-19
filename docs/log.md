@@ -9,6 +9,39 @@
 
 ---
 
+## 2026-09-19 · `NI-12` 的 `V-1…V-4` 自动化 + `AR-29` 空载下界（把 NI-1 从承诺变成证据）
+
+**做了什么**：`NI-1` 是**最高优先级**约束、`NI-12` 要求它的强制测试 `V-1…V-5` **必须纳入 CI** —— 而此前只有「待补」两个字。
+本轮把可自动化的四条做实（**产品代码零改动**）：
+① **`V-1` 杀死引擎**：起真 gRPC 判定面再 `Stop()`（真「进程被杀」，不是指一个从未存在的端口），业务 20/20 正常；
+② **`V-2` 决策延迟超预算**：判定延迟 400ms（预算 50ms），业务 20/20 正常，并断言总耗时不接近 20×400ms（证明走的是超时放行 `NI-4`）；
+③ **`V-3` malformed protobuf**：用**裸 TCP 服务回垃圾字节**造畸形响应（真 gRPC 服务端在 wire 层就拒绝非法 protobuf，造不出来），业务 20/20 正常；
+④ **`V-4` 非法决策值**：UNSPECIFIED 与**越界值 99** 两种，都回落放行（`NI-5`）。
+⑤ 新增 `AR-29` **空载下界**基准（`make bench`）：直连 37.7 µs / 经引擎 85.7 µs ⇒ **额外 ≈48 µs**（5 ms 预算的 1%），并登记进实验 `E3`（写明**这只是下界**）。
+⑥ `V-5`（CPU 饱和下 P99 不劣化）**明确不做**：它要基线 P99 与真实负载，用单机微基准伪造「P99」就是假证据 → 归接入演练。
+期间修掉我自造的两处错（`startJudgeServer` 不交出句柄导致「杀不死」、`latency_test.go` 漏 `net` 导入），并把模块文档里过期的「待补」改为已实现 + 单列 `V-5` 去向。
+
+**改了哪些文件**：`edge/proxy/failopen_test.go`（新增，4 例）· `edge/proxy/latency_test.go`（新增，2 基准）· `Makefile` ·
+`docs/modules/adapter-proxy.md` · `docs/background/notes/pending-experiments.md`
+
+**对应文档**：[`docs/plans/2026-09-19-ni12-vseries-and-ar29-floor.md`](docs/plans/2026-09-19-ni12-vseries-and-ar29-floor.md)（含追溯矩阵与审视 3 条）
+
+**验证**：`make gate` 通过；`go test ./edge/proxy/ -run 'TestV[1-4]_' -count=1` 4 例全绿；`make bench` 出数。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| `V-1` 引擎被杀 | 业务 20/20 正常 | ✅ `TestV1_KilledCoreKeepsBusinessAlive` |
+| `V-2` 延迟 400ms（预算 50ms） | 20/20 正常且不等核心 | ✅ 0.05s（若等核心需 8s） |
+| `V-3` 畸形响应 | 20/20 正常 | ✅ `TestV3_MalformedCoreResponseKeepsBusinessAlive` |
+| `V-4` UNSPECIFIED / 越界 99 | 回落放行 | ✅ `TestV4_IllegalDecisionValueFallsBackToOrigin` |
+| `AR-29` 空载下界 | 出两臂数值 | ✅ 直连 37.7µs · 经引擎 85.7µs · **额外 ≈48µs** |
+
+**没做 / 遗留**：① `V-5`（CPU 饱和下 P99）归接入演练 `E3`；② 故障注入目前是**串行** 20 次（未覆盖并发下的超时/回落）；
+③ `AR-29` 只有下界（大响应/流式/TLS/注入都会抬高）；④ ⚠️ **`E2` 的「TLS 终结归属」仍待你裁决**。
+
+---
+
 ## 2026-09-19 · 转发路径边界行为实测锁定（升级 · 流式 · 大响应 · 大上传 · 协议版本）
 
 **做了什么**：把上一轮列的「转发未覆盖项」全部**实测**并锁成断言（本轮**产品代码零改动**，只把已成立的行为变成被断言的行为）：

@@ -14,7 +14,7 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev commit clean-check done fp-capture fp-diff
+        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -87,6 +87,11 @@ fp-capture: ## TLS 指纹采集（E2）：make fp-capture ADDR=host:443 [SNI=nam
 fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
 	@if [ -z "$(A)" ] || [ -z "$(B)" ]; then echo '用法：make fp-diff A=real.json B=ours.json'; exit 1; fi
 	$(GO) run ./scripts/fingerprint -mode diff -a "$(A)" -b "$(B)"
+
+# ── 基准：AR-29 的空载下界（直连 vs 经引擎）────────────────────────────────
+# 它只给下界；AR-29 的 P99 ≤ 5ms 要在接入演练里按真实载荷实测（实验 E3）。
+bench: ## 基准：业务路径额外延迟的空载下界（AR-29 的输入之一）
+	$(GO) test ./edge/proxy/ -run '^$$' -bench BenchmarkAddedLatency -benchtime 500x -count=1
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
 test: ## 全部单测，含数据竞争检测（依据 TB-15）

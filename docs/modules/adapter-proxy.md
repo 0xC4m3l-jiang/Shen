@@ -192,7 +192,9 @@
 | 单元（配置） | `TLSConfig.Validate` 三取值 + 非法值；`BuildConfig` 拒绝空监听 / 非法模式；`upstreamAddr` 拒绝非法地址 | `edge/proxy/embed_test.go` |
 | 集成（内嵌 Caddy） | **真 Caddy + 真 `reverse_proxy` + 真 gRPC**：TLS 握手 · 三值路由 · 引流侧注入 · 引流失败回落 · block 短路 —— 即换底座的 go/no-go | `edge/proxy/embed_test.go`（`TestEmbeddedCaddyEndToEnd`） |
 | 集成 | 与真实核心的 gRPC 往返；`decision_id` 原样回传（`ST-10`） | 待接入演练 |
-| 故障注入 | 核心不可达 / 超时 / 返回非法值 → 必须透传（`NI-3`/`NI-4`/`NI-5`）；引流后端不可达 → 回落业务 | 待补（`NI-12` 的 `V-1…V-5`） |
+| 故障注入（**`NI-1` 的 `V-1…V-4`**） | `V-1` 杀死核心 · `V-2` 决策延迟超预算 · `V-3` malformed protobuf（裸 TCP 回垃圾）· `V-4` 非法决策值（UNSPECIFIED 与越界 99）—— 每条都连打 20 次，**要求 100% 正常** | `edge/proxy/failopen_test.go`（真 Caddy + 真 gRPC + 真业务后端） |
+| 故障注入（`V-5`） | CPU 饱和下业务 P99 不劣化 —— 需基线 P99 与真实负载 | 待补：**属接入演练**（实验 `E3`），见 [`../background/notes/pending-experiments.md`](../background/notes/pending-experiments.md) |
+| 基准（`AR-29` 空载下界） | 直连 vs 经引擎的额外延迟；本机实测 ≈ **+48 µs**（85.7 − 37.7），约为 5 ms 预算的 1% | `edge/proxy/latency_test.go`（`make bench`） |
 | 属性测试 | 对任意请求，**未识别状态一律 `route_origin`** | 待补 |
 | 分支穷尽性 | `Action` 三个取值 + 非法值，四个分支全覆盖 | `MD-8` |
 | 单元（策略应用） | 远端后端按名覆盖 + 本地保留 · `enabled=false` 不入表 · 坏地址只丢一条 · schema 读不懂整份拒绝 · 白名单并集 | `edge/proxy/policy_test.go` |
@@ -233,3 +235,4 @@
 | 2026-09-19 | **策略面下发响应改写规则**：载荷新增可选 `inject_rules`（缺省 = 用本地 env；显式空数组 = 关掉注入）；注入器改为**按请求读当前规则**（支持远端热变更）；测试 **37 → 39** | [`../plans/2026-09-19-content-path-injects.md`](../plans/2026-09-19-content-path-injects.md) · 用户确认（9 项推荐） |
 | 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/2026-09-19-forwarding-deception-hardening.md) |
 | 2026-09-19 | **转发边界实测锁定**：协议升级（WebSocket）· 流式不被缓冲 · 2 MiB 响应不注入不截断 · 8 MiB 上传完整送达 · 观测不含 body · h2 下行 + h1.1 上行；新增 6 例集成测试 | [`../plans/2026-09-19-forwarding-boundary-verification.md`](../plans/2026-09-19-forwarding-boundary-verification.md) |
+| 2026-09-19 | **`NI-12` 的 `V-1…V-4` 自动化**（真 Caddy + 真 gRPC/裸 TCP 故障注入，每条连打 20 次要求 100% 正常）· 新增 `AR-29` 空载下界基准与 `make bench`；`V-5` 归入接入演练 | [`../plans/2026-09-19-ni12-vseries-and-ar29-floor.md`](../plans/2026-09-19-ni12-vseries-and-ar29-floor.md) |
