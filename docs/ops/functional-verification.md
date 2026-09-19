@@ -100,3 +100,30 @@ scripts/shen.sh traffic --json > /tmp/verify.json     # 给自动化/留档
 
 **加一条自己的场景**：在 `scenarios.json` 里照格式加一条（`id/group/method/path/headers/expect`），
 先写成 `observe_only` 看引擎实际怎么判，再收紧成断言。
+
+
+---
+
+## 7. 人工测试（15 分钟一轮）
+
+起环境与造流量见 §1 / [`../ops/runbook.md`](../ops/runbook.md) 与 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md)。下面只留**人工才做的**两件事。
+
+### 7.1 故障注入（`NI-1` 的现场验证）
+
+```sh
+# ① 把核心杀掉（控制台会报「读取核心失败」——这是对的）
+pkill -f shen-demo-core
+curl -s -o /dev/null -w "业务仍应 200：%{http_code}\n" -A "HeadlessChrome/120" http://127.0.0.1:18080/
+```
+
+期望：**业务照常 200**（`NI-3` 失败放行）；控制台的告警/流动**停止增长**（核心没了，没有人记）。
+
+### 7.2 边界情形的快速检查
+
+| 项 | 命令 | 期望 |
+| --- | --- | --- |
+| 探针端点未实现 | `curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18080/__shen/healthz` | 走业务（未实现探针，见 `adapter-proxy.md` §8） |
+| 大响应不被注入 | 用假业务站改成 2 MiB 页面（或直接看自动化测试） | 原样透传（`INT-8`） |
+| 大上传不丢 body | `curl --data-binary @big -X POST $BASE/upload` | 上游收到完整字节数 |
+
+> 以上自动化版本在 `make gate` 里：`V-1…V-4` 故障注入、转发边界、可见面卫生 —— 人工测试是**补场景**，不是替代它们。

@@ -8,7 +8,7 @@
 | 5 分钟把环境跑起来、并看到数据 | [`quickstart.md`](quickstart.md) |
 | 把**真实业务**接进引擎（选形态、改什么、怎么验） | [`business-onboarding.md`](business-onboarding.md) |
 | 看**告警**、看**流量访问**、看请求在引擎里**怎么流动** | [`observability.md`](observability.md) |
-| 做**人工测试**（构造流量 → 看判定 → 核对回流） | [`manual-test.md`](manual-test.md) |
+| 做**人工测试**（构造流量 → 看判定 → 核对回流） | [人工测试（功能验证 §7）](../ops/functional-verification.md) |
 
 ## 三条必须先知道的
 

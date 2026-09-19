@@ -9,6 +9,34 @@
 
 ---
 
+## 2026-09-19 · 验证 + 代码/日志优化 + 文档整合减量
+
+**做了什么**：按用户要求"先验证，再优化代码与日志，再优化并整合文档"。
+① **验证基线（三层）**：`make gate`（格式 · vet · staticcheck · errcheck · 架构 · 追溯 · 泄漏 · 许可 · Python 门禁 · 单测含 -race）· scripts/shen.sh doctor（接入自检五项）· scripts/shen.sh traffic（33 场景判定验证）。基线结论：自检 **通过 3 · 失败 0 · 约束 1 · 无法判定 1**；判定 **断言 27/27 · 缺口 8 · 出口卫生 0**。
+② **代码优化（消除已登记缺陷 `K-24`）**：适配器启动时**预热 gRPC 连接**（`conn.Connect()` + 等 `connectivity.Ready`，最多 2s；失败只记日志、**不阻断启动**）。根因是"惰性建连的成本落在第一条请求上，而判定预算只有 3ms（`AR-29`）"。**实测**：整栈重建后第一条请求即得判定（`失败=<nil>`，此前是 `DeadlineExceeded`）。
+③ **日志优化**：`decide()` 失败分支加**无条件** warn（`判定失败，按 NI-3 放行到业务` + `decision_id` + `耗时` + `原因`），**不受逐请求日志开关控制** —— 默认部署下这是"引擎为什么没判"的唯一线索（此前只有开关打开的部署才看得到）。
+④ **文档整合减量**：删除 docs/integrate/manual-test.md（本轮已删除），其"人工才做"的内容（故障注入 `NI-1` 现场验证 · 边界情形快速检查）并入 `docs/ops/functional-verification.md` **§7 人工测试（15 分钟一轮）**；integrate/ 从 5 份减到 4 份。同时修正 8 处引用（含"标签写 manual-test、链接指向别的文件"的错配），并修掉根 `README.md` 的 1 处悬空链接。
+
+**改了哪些文件**：`edge/proxy/handler.go` · `docs/ops/functional-verification.md` · docs/integrate/manual-test.md（本轮已删除）（**删除**）· `README.md` · `docs/README.md` · `docs/integrate/README.md` · `docs/integrate/business-onboarding.md` · `docs/modules/console.md`
+
+**对应文档**：[`docs/plans/2026-09-19-verify-opt-logs-docs.md`](docs/plans/2026-09-19-verify-opt-logs-docs.md)（含追溯矩阵与审视 4 条）
+
+**验证**：`make gate` 通过；自检与判定验证实跑；**整栈重建后首请求**实测有判定（预热生效）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 门禁 | 绿 | ✅ 门禁通过 |
+| 接入自检 | 五项有结论 | ✅ 通过 3 · 失败 0 · 约束 1 · 无法判定 1 |
+| 判定验证 | 全量断言通过 | ✅ 27/27 · 缺口 8 · 出口卫生 0 |
+| 重建后首请求 | 应有判定（不再超时） | ✅ 判定：GET /k24-check … 失败=<nil> |
+| 适配器单测 | 全过 | ✅ go test ./edge/proxy/（17.9s） |
+| 文档引用 | 无悬空 | ✅ 追溯检查通过 |
+
+**没做 / 遗留**：① `docs/log.md` 与 `docs/plans/` 的历史条目里有相对链接写法不规范（Marksman 提示，不影响门禁）；② 判定失败日志未限流（核心长时间不可达会刷屏）；③ `docs/plans/` 46 份历史变更包目录偏大（属追溯留痕，减量需评估对门禁最新条目的依赖）；④ `scripts/sentinel`（差异哨兵 12 项）仍占位。
+
+---
+
 ## 2026-09-19 · 接入自检实现（INT-17 五项）+ 指标字典（AR-28）
 
 **做了什么**：把两个"设计已要求、当前还是占位"的东西做实。

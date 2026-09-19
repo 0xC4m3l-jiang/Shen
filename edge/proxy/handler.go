@@ -22,6 +22,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/reverseproxy"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -158,6 +159,14 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	conn, err := grpc.NewClient(h.CoreAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return fmt.Errorf("proxy: 建 gRPC 客户端失败：%w", err)
+	}
+
+	// 预热连接（治 K-24）：gRPC 是**惰性建连**的，第一次调用要付建连成本；
+	// 而判定预算只有 3ms（AR-29）—— 于是"重启后第一条请求"常常判定超时后放行：
+	// 业务不受影响（NI-3 生效），但那条**没有观测记录**，很难排查。
+	// 启动阶段就把连接建立起来（最多等 2s；失败只记日志，**不阻断启动**：核心还没起来也要能起）。
+	if werr := warmUp(ctx, conn, 2*time.Second); werr != nil {
+		log.Printf("proxy: 预热核心连接未完成（不影响启动；首请求可能按 NI-3 放行）：%v", werr)
 	}
 	h.conn = conn
 	h.judge = judgev1.NewDeceptionJudgeClient(conn)
@@ -422,15 +431,44 @@ func (h *Handler) decide(r *http.Request, id string) (judgev1.Action, string, er
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(h.DecisionTimeout))
 	defer cancel()
 
+	started := time.Now()
 	resp, err := h.judge.Judge(ctx, &judgev1.JudgeRequest{
 		DecisionId: id,
 		Observed:   observationFrom(r, h.TrustXFF),
 	})
 	if err != nil {
 		// 核心不可达 / 超时 —— 放行（NI-3 / NI-4）。
+		//
+		// ⚠️ 这条日志**不受 `SHEN_PROXY_LOG_REQUESTS` 控制**：它是"引擎没能判定"的唯一线索。
+		// 只开逐请求日志的话，默认部署里就完全看不到"为什么这条没判"（实测踩过：重启后第一条
+		// 请求因连接建立吃掉 3ms 预算而超时，业务照常但观测面没有记录，见 K-24）。
+		log.Printf("proxy: 判定失败，按 NI-3 放行到业务：%s %s decision_id=%s 耗时=%s 原因=%v",
+			r.Method, r.URL.Path, id, time.Since(started).Round(time.Microsecond), err)
 		return judgev1.Action_ACTION_ORIGIN, "", err
 	}
 	return actionOf(resp), resp.GetBackend(), nil
+}
+
+// warmUp 触发 gRPC 建连并等待就绪（最多 wait）。
+//
+// 为什么需要它：判定调用有 3ms 预算（AR-29），而 gRPC 的建连发生在**第一次调用**上；
+// 重启后第一条请求因此常被超时放行（业务没问题，但观测面缺那条记录 —— 见 K-24）。
+// 预热把这段成本从"请求路径"挪到"启动路径"。返回非 nil 只作提示，调用方不应因此启动失败。
+func warmUp(ctx context.Context, conn *grpc.ClientConn, wait time.Duration) error {
+	conn.Connect()
+	deadline := time.Now().Add(wait)
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("连接状态停在 %s（等待 %s 超时）", state, wait)
+		}
+		tick, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		conn.WaitForStateChange(tick, state)
+		cancel()
+	}
 }
 
 // ── 遥测上报 ─────────────────────────────────────────────────────────────────

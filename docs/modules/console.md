@@ -75,7 +75,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 集成（人工） | 起核心 + 控制台 → 经引擎发流量 → 页面/`api` 能看到**分值 + 命中信号** | [`../../docs/integrate/manual-test.md`](../integrate/manual-test.md) |
+| 集成（人工） | 起核心 + 控制台 → 经引擎发流量 → 页面/`api` 能看到**分值 + 命中信号** | [`../ops/functional-verification.md`](../ops/functional-verification.md) §7 |
 | 接口 | `/api/summary` · `/api/flow` · `/api/events` · `healthz` 的返回形状 | 实跑（`scripts/demo/run.sh`） |
 | 安全 | 页面渲染攻击者可控字符串用 DOM + `textContent`（**禁止** `innerHTML` 拼接） | [`../../console/web/index.html`](../../console/web/index.html) 顶部注释 |
 
@@ -85,7 +85,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 实跑 | 页面与四个只读接口 | `console/web/index.html` + `scripts/demo/run.sh`（见 [`../integrate/manual-test.md`](../integrate/manual-test.md)） |
+| 实跑 | 页面与四个只读接口 | `console/web/index.html` + `scripts/demo/run.sh`（见 [`../ops/functional-verification.md`](../ops/functional-verification.md) §7） |
 | 集成 | 策略发布 → 回执对账 | 同上 |
 | 契约 | 与 `api/policy/v1` 的一致性测试（`ST-6`：文档由 proto 生成） | 同上 |
 
