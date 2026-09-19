@@ -3,11 +3,15 @@
 给欺骗引擎发**伪造流量**，然后从**观测面**核对判定结果 —— 用于人工测试与回归验证。
 
 ```sh
-scripts/traffic/send.py                    # 全部场景
-scripts/traffic/send.py --group 自动化探针  # 只跑一组
+scripts/traffic/send.py                    # 全部场景（33 条，按分组打印）
+scripts/traffic/send.py --group 扫描器指纹   # 只跑一组
 scripts/traffic/send.py --only probe-git-headless --repeat 3
+scripts/traffic/send.py --check-l4         # 顺带核对 L4 结论与证据引用（AR-12）
 scripts/traffic/send.py --json             # 机器可读（自动化）
 ```
+
+结果分三段：**断言**（通过/失败）· **已知缺口**（只打印，不算失败）· **L4 核对**（结论与证据引用）。
+当前一次全量结果与缺口清单见 [`../../docs/ops/functional-verification.md`](../../docs/ops/functional-verification.md)。
 
 等价入口：`scripts/shen.sh traffic` · `make traffic`。
 
@@ -38,6 +42,12 @@ scripts/traffic/send.py --json             # 机器可读（自动化）
 | `signals_any` / `signals_all` | 至少要命中一个 / 必须全部命中（信号 ID 来自配置里的规则 `id`） |
 | `action` | 三值之一；**不写则不判定**（影子模式与接管后取值不同，`INT-11`） |
 | `observe_only` | `true` = 只发不判：用于示例配置未覆盖的流量（人工观察，或等加了规则再收紧） |
+| `status_in` | 允许的 HTTP 状态码集合；默认要求 `< 500`（例：演示站没实现 POST/DELETE，501 属**业务**行为） |
+| `same_decision_as_previous` | 重复跑时断言与上一次**同一个** `decision_id`（验证 `ST-10` 判定复用） |
+| `distinct_decisions` | 重复跑时断言每次都是**不同** `decision_id`（换会话即换判定） |
+| `gap` | 已知缺口 `{kind: 未实现/精度/未覆盖, why, close}`：只打印、**不算失败** —— 用途是把"设计有、当前没做到"显式列出来 |
+
+场景级 `session` 字段：`unique`（默认，每次新会话）· `shared`（同场景内复用会话，用于验证 `ST-10`）。
 
 **所有场景都会额外检查两件事**（无论期望怎么写）：
 

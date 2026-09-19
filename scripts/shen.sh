@@ -14,6 +14,7 @@
 #   scripts/shen.sh check       仓库级验证：make gate + make dev
 #   scripts/shen.sh logs [svc]  看日志尾部（不跟随；svc 如 core/proxy/console/analysis）
 #   scripts/shen.sh local       不用 Docker，本地进程起（开发用）
+#   scripts/shen.sh restart     整栈重建（改配置/换镜像后用；不要单独重启 core）
 #   scripts/shen.sh down        停掉并删容器
 #
 # 端口冲突时：SHEN_HTTP_PORT=8080 SHEN_CONSOLE_PORT=9444 scripts/shen.sh up
@@ -125,6 +126,18 @@ cmd_traffic() {
 	exec python3 "${ROOT}/scripts/traffic/send.py" --entry "${ENTRY}" --console "${CONSOLE}" "$@"
 }
 
+cmd_restart() {
+	# ⚠️ 必须整栈重建：core 是网络命名空间的持有者，单独重启它会让兄弟服务
+	# （proxy/console/analysis/business）留在旧命名空间 ⇒ 宿主端口映射指向空命名空间，
+	# 表现为"容器都 Up 但端口不通"。实测踩过。
+	need_docker
+	SHEN_HTTP_PORT="${HTTP_PORT}" SHEN_CONSOLE_PORT="${CONSOLE_PORT}" \
+		compose up -d --force-recreate >"${RUNDIR}/restart.log" 2>&1 ||
+		{ echo "重启失败，日志尾部："; tail -20 "${RUNDIR}/restart.log"; exit 1; }
+	wait_ready || exit 1
+	echo "✅ 已整栈重建（不要单独 restart core —— 见 docs/ops/functional-verification.md §4）"
+}
+
 cmd_check() {
 	echo "== 仓库级验证 1/2：make gate =="
 	make -C "${ROOT}" gate
@@ -155,7 +168,8 @@ traffic) shift; cmd_traffic "$@" ;;
 check) shift; cmd_check "$@" ;;
 logs) shift; cmd_logs "$@" ;;
 local) shift; cmd_local "$@" ;;
+restart) shift; cmd_restart "$@" ;;
 down) shift; need_docker; compose down ;;
 help | -h | --help) usage ;;
-*) die "未知子命令：$1（可用：up status smoke traffic check logs local down help）" ;;
+*) die "未知子命令：$1（可用：up status smoke traffic check logs local restart down help）" ;;
 esac

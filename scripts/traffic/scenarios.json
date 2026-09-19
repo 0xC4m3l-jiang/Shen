@@ -1,15 +1,18 @@
 {
-  "schema_version": 1,
-  "_about": "伪造流量场景（声明式）。每条 = 一次请求 + 期望；期望从**观测面**核对（控制台），因为判定响应禁止回显分值/信号（ST-7）。",
+  "schema_version": 2,
+  "_about": "伪造流量场景（声明式）。每条 = 一次请求 + 期望；期望从**观测面**（控制台）核对 —— 判定响应禁止回显分值/信号（ST-7）。",
   "_expect_fields": {
-    "min_score": "从控制台看到的分数下界（含）",
-    "max_score": "分数上界（含）",
-    "signals_any": "至少命中其中任一信号 ID",
-    "signals_all": "必须命中全部信号 ID",
-    "action": "三值之一（route_origin / route_mirage / block）；不写则不判定，只报告（影子模式与接管后取值不同，INT-11）",
-    "observe_only": "true = 只发送并报告，不断言分数/信号（示例配置未覆盖这类流量；用于人工观察与后续加规则）"
+    "min_score / max_score": "从控制台看到的分数的上下界（含）；分数在 1.0 处截断",
+    "signals_any / signals_all": "至少命中一个 / 必须全部命中（信号 ID = 配置里的规则 id）",
+    "action": "三值之一；不写则不判定（INT-11：影子模式与接管后取值不同）",
+    "status_in": "允许的 HTTP 状态码集合（默认要求 < 500）",
+    "observe_only": "true = 只发不判（人工观察）",
+    "same_decision_as_previous": "重复多次时，断言与上一次**同一个** decision_id（ST-10 判定缓存）",
+    "distinct_decisions": "重复多次时，断言每次都是**不同**的 decision_id",
+    "gap": "已知缺口 {kind: 未实现|精度|未覆盖, why, close} —— 只打印、不算失败，用于把功能欠缺显式列出"
   },
-  "_note": "期望值按 deploy/config/config.example.yaml 当前的两条示例规则写：ua-headless（UA 含 HeadlessChrome，权重 0.6）· path-probe（路径前缀 /.git，权重 0.3）。改了规则请同步本文件。",
+  "_session": "session: unique（默认，每次新会话）| shared（同场景内复用会话）—— 判定键是 (来源, 会话, 方法, 路径)",
+  "_note": "期望值按 deploy/config/config.example.yaml 的 16 条示例规则写；改规则请同步本文件。",
   "scenarios": [
     {
       "id": "probe-git-headless",
@@ -22,7 +25,8 @@
       },
       "expect": {
         "min_score": 0.8,
-        "signals_any": [
+        "max_score": 1.0,
+        "signals_all": [
           "ua-headless",
           "path-probe"
         ],
@@ -39,9 +43,26 @@
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
       },
       "expect": {
-        "min_score": 0.2,
-        "max_score": 0.5,
-        "signals_any": [
+        "min_score": 0.25,
+        "max_score": 0.35,
+        "signals_all": [
+          "path-probe"
+        ]
+      }
+    },
+    {
+      "id": "probe-git-head",
+      "group": "自动化探针",
+      "why": "同类文件的另一条路径（HEAD）",
+      "method": "GET",
+      "path": "/.git/HEAD",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "min_score": 0.25,
+        "max_score": 0.35,
+        "signals_all": [
           "path-probe"
         ]
       }
@@ -53,69 +74,221 @@
       "method": "GET",
       "path": "/",
       "headers": {
-        "User-Agent": "HeadlessChrome/120.0.0.0"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0 Safari/537.36"
       },
       "expect": {
-        "min_score": 0.5,
-        "max_score": 0.7,
-        "signals_any": [
+        "min_score": 0.55,
+        "max_score": 0.65,
+        "signals_all": [
           "ua-headless"
         ]
       }
     },
     {
-      "id": "normal-home-firefox",
-      "group": "正常用户",
-      "why": "对照组：正常浏览器访问首页不应得分",
+      "id": "probe-gitignore",
+      "group": "规则精度",
+      "why": "合法静态文件 `/.gitignore` 被前缀规则 `/.git` 误伤",
+      "method": "GET",
+      "path": "/.gitignore",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "gap": {
+          "kind": "精度",
+          "why": "前缀匹配只看字符串开头，`/.gitignore` 被当成源码目录探测",
+          "close": "改为路径段边界匹配（或 equals 具体文件），并在配置规范里写明前缀语义"
+        }
+      }
+    },
+    {
+      "id": "probe-git-prefixed",
+      "group": "规则精度",
+      "why": "前缀绕过：`/static/../.git/config` 不以 `/.git` 开头",
+      "method": "GET",
+      "path": "/static/../.git/config",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "gap": {
+          "kind": "精度",
+          "why": "未归一化就匹配，加一层无害前缀即可绕过",
+          "close": "对 path 归一化（去 `..`、合并重复斜杠）后再匹配；需评估代价"
+        }
+      }
+    },
+    {
+      "id": "scanner-sqlmap",
+      "group": "扫描器指纹",
+      "why": "SQL 注入扫描器 UA",
+      "method": "GET",
+      "path": "/login?id=1",
+      "headers": {
+        "User-Agent": "sqlmap/1.7#stable (https://sqlmap.org)"
+      },
+      "expect": {
+        "min_score": 0.65,
+        "max_score": 0.75,
+        "signals_all": [
+          "ua-sqlmap"
+        ]
+      }
+    },
+    {
+      "id": "scanner-nuclei",
+      "group": "扫描器指纹",
+      "why": "Nuclei：UA + 敏感端点叠加（触顶 1.0）",
+      "method": "GET",
+      "path": "/actuator/env",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (compatible; Nuclei - Open-source project; https://nuclei.projectdiscovery.io)"
+      },
+      "expect": {
+        "min_score": 0.95,
+        "max_score": 1.0,
+        "signals_all": [
+          "ua-nuclei",
+          "path-actuator"
+        ]
+      }
+    },
+    {
+      "id": "scanner-nikto",
+      "group": "扫描器指纹",
+      "why": "Nikto 目录扫描",
+      "method": "GET",
+      "path": "/cgi-bin/",
+      "headers": {
+        "User-Agent": "Mozilla/5.00 (Nikto/2.5.0)"
+      },
+      "expect": {
+        "min_score": 0.55,
+        "max_score": 0.65,
+        "signals_all": [
+          "ua-nikto"
+        ]
+      }
+    },
+    {
+      "id": "scanner-masscan",
+      "group": "扫描器指纹",
+      "why": "masscan 扫描",
       "method": "GET",
       "path": "/",
       "headers": {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+        "User-Agent": "Mozilla/5.0 (compatible; masscan/1.3)"
       },
       "expect": {
-        "max_score": 0.1,
-        "action": "route_origin"
+        "min_score": 0.45,
+        "max_score": 0.55,
+        "signals_all": [
+          "ua-masscan"
+        ]
       }
     },
     {
-      "id": "normal-api-safari",
-      "group": "正常用户",
-      "why": "对照组：正常接口调用",
+      "id": "scanner-script-client",
+      "group": "扫描器指纹",
+      "why": "弱信号：脚本客户端（单独出现不应触发处置）",
       "method": "GET",
       "path": "/api/items",
       "headers": {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"
+        "User-Agent": "python-requests/2.31.0"
       },
       "expect": {
-        "max_score": 0.1
+        "min_score": 0.15,
+        "max_score": 0.25,
+        "signals_all": [
+          "ua-script-client"
+        ]
       }
     },
     {
-      "id": "env-probe",
-      "group": "敏感文件探测",
-      "why": "示例规则只覆盖 /.git 前缀；这条用于人工观察（要覆盖请在配置里加规则）",
+      "id": "endpoint-env",
+      "group": "敏感端点",
+      "why": "`.env` 环境变量文件探测",
       "method": "GET",
       "path": "/.env",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "observe_only": true
+        "min_score": 0.45,
+        "max_score": 0.55,
+        "signals_all": [
+          "path-env"
+        ]
       }
     },
     {
-      "id": "wp-login-brute",
-      "group": "凭证爆破",
-      "why": "POST 表单爆破形态；演示站未实现 POST（会回 501），因此声明 501 可接受 —— 这里验的是引擎照常转发",
+      "id": "endpoint-svn",
+      "group": "敏感端点",
+      "why": "`.svn` 版本库探测",
+      "method": "GET",
+      "path": "/.svn/entries",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "min_score": 0.35,
+        "max_score": 0.45,
+        "signals_all": [
+          "path-svn"
+        ]
+      }
+    },
+    {
+      "id": "endpoint-aws-credentials",
+      "group": "敏感端点",
+      "why": "云凭证路径（contains，含子目录）",
+      "method": "GET",
+      "path": "/app/.aws/credentials",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "min_score": 0.55,
+        "max_score": 0.65,
+        "signals_all": [
+          "path-aws-credentials"
+        ]
+      }
+    },
+    {
+      "id": "endpoint-admin",
+      "group": "敏感端点",
+      "why": "管理后台入口（正常 UA 也命中路径规则）",
+      "method": "GET",
+      "path": "/admin/login",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "expect": {
+        "min_score": 0.25,
+        "max_score": 0.35,
+        "signals_all": [
+          "path-admin"
+        ]
+      }
+    },
+    {
+      "id": "endpoint-wp-login",
+      "group": "敏感端点",
+      "why": "WordPress 登录端点（POST 表单）",
       "method": "POST",
       "path": "/wp-login.php",
       "headers": {
-        "User-Agent": "python-requests/2.31.0",
-        "Content-Type": "application/x-www-form-urlencoded"
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
       },
       "body": "log=admin&pwd=admin&wp-submit=Log+In",
       "expect": {
-        "observe_only": true,
+        "min_score": 0.45,
+        "max_score": 0.55,
+        "signals_all": [
+          "path-wp-login"
+        ],
         "status_in": [
           200,
           501
@@ -123,42 +296,275 @@
       }
     },
     {
-      "id": "sqli-admin",
-      "group": "注入尝试",
-      "why": "SQLi 形态（注意：查询串会进 path 字段）；示例规则未覆盖，人工观察",
-      "method": "GET",
-      "path": "/admin?id=1%27%20OR%201%3D1--",
-      "headers": {
-        "User-Agent": "sqlmap/1.7#stable (https://sqlmap.org)"
-      },
-      "expect": {
-        "observe_only": true
-      }
-    },
-    {
-      "id": "path-traversal",
-      "group": "注入尝试",
-      "why": "路径穿越；注意客户端/上游可能已做归一化，观察实际 path",
+      "id": "injection-traversal-plain",
+      "group": "规则精度",
+      "why": "验证查询串不可见这一缺口（载荷在 query，不在 path）",
       "method": "GET",
       "path": "/download?file=../../etc/passwd",
       "headers": {
-        "User-Agent": "Mozilla/5.0 (compatible; masscan/1.3)"
+        "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "observe_only": true
+        "gap": {
+          "kind": "未覆盖",
+          "why": "载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的穿越/SQLi 完全不可见",
+          "close": "给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）"
+        }
       }
     },
     {
-      "id": "actuator-env",
-      "group": "敏感端点扫描",
-      "why": "Spring Actuator 扫描形态；示例规则未覆盖，人工观察",
+      "id": "injection-traversal-encoded",
+      "group": "规则精度",
+      "why": "URL 编码穿越（`%2e%2e%2f`）绕过字符串匹配",
       "method": "GET",
-      "path": "/actuator/env",
+      "path": "/download?file=%2e%2e%2f%2e%2e%2fetc%2fpasswd",
       "headers": {
-        "User-Agent": "Mozilla/5.0 (compatible; Nuclei - Open-source project; https://nuclei.projectdiscovery.io)"
+        "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "observe_only": true
+        "gap": {
+          "kind": "精度",
+          "why": "规则匹配原始路径字符串，编码后不命中",
+          "close": "匹配前解码/归一化 query（注意解码代价与幂等）"
+        }
+      }
+    },
+    {
+      "id": "injection-sqli-union",
+      "group": "规则精度",
+      "why": "验证查询串不可见这一缺口（载荷在 query，不在 path）",
+      "method": "GET",
+      "path": "/search?q=union+select",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "gap": {
+          "kind": "未覆盖",
+          "why": "载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的注入完全不可见",
+          "close": "给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）"
+        }
+      }
+    },
+    {
+      "id": "injection-sqli-encoded",
+      "group": "规则精度",
+      "why": "`union%20select`（百分号编码空格）绕过",
+      "method": "GET",
+      "path": "/search?q=union%20select",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "gap": {
+          "kind": "精度",
+          "why": "同上：编码形式不被字符串规则命中",
+          "close": "同 encoded-traversal"
+        }
+      }
+    },
+    {
+      "id": "method-delete",
+      "group": "破坏性方法",
+      "why": "DELETE 已建模；演示站未实现 DELETE（501 是业务自己的行为，非引擎问题）",
+      "method": "DELETE",
+      "path": "/api/items/1",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "expect": {
+        "min_score": 0.45,
+        "max_score": 0.55,
+        "signals_all": [
+          "method-destructive"
+        ],
+        "status_in": [
+          200,
+          501
+        ]
+      }
+    },
+    {
+      "id": "method-put",
+      "group": "规则精度",
+      "why": "PUT 未建模：同样破坏性却零信号",
+      "method": "PUT",
+      "path": "/api/items/1",
+      "headers": {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "body": "{\"name\":\"x\"}",
+      "expect": {
+        "status_in": [
+          200,
+          501
+        ],
+        "gap": {
+          "kind": "未覆盖",
+          "why": "示例规则只登记 DELETE，PUT/PATCH 未建模（演示站对两者都回 501，属业务行为）",
+          "close": "按业务语义补齐方法维度规则或给出推荐基线集"
+        }
+      }
+    },
+    {
+      "id": "session-reuse",
+      "group": "会话与缓存",
+      "why": "同会话同路径第二次应**复用**判定（ST-10）",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0 Safari/537.36"
+      },
+      "session": "shared",
+      "expect": {
+        "min_score": 0.8,
+        "max_score": 1.0,
+        "same_decision_as_previous": true
+      }
+    },
+    {
+      "id": "session-distinct",
+      "group": "会话与缓存",
+      "why": "换会话即换判定键：两次应得**不同**判定",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) HeadlessChrome/120.0.0.0 Safari/537.36"
+      },
+      "session": "unique",
+      "expect": {
+        "min_score": 0.8,
+        "max_score": 1.0,
+        "distinct_decisions": true
+      }
+    },
+    {
+      "id": "whitelist-monitoring",
+      "group": "白名单",
+      "why": "监控探针应在引流判定前放行（INT-25）",
+      "method": "GET",
+      "path": "/healthz",
+      "headers": {
+        "User-Agent": "Prometheus/2.45.0"
+      },
+      "expect": {
+        "gap": {
+          "kind": "未实现",
+          "why": "配置的 whitelist 段本期只解析与校验、**不消费**（配置注释已写明）",
+          "close": "在 director 引流判定前接入白名单（来源网段 / UA / 路径前缀）"
+        }
+      }
+    },
+    {
+      "id": "normal-firefox-home",
+      "group": "正常对照",
+      "why": "正常浏览器访问首页：零信号零分",
+      "method": "GET",
+      "path": "/",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "expect": {
+        "max_score": 0.05,
+        "action": "route_origin"
+      }
+    },
+    {
+      "id": "normal-safari-api",
+      "group": "正常对照",
+      "why": "正常接口调用",
+      "method": "GET",
+      "path": "/api/items",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15"
+      },
+      "expect": {
+        "max_score": 0.05
+      }
+    },
+    {
+      "id": "normal-static-asset",
+      "group": "正常对照",
+      "why": "静态资源（常见误伤面）",
+      "method": "GET",
+      "path": "/assets/app.js",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+      },
+      "expect": {
+        "max_score": 0.05
+      }
+    },
+    {
+      "id": "normal-chrome-css",
+      "group": "正常对照",
+      "why": "静态资源 + 查询串",
+      "method": "GET",
+      "path": "/assets/app.css?v=120",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+      },
+      "expect": {
+        "max_score": 0.05
+      }
+    },
+    {
+      "id": "boundary-long-ua",
+      "group": "边界",
+      "why": "超长 UA（8KB）不应导致业务异常",
+      "method": "GET",
+      "path": "/",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "expect": {
+        "max_score": 0.05
+      }
+    },
+    {
+      "id": "boundary-long-path",
+      "group": "边界",
+      "why": "超长路径（2KB）不应导致业务异常",
+      "method": "GET",
+      "path": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "max_score": 0.05,
+        "status_in": [
+          200,
+          404
+        ]
+      }
+    },
+    {
+      "id": "boundary-empty-ua",
+      "group": "边界",
+      "why": "空 UA（部分工具会省略）",
+      "method": "GET",
+      "path": "/",
+      "headers": {},
+      "expect": {
+        "max_score": 0.05
+      }
+    },
+    {
+      "id": "boundary-unicode-path",
+      "group": "边界",
+      "why": "非 ASCII 路径不应导致 500",
+      "method": "GET",
+      "path": "/搜索/商品",
+      "headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "expect": {
+        "max_score": 0.05,
+        "status_in": [
+          200,
+          404
+        ]
       }
     }
   ]

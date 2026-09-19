@@ -15,6 +15,7 @@
 | 看日志（**不跟随**） | `scripts/shen.sh logs core` | 取尾部 80 行后立即返回 |
 | 本地进程起（开发） | `scripts/shen.sh local` | 不用 Docker；Go/Python 直接跑 |
 | 停掉 | `scripts/shen.sh down` | 删容器，保留镜像 |
+| **重启（整栈）** | `scripts/shen.sh restart` | ⚠️ **禁止单独重启 core**（它是网络命名空间持有者，见 §3） |
 
 `docker logs -f` 与 `make docker-logs` **会一直挂着**（不返回）：脚本与自动化里用 `scripts/shen.sh logs` 或 `make docker-log`。
 
@@ -116,7 +117,11 @@ scripts/shen.sh traffic                     # 全部场景（= make traffic）
 scripts/shen.sh traffic --group 自动化探针   # 只跑一组
 scripts/shen.sh traffic --only probe-git-headless --repeat 3
 scripts/shen.sh traffic --json              # 机器可读
+scripts/shen.sh traffic --check-l4          # 顺带核对 L4 结论与证据引用（AR-12）
 ```
+
+结果分三段：断言（通过/失败）· **已知缺口**（只打印、不算失败）· L4 核对。
+**当前一次全量结果与缺口清单**（含"哪些在当前环境验不了"）见 [`functional-verification.md`](functional-verification.md)。
 
 场景是**声明式**的（[`../../scripts/traffic/scenarios.json`](../../scripts/traffic/scenarios.json)）：每条 = 一次请求 + 期望（分数上下界 / 命中信号 / 决策）。
 核对走**观测面**（控制台 `/api/flow`），因为判定响应禁止回显分值（`ST-7`）。所有场景**额外**检查两件事：
@@ -144,6 +149,7 @@ scripts/shen.sh traffic --json              # 机器可读
 | `make dev` 报「缺 L4 环境」 | 没建 Python 环境（或被移动） | `make pyenv`（建在 `analysis/.venv`） |
 | 构建卡在 `go mod download` | 网络访问不了 Go 模块代理 | 本仓库依赖已 **vendor 入库**，正常构建**不需要网络**；若仍卡，见 §4.2 |
 | 容器起不来且提示 `no space left` | Docker 磁盘满 | `docker system prune`（会删未使用镜像/缓存） |
+| **容器全 `Up` 但控制台/入口端口不通（HTTP 000）** | 单独重启过 `core`：它是网络命名空间持有者，兄弟服务还挂在旧命名空间 | `scripts/shen.sh restart`（整栈重建）。⚠️ 永远不要 `docker compose restart core` |
 | `traffic` 报「控制台没找到这条判定」 | 适配器上报延迟 / 判定被复用 / 核心没起 | 先 `status`；判定复用见 §2.1（换会话而非只换查询串） |
 | `traffic` 报某个场景分数不符 | 配置里的规则被改过 | 期望值写在 `scenarios.json`，改规则要同步改期望（见文件顶部说明） |
 

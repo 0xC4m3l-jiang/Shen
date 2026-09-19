@@ -51,12 +51,59 @@ policy:
 # ★ 默认给两条**可直接观察**的示例规则：没有规则时一切判定都是 0 分 0 信号，
 #   人工测试会「什么都看不见」。默认影子模式（INT-11）下它们只影响分数与信号，不改变处置。
 rules:
+  # ① 自动化指纹（UA）
   - id: "ua-headless"
     weight: 0.6
     match: {field: "user_agent", op: "contains", value: "HeadlessChrome"}
+  - id: "ua-sqlmap"
+    weight: 0.7
+    match: {field: "user_agent", op: "contains", value: "sqlmap"}
+  - id: "ua-nuclei"
+    weight: 0.6
+    match: {field: "user_agent", op: "contains", value: "Nuclei"}
+  - id: "ua-nikto"
+    weight: 0.6
+    match: {field: "user_agent", op: "contains", value: "Nikto"}
+  - id: "ua-masscan"
+    weight: 0.5
+    match: {field: "user_agent", op: "contains", value: "masscan"}
+  - id: "ua-script-client"
+    weight: 0.2
+    match: {field: "user_agent", op: "contains", value: "python-requests"}
+  # ② 敏感文件与端点（路径）
   - id: "path-probe"
     weight: 0.3
     match: {field: "path", op: "prefix", value: "/.git"}
+  - id: "path-env"
+    weight: 0.5
+    match: {field: "path", op: "prefix", value: "/.env"}
+  - id: "path-svn"
+    weight: 0.4
+    match: {field: "path", op: "prefix", value: "/.svn"}
+  - id: "path-aws-credentials"
+    weight: 0.6
+    match: {field: "path", op: "contains", value: "/.aws/credentials"}
+  - id: "path-admin"
+    weight: 0.3
+    match: {field: "path", op: "prefix", value: "/admin"}
+  - id: "path-actuator"
+    weight: 0.4
+    match: {field: "path", op: "prefix", value: "/actuator"}
+  - id: "path-wp-login"
+    weight: 0.5
+    match: {field: "path", op: "prefix", value: "/wp-login.php"}
+  # ③ 注入与穿越形态（注意：按**原始路径字符串**匹配 —— 编码或改写即可绕过，
+  #    真实部署应先归一化/解码再匹配，见 docs/spec/config.md §2.4 与运行手册的"规则精度"一节）
+  - id: "path-traversal"
+    weight: 0.7
+    match: {field: "path", op: "contains", value: "../"}
+  - id: "path-sqli-union"
+    weight: 0.8
+    match: {field: "path", op: "contains", value: "union+select"}
+  # ④ 破坏性方法
+  - id: "method-destructive"
+    weight: 0.5
+    match: {field: "method", op: "equals", value: "DELETE"}
 
 # 白名单（INT-25 预留）—— 本期只解析与校验，不消费。
 # 消费方是 director 的引流判定前置：内部 IP / 健康检查 / 监控探针必须在引流判定前放行。

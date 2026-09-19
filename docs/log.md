@@ -9,6 +9,40 @@
 
 ---
 
+## 2026-09-19 · 全场景伪造流量 + 整体功能验证（含缺口清单）
+
+**做了什么**：用户要「不同场景的伪造流量做整体功能验证」，并「跑一次测试脚本确认整体逻辑、帮我找到功能欠缺」。逐条落地：
+① **场景集 10 → 33 条**（九个分组）：自动化探针 · 扫描器指纹 · 敏感端点 · 注入与穿越 · 破坏性方法 · 会话与缓存 · 白名单 · 正常对照（含静态资源）· 边界（8KB UA / 2KB 路径 / 空 UA / 非 ASCII 路径）。
+② **示例规则 2 → 16 条**（扫描器指纹 sqlmap/Nuclei/Nikto/masscan/脚本客户端 · 敏感路径 .env/.svn/.aws/credentials/admin/actuator/wp-login · 注入标记 · 方法维度）—— 规则太少时绝大多数流量只能"观察"，验证是浅的；示例规则是可替换的样例（数据，`ST-24`）。
+③ **脚本新增四类语义**：`gap`（已知缺口：分类 + 实测证据 + 怎么关，**只打印不算失败**）· 场景级 `session: shared/unique` + `same_decision_as_previous`/`distinct_decisions`（验证 `ST-10` 判定复用）· 响应**体**也查 `ST-7`（不得出现命中信号名与判定 id）· `--check-l4`（结论存在性 + 证据引用必须真实存在，`AR-12`）。
+④ **跑通一次全量验证**：断言 **27/27** 通过 · 缺口 **8** 条 · 出口卫生 **0** 问题；L4 核对：结论 2 条（接受 1）· 遥测已知判定 34 个 · **无悬空证据引用**（`AR-12` 成立）；`ST-10` 两个方向都验到（同会话复用同一 `decision_id`、换会话得不同 `decision_id`）；正常对照与边界全 0 分且业务 200。
+⑤ **发现 2 处真实能力缺口**（本轮只登记不修）：**查询串不参与判定** —— 判定用的 `path` 字段不含 query，所以 /download?file=../../etc/passwd、/search?q=union+select 都是 0 分 0 信号（SQLi/穿越这类最主流的入口默认不判）；**一次 URL 编码即绕过**字符串规则（`%2e%2e%2f`、`union%20select`）。另有 4 条精度/未覆盖缺口（前缀误伤 `/.gitignore`、前缀可被 /static/../.git/config 绕过、PUT/PATCH 未建模、`severity` 恒为 none 导致告警永远 0）与 1 条未实现（白名单 `INT-25` 未消费）。
+⑥ **发现并修掉一个运维陷阱**：`core` 是这套 compose 的**网络命名空间持有者**，单独 `docker compose restart core` 会让兄弟服务留在旧命名空间 ⇒ 容器全 `Up` 但宿主端口 **HTTP 000**。新增 `scripts/shen.sh restart`（整栈重建），并写进运行手册故障表与验证文档。
+⑦ **跑测过程中修掉 3 个脚本自身 bug**：共享会话每轮都随机（复用断言永远测不到）· 第一轮就断言"与上一条比较" · 非 ASCII 路径直接把请求发崩（改按 percent-encoding 发送、按解码形态匹配）。
+⑧ **文档**：新增 `docs/ops/functional-verification.md`（验到了什么 · 缺口清单含怎么关 · **当前环境验不了什么**及原因 · 运维陷阱 · 方法论边界）；`docs/spec/config.md` 写出**匹配语义的实测行为**（`prefix` 纯字符串、`path` 不含查询串、分数 1.0 截断）；`docs/ops/runbook.md` 与 `scripts/traffic/README.md` 同步。
+
+**改了哪些文件**：`scripts/traffic/scenarios.json` · `scripts/traffic/send.py` · `scripts/traffic/README.md` · `deploy/config/config.example.yaml` ·
+`scripts/shen.sh` · `docs/ops/functional-verification.md`（新增）· `docs/ops/runbook.md` · `docs/spec/config.md`
+
+**对应文档**：[`docs/plans/2026-09-19-traffic-scenarios-functional-verification.md`](docs/plans/2026-09-19-traffic-scenarios-functional-verification.md)（含追溯矩阵与审视 7 条）· [`docs/ops/functional-verification.md`](docs/ops/functional-verification.md)
+
+**验证**：`make gate` 通过；`scripts/shen.sh traffic --check-l4` 全量实跑。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 全量断言 | 全过 | ✅ 断言 27/27 通过 · 缺口 8 条 · 出口卫生 0 问题 |
+| 规则叠加与截断 | 触顶 1.0 | ✅ ua-nuclei 0.6 + path-actuator 0.4 = 1.00 |
+| 判定复用 ST-10 | 同会话同一判定 | ✅ session-reuse 两次同 decision_id（均 0.90） |
+| 换会话换判定 | 不同判定 | ✅ session-distinct 两个不同 decision_id |
+| 出口卫生 ST-7 | 不泄漏 | ✅ 响应头与响应体 0 命中 |
+| L4 一致性 AR-12 | 引用真实存在 | ✅ 结论 2 条（接受 1）· 已知判定 34 个 · 无悬空引用 |
+| 运维陷阱 | 修复后可用 | ✅ 单独重启 core 曾 HTTP 000；scripts/shen.sh restart 后 200 |
+
+**没做 / 遗留**：① **查询串不可见**（最高优先，需给观测加 query/raw_uri 字段）；② 一次 URL 编码即绕过（需匹配前归一化）；③ 前缀语义误伤与绕过；④ PUT/PATCH 未建模；⑤ 白名单 INT-25 未消费；⑥ `severity` 恒为 none ⇒ 告警永远 0（档位未定，设计已登记）；⑦ 期望值与示例规则手工同步；⑧ 改道/拦截/注入/诱饵/蜜罐/隔离/DNS/镜像/netpolicy 在当前栈**验不了**（原因与关法见功能验证文档 §3）。
+
+---
+
 ## 2026-09-19 · 目录与模块地图（README 与 docs 完整化）
 
 **做了什么**：用户要求「让我知道每个目录是做什么的、每个模块在哪个目录、对应什么能力、怎么和其他模块接入」。

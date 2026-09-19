@@ -1,0 +1,102 @@
+# 整体功能验证（怎么跑 · 验到了什么 · 还缺什么）
+
+> 命令：`scripts/shen.sh traffic`（= `make traffic`）· 场景定义：[`../../scripts/traffic/scenarios.json`](../../scripts/traffic/scenarios.json)
+> 场景怎么写、字段什么意思：[`../../scripts/traffic/README.md`](../../scripts/traffic/README.md)
+> 本文回答三件事：**验到了什么**（带证据）· **还缺什么**（缺口清单 + 怎么关）· **哪些在当前环境里根本验不了**。
+
+---
+
+## 1. 最近一次全量验证结果
+
+```console
+$ scripts/shen.sh traffic --check-l4
+断言 27/27 通过 · 观察 0 条 · 缺口 8 条 · 出口卫生问题 0 条
+
+── L4 结论核对（AR-12：引用必须真实存在）──
+  · 结论 6 条（接受 3）· 遥测里已知判定 135 个
+```
+
+分组结果（分数来自控制台 `/api/flow`，`ST-7` 禁止在响应里回显）：
+
+| 分组 | 场景 | 验到了什么 |
+| --- | --- | --- |
+| 自动化探针 | `probe-git-headless` **0.90**（`ua-headless`+`path-probe`）· `probe-git-normal-ua` **0.30** · `probe-git-head` 0.30 · `headless-home` 0.60 | 规则单独命中与叠加命中都对；无头浏览器 + 源码目录探测能同时出两个信号 |
+| 扫描器指纹 | `scanner-sqlmap` 0.70 · `nuclei` **1.00**（触顶截断）· `nikto` 0.60 · `masscan` 0.50 · `script-client` 0.20 | 指纹类规则生效；**分数在 1.0 处截断**（实测 `nuclei` 0.6+0.4） |
+| 敏感端点 | `/.env` 0.50 · `/.svn/entries` 0.40 · `/.aws/credentials`（子目录）0.60 · `/admin/login` 0.30 · `/wp-login.php` 0.50 | 前缀与 contains 两种算子都在工作；正常 UA 也能被路径规则命中 |
+| 破坏性方法 | `method-delete` 0.50 | 方法维度规则生效（演示站对 DELETE 回 501，属**业务自己**的行为，场景用 `status_in` 声明） |
+| 会话与缓存 | `session-reuse`（同会话两次 → **同一** `decision_id`）· `session-distinct`（换会话 → **不同** `decision_id`） | `ST-10` 判定缓存按 `(来源, 会话, 方法, 路径)` 复用，行为与文档一致 |
+| 正常对照 | 首页 / 接口 / 静态资源 ×2 全部 **0.00** | 四类正常流量零信号零分（误伤面检查） |
+| 边界 | 8KB UA · 2KB 路径 · 空 UA · 非 ASCII 路径 全部业务 200 且 0 分 | 极端输入不炸、不误判；非 ASCII 路径在控制台里存为**解码后**形态 |
+| 出口卫生 | 33 个场景全部检查响应头与响应体 | 无 `x-shen*` / `Via` / `Caddy`；响应体里**没有**命中信号名与判定 id（`ST-7`） |
+| L4 | 结论 6 条（接受 3）· 引用的证据全部真实存在 | `AR-12` 成立；`AR-14` 去重生效（135 个判定只产出 6 条结论） |
+
+---
+
+## 2. 缺口清单（设计有 / 该有，当前没做到）
+
+| # | 缺口 | 类别 | 实测证据 | 影响 | 怎么关 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | **查询串对判定不可见**：判定用的 `path` **不含** query，载荷放在参数里的攻击完全看不到 | 未覆盖 | `/download?file=../../etc/passwd` → **0 分 0 信号**；`/search?q=union+select` → 0 分 | SQLi / 穿越 / SSRF 等**最主流的入口**默认不判 | 给观测加 `query`（或 `raw_uri`）字段并允许规则匹配；落地后把这两条场景改回断言（`min_score` 0.65 / 0.75） |
+| 2 | **编码即可绕过**：规则匹配原始字符串，`%2e%2e%2f`、`union%20select` 都不命中 | 精度 | 两条编码场景均 0 分（同 #1 的编码面） | 对手只需一次 URL 编码就能过 | 匹配前对 path/query 做一次解码与归一化（注意代价与幂等，`AR-30` 只约束响应内容，不受影响） |
+| 3 | **前缀规则误伤合法文件**：`path-probe`（前缀 `/.git`）命中 `/.gitignore` | 精度 | `/.gitignore` → **0.30**（信号 `path-probe`） | 正常站点访问 `/.gitignore`（真实存在）会被当成探测 | 改为路径段边界匹配，或对具体文件用 `equals`；并在 [`../spec/config.md`](../spec/config.md) §2.4 写明前缀语义 |
+| 4 | **前缀规则可被前缀绕过**：`/static/../.git/config` 不以 `/.git` 开头 ⇒ `path-probe` 不命中 | 精度 | 该请求只被 `path-traversal` 抓到（**0.70**），`path-probe` 未命中 | 攻击者加一层无害前缀即可躲开路径规则 | 匹配前归一化路径（去 `..`、合并重复斜杠）；需评估与上游行为的一致性 |
+| 5 | **PUT / PATCH 未建模**：只登记了 DELETE | 未覆盖 | `PUT /api/items/1` → 0 分 0 信号 | 破坏性方法覆盖不全（写操作正是数据损失的入口） | 按业务语义补齐方法维度规则，或提供"推荐基线规则集" |
+| 6 | **白名单（`INT-25`）未消费**：配置里 `whitelist` 段只解析与校验 | 未实现 | 监控探针 `Prometheus/2.45.0` 访问 `/healthz` 被正常判定（0 分——只是因为没有对应规则，**不是**被放行） | 内部探针/健康检查将来一旦命中规则就会被引流（`NI-1` 风险） | 在 `director` 的引流判定**之前**接入白名单（来源网段 / UA / 路径前缀） |
+| 7 | **`severity` 恒为 `none`** ⇒ 控制台"告警"永远为 0 | 未实现（档位未定） | `analyze` 观测：所有判定 `severity=none`；控制台 `alerts: 0` | 没有"告警"这个可用信号，运营只能看分值 | 定档位（信息/低/中/高）并在 `director` 产出；这是设计里已登记的未决项 |
+
+> 缺口 #1/#2 是**同一根因的两个面**（query 不可见 + 字符串匹配），建议一起修。
+> 缺口 #3/#4 也是同一类（前缀语义），修的时候就该把 `docs/spec/config.md` 的说法写准。
+
+---
+
+## 3. 当前环境里**验不了**的东西（需要别的接入形态或非影子模式）
+
+| 能力 | 为什么验不了 | 怎么才能验 |
+| --- | --- | --- |
+| `route_mirage`（改道）· 注入 | 影子模式只观测（`INT-11`）且**没有登记幻境后端** ⇒ 所有改道都会回落业务（`NI-5`） | 非影子模式 + 在 `honeypots` 里登记一个可用后端；再加 `injects` 规则 |
+| `block`（拦截） | 同上；且阈值 `block: 0.95`，示例规则最高叠加恰好触顶 1.0 | 非影子模式 + 一条高分规则 |
+| 诱饵面 `decoy` | 示例配置里 `decoys.assets[].enabled: false`（默认关，`MD-25` observe-only） | 打开资产（仍须 observe-only） |
+| 蜜罐后端池 `honeypot` | 未登记后端（"只做入口，不实现具体蜜罐"） | 起一个真实蜜罐并把 `type/addr` 登记进配置 |
+| `isolation`（隔离短路） | 需要先命中"隔离"路径（当前处置未产出 block） | 非影子模式 + 隔离规则 |
+| ② DNS 引流 · ① 旁路镜像 · ④ Sidecar | 当前栈只起 ③ 前置形态 | 分别按 [`../integrate/business-onboarding.md`](../integrate/business-onboarding.md) 部署对应形态 |
+| L3 网络欺骗（Cilium/Tetragon） | 需要 K8s 集群 | 集群侧加载 [`../../deception/netpolicy/config/`](../../deception/netpolicy/config) 的声明式产物 |
+| 真实 LLM 路径（`AR-19`…`AR-21` 双阶段收尾） | 未注入模型后端（`UnconfiguredClient` 显式失败） | 部署侧注入 `AnalysisClient`；否则只跑确定性部分 |
+
+---
+
+## 4. 运维坑：**不要单独重启 `core`**
+
+`core` 是这套 compose 里**网络命名空间的持有者**（其它服务通过 `network_mode: service:core` 加入）。
+单独 `docker compose restart core` 会重建命名空间，兄弟服务仍挂在**旧**命名空间上 ⇒
+宿主端口映射指向新命名空间、里面没有监听者 ⇒ **控制台彻底不可达**（实测：HTTP 000，容器却显示 `Up`）。
+
+```sh
+scripts/shen.sh restart          # 正确做法：整栈重建（= up -d --force-recreate）
+docker compose -f deploy/docker/compose.yaml up -d --force-recreate   # 等价
+```
+
+排查顺序：`scripts/shen.sh status` → `scripts/shen.sh logs console` → 若"容器 Up 但端口不通"，先想命名空间。
+
+---
+
+## 5. 这套验证**覆盖不到**的方法论边界（诚实说明）
+
+1. **它验证的是"我们定义的行为"**，不是"攻击是否被真的骗到" —— 后者是欺骗有效性（`E2`/`E3` 类实验）的范畴；
+2. **场景是白盒期望**：期望值按当前示例规则算的，改规则要同步改场景，否则会假红/假绿；
+3. **没有并发与长稳**：不是压测，也不测内存/连接泄漏（`make bench` 与后续实验负责）；
+4. **没有 TLS 入口**：默认对明文入口发流量（TLS 归 L0，见 [`../background/decisions/0019-tls-termination-belongs-to-l0.md`](../background/decisions/0019-tls-termination-belongs-to-l0.md)）。
+
+---
+
+## 6. 怎么把它用起来
+
+```sh
+scripts/shen.sh up                      # 起栈
+scripts/shen.sh traffic                 # 全量验证（看断言 + 缺口两段）
+scripts/shen.sh traffic --group 扫描器指纹
+scripts/shen.sh traffic --only session-reuse
+scripts/shen.sh traffic --json > /tmp/verify.json     # 给自动化/留档
+```
+
+**加一条自己的场景**：在 `scenarios.json` 里照格式加一条（`id/group/method/path/headers/expect`），
+先写成 `observe_only` 看引擎实际怎么判，再收紧成断言。

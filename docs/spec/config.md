@@ -106,6 +106,15 @@
 | `rules[].match` | object | ✅ | 见下 |
 | `rules[].match.field` | enum | ✅ | `user_agent` · `path` · `method` · `source_ip` · `tls_fingerprint` |
 | `rules[].match.op` | enum | ✅ | `equals` · `prefix` · `contains` |
+
+> **匹配语义的实测行为（写规则前必须知道；证据见 [`../ops/functional-verification.md`](../ops/functional-verification.md)）**：
+>
+> | 项 | 实测行为 | 后果 |
+> | --- | --- | --- |
+> | `prefix` | **纯字符串前缀**，不做路径段归一化 | `/.git` 会命中合法的 `/.gitignore`（误伤）；`/static/../.git/config` 不以 `/.git` 开头 ⇒ 不命中（可被前缀绕过） |
+> | `contains` | 子串包含，**按原始字符串** | `%2e%2e%2f` 不会被 `contains "../"` 命中（一次 URL 编码即绕过） |
+> | `path` 字段取值 | **不含查询串**（`/search?q=union+select` 的 `path` 是 `/search`） | 载荷放在查询参数里的注入/穿越**不参与判定**（当前最大的一处能力缺口） |
+> | 分数 | 命中权重求和后**在 1.0 处截断** | `ua-nuclei` 0.6 + `path-actuator` 0.4 = 1.00（触顶，不再累加） |
 | `rules[].match.value` | string | ✅ | 非空 |
 
 元素的**禁止**出现上述之外的键。
