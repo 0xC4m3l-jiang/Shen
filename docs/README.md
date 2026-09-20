@@ -62,7 +62,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | [`plans/`](plans/README.md) | **实施计划 = 变更包**。**已实现的归档**为一行（[`plans/ARCHIVE.md`](plans/ARCHIVE.md)），本目录只留未实现的；模板 [`_change-package.md`](plans/_change-package.md) | ✅ 现行 0 份 · 归档 53 份 |
 | [`progress.md`](progress.md) | **模块规划进度**：全部模块清单 · 实现方式 · 阶段状态 —— 完成度的**唯一维护处**，与 [`log.md`](log.md) 同在 `docs/` 供人工审计对照 | ✅ 已建；每轮开发落地后同步更新 |
 | [`log.md`](log.md) | **变更日志**：每轮开发追加一条（做了什么 / 改了哪些文件 / 对应文档 / 验证 / 证据 / 遗留） | ✅ 最新在最上面；`make trace` 核最新条目的形状 |
-| [`kb/`](kb/README.md) | **功能知识库**：速览与能力定位 · FAQ · 已知问题（含现行/历史 · 已移除技能）· 开发链路 | ✅ 5 份；新人从 [`kb/quick-tour.md`](kb/quick-tour.md) 开始 |
+| [`kb/`](kb/README.md) | **功能知识库**：速览与能力定位 · FAQ · 已知问题（含现行/历史 · 已移除技能）· 开发链路 · **AI 能力详解** | ✅ 6 份；新人从 [`kb/quick-tour.md`](kb/quick-tour.md) 开始 |
 | [`background/`](background/README.md) | **背景材料**：ADR · 讨论稿 · 调研 | ✅ 3 子目录 / 19 份 |
 | [`../.pi/skills/`](../.pi/skills/) | 本项目的 Agent 工作流**实例化**（通用规范在全局 `~/.pi/agent/skills/`）—— 开工前必须加载 `dev-loop`（全局通用）+ [`dev-loop-project`](../.pi/skills/dev-loop-project/SKILL.md)（本项目实例化）；另有 [`evidence-and-decisions`](../.pi/skills/evidence-and-decisions/SKILL.md)（调研/决策/基准）与 `threat-model` | ✅ 3 个（全部自建 · 纯 Markdown，**无可执行代码**） |
 | [`../.pi/devloop.md`](../.pi/devloop.md) | **项目适配面**：文档路径 / 验证命令 / 追溯工具 / 编号体系（通用技能 `dev-loop` §1 的字段） | ✅ 已建 |

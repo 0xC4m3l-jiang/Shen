@@ -9,6 +9,84 @@
 
 ---
 
+## 2026-09-20 · AI 能力（模型能力）详解文档：7 个能力逐个写清 + 16 条优化候选 + 6 条关键发现
+
+**做了什么**：把散在三处的「AI 能力」一次性写全，交用户评审。
+
+用户要的是「评审这套 AI 能力设计是否合理、哪些功能点要优化」，但此前**没有任何一份文档把全局写出来**：
+能力分布在 `analysis/llm/`（纪律层）· `analysis/aicap/`（出口）· `analysis/intent/` `analysis/chain/` `analysis/strategy/`（消费者）三处，
+彼此只有零星引用。新增 [`docs/kb/ai-capabilities.md`](kb/ai-capabilities.md)（参考层），内容：
+
+1. **一页速览**：7 个能力 × 8 列（位置 / 今天靠什么产出 / **模型接了吗** / 产物 / 消费者 / 状态）；
+   一句结论：**今天没有任何一条生产链路在调模型**；
+2. **逐个能力详解**：输入字段表 · 输出契约 · 提示词 · 护栏与**本能力填的参数** · 确定性要求 · 失败语义 · 怎么验；
+3. **模型后端 8 条硬约束**（每条带规则依据 + 判据）与**接缝三步**（接模型只换 `produce`）；
+4. **16 条优化点候选**（分五组：能力覆盖 / 质量与多样性 / 安全与护栏 / 工程与运维 / 契约与可验证），每条给现状/问题/候选/代价；
+5. **6 条关键发现**（读代码发现的，都附命令级证据）。
+
+**关键发现里最重的三条**：① **两套提示词系统** —— `analysis/llm/resources/prompts/` 的
+intent/chain/strategy/finalize 四个模板**在生产里一次都没被渲染过**（只被单测渲染），也不在 `aicap` 的 kind 注册表里；
+② `llm.prompts.assert_startup` **不在生产启动路径上**（`AR-24` 对那四个模板只有测试保障）；
+③ `analysis/llm/twophase.py` 的 `run_two_phase` **没有生产调用方**（双阶段收尾是骨架）。
+另有两条真缺陷候选：`intent` 的越界类别**静默回落**成 `reconnaissance`（schema 未守住五类闭集），
+以及 `strategy` 在演示栈里因**事件不带 `backend`** 而恒被拒（设计内 fail-closed，不是 bug）。
+
+**本轮是纯文档轮（M 档）：不动一行代码、不引任何依赖、不改 `docs/design/`**。
+`AR-33` 的措辞放宽仍是 [ADR-0025](background/decisions/0025-generic-guardrailed-outlet.md) 的 🟡 提案（待用户确认）。
+
+**改了哪些文件**：新增 `docs/kb/ai-capabilities.md` · `docs/plans/2026-09-20-ai-capability-detail.md`；
+修改 `docs/kb/README.md`（索引 + 最快路径）· `docs/kb/capabilities.md`（§1.5 指针）· `docs/README.md`（地图 + 份数 5→6）·
+`docs/modules/ai-capability.md`（§1 指针）· `docs/kb/known-issues.md`（新增 `K-27`：日志里反引号内的含斜杠串会被当成路径核）· `docs/log.md`。
+
+**对应文档**：`docs/plans/2026-09-20-ai-capability-detail.md`（含追溯矩阵、场景表与审视 8 条）·
+`docs/kb/ai-capabilities.md`（主体）· `docs/spec/ai-contract.md`（护栏与接入步骤的权威处，本文只指向）。
+
+**验证**：`make gate` 通过（含 `make trace` · `make archcheck` 的 `AR-33`/`MD-4` 项 · 79 例 pytest）。
+**独立评审**（冷上下文 `reviewer`，只看产物与 diff）：**有异议 5 组，已全部修完** ——
+① 事实错误 4 处（`CATEGORIES` 闭集不成立 · chain 多写了 `conclusion` · 一条证据行复现不出 · 发现 4 成因写错）；
+② 变更包证据段未填 + 日志缺本轮条目（P1）；③ 把待确认的 `AR-33` 放宽写成硬约束 + 一处坏交叉引用；
+④ 护栏表与 `docs/spec/ai-contract.md` 逐行同构、状态列与 `docs/kb/capabilities.md` 重复（两处漂移风险）；⑤ 一条证据挂错工具。
+其中①的第一条被**升级成新发现 6 与优化点 17**（它本身是真缺陷）。
+
+**证据**：
+
+```console
+$ make gate
+架构检查通过。
+  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）
+追溯检查通过。
+79 passed in 0.11s
+门禁通过。
+
+# 「没有任何生产链路在调模型」的可核证据
+$ grep -rn "AnalysisClient\|model_seam\|UnconfiguredClient" analysis/ --include=*.py \
+    | grep -v "/tests/\|aicap/\|llm/"
+(无输出)
+
+# 「四个模板只被测试渲染」：生产里渲染提示词的只有 aicap
+$ grep -rn "prompts.render\|assert_startup" analysis/ --include=*.py | grep -v "/tests/"
+aicap/service.py:135:    prompt = guardrail_prompts.render(
+aicap/guardrail/prompts.py:85:def assert_startup(   ← aicap 的（已在生产路径上）
+llm/prompts.py:82:def assert_startup(   ← llm 的（定义在此，生产无调用方）
+
+# 「双阶段收尾无生产调用方」
+$ grep -rln "run_two_phase" analysis/ --include=*.py
+analysis/llm/twophase.py
+analysis/tests/test_llm_discipline.py
+
+# 「注册表只登记了 content」
+$ grep -n "return {" -A1 analysis/aicap/tasks/_registry.py
+130:    return {CONTENT_TASK.kind: CONTENT_TASK}
+```
+
+**没做 / 遗留**：① 16 条优化点**全部未定**（本轮交付的目的就是让用户评审）；
+② `AR-33` 措辞仍未放宽（待确认）；③ 动态沙箱仍未立项；
+④ 新发现的 `intent` 越界静默回落**未修代码**（建议单开 S 档小轮）；
+⑤ 两处 `assert_startup` 未合并、`run_two_phase` 未接生产 —— 都要等「L4 接不接模型」定下来。
+去向：`docs/kb/ai-capabilities.md` §8/§10 与 `docs/plans/2026-09-20-ai-capability-detail.md` §7。
+
+---
+
 ## 2026-09-20 · AI 生成出口解耦：内核不认识「内容」，接入新消费方零改内核
 
 **做了什么**：把 `ai-capability` 从「欺骗内容生成器」改成「**受护栏的结构化生成出口**」。
