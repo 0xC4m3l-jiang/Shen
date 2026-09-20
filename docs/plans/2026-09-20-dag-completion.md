@@ -120,6 +120,7 @@ $ make gate               → 门禁通过。
 | 3 | 标签 `json:"-"` 让 decision_id 被丢弃 | 真缺陷（我的补丁曾"报告成功"但没生效） | 单测 `decision_id 丢了` | 改标签 + 用例 | ✅ |
 | 4 | 常量用枚举名，载荷用设计术语 | 真缺陷（标签恒"放行"、告警恒 0） | `intent=route_mirage` vs 节点"放行" | 改常量 + 真实载荷用例 | ✅ |
 | 5 | 测试自己用枚举名构造输入 ⇒ 自洽但错 | 测试设计缺陷 | 上述 #4 未被测试发现 | 新增**真实载荷**用例 | ✅ |
+| 8 | `executed=mirage` 一度"验不到"：并非功能缺失，而是**部分重建**导致 core 与兄弟服务不在同一命名空间（`connection refused`） | 环境缺陷（K-21 的精确成因） | 代理日志 `dial tcp 127.0.0.1:19080: connection refused`，而 business 容器自连同一地址为 0（通） | 整栈一起重建后**实测通过**；把"部分重建"写进 K-21 与观测文档 | ✅ `幻境后端[mirage]` 出现在链路上 |
 | 7 | 判定失败的请求按 decision_id 配上了**旧判定** ⇒ 图上"分值 0.90 + failopen" | 真缺陷（跨尝试错误配对） | 终验：`intent=route_origin` 却 `score=0.9` + `executed=failopen` | failopen 不参与 join + 用例 `TestFailOpenDoesNotInheritStaleDecision` | ✅ 修复后 `intent=(未判定) score=0` |
 | 6 | 我此前用 `--build ... >/dev/null` 掩盖了构建是否生效 | 自伤（诊断成本） | 复验时发现跑的是旧镜像 | 改为显式 `build` 并看输出 | ✅ |
 

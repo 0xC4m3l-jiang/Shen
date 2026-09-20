@@ -94,5 +94,13 @@ docker compose -f deploy/docker/compose.yaml down && \
 
 ⚠️ 该覆盖文件会让引擎**真的执行改道**（非影子），只在本机验证环境用；真实部署把后端地址换成蜜罐。
 
-**实测结论（本机）**：核心侧的改道意图（`route_mirage` + 后端名）与 `origin_fallback`（`NI-5` 回落，图上多一跳"幻境不可用"）**已端到端验证**；
-`executed=mirage`（真正进入幻境后端）**未观测到** —— 本机没有可达的蜜罐后端（借用的演示站端口在该网络命名空间里无人监听，代理日志为 `dial tcp … connection refused`）。
+**实测结论（本机）**：`executed=mirage`（**真正进入幻境后端**）与 `origin_fallback`（`NI-5` 回落，图上多一跳"幻境不可用"）**都已端到端验证**：
+
+```
+客户端[172.21.0.1] → 适配器 (L1)[GET /.git/config] → 核心判定[分值 0.90 · 信号 ua-headless,path-probe]
+  → 决策[改道（route_mirage）] → 幻境后端[mirage]
+```
+
+⚠️ **整栈一起起**：`core` 是网络命名空间的持有者。若某次 `up --build` 只重建了**有变化**的服务（例如 core 换了新镜像），
+没被重建的兄弟服务会留在**旧命名空间** ⇒ 幻境/业务地址都变成 `connection refused`（实测踩过；见 `docs/kb/known-issues.md` K-21）。
+失败时用 `scripts/shen.sh restart`（整栈重建）。

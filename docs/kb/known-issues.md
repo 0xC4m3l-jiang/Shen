@@ -455,7 +455,9 @@ $ curl -A "HeadlessChrome/120" -H "Cookie: sid=normal-user-1" http://<引擎>/?u
 **症状**：`docker compose ps` 五个容器全是 `Up`，但控制台/业务入口 `curl` 得到 HTTP 000（连接被拒）；日志里没有任何报错。
 
 **原因**：`core` 是这套 compose 的**网络命名空间持有者**（其它服务用 `network_mode: service:core` 加入它）。
-单独重启它 = 重建命名空间，兄弟服务仍挂在**旧**命名空间上；宿主端口映射指向新命名空间，而里面没有监听者。
+**任何让 core 换命名空间的操作**都会造成这个后果 —— 包括"看起来无辜"的 `up -d --build`：
+compose 只重建**有变化**的服务，于是 core 换了新命名空间，而没被重建的兄弟服务仍留在旧的里面。
+症状除了宿主端口不通（HTTP 000），还包括**容器间地址变成 `connection refused`**（例如幻境后端 / 业务源站拨不通）。
 
 **结论**：整栈重建 —— `scripts/shen.sh restart`（等价 `docker compose ... up -d --force-recreate`）。**永远不要单独 restart core**。
 

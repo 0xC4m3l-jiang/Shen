@@ -165,7 +165,7 @@
 
 **做了什么**：按用户要求"先验证，再优化代码与日志，再优化并整合文档"。
 ① **验证基线（三层）**：`make gate`（格式 · vet · staticcheck · errcheck · 架构 · 追溯 · 泄漏 · 许可 · Python 门禁 · 单测含 -race）· scripts/shen.sh doctor（接入自检五项）· scripts/shen.sh traffic（33 场景判定验证）。基线结论：自检 **通过 3 · 失败 0 · 约束 1 · 无法判定 1**；判定 **断言 27/27 · 缺口 8 · 出口卫生 0**。
-② **代码优化（消除已登记缺陷 `K-24`）**：适配器启动时**预热 gRPC 连接**（`conn.Connect()` + 等 `connectivity.Ready`，最多 2s；失败只记日志、**不阻断启动**）。根因是"惰性建连的成本落在第一条请求上，而判定预算只有 3ms（`AR-29`）"。**实测**：整栈重建后第一条请求即得判定（`失败=<nil>`，此前是 `DeadlineExceeded`）。
+② **代码优化（消除已登记缺陷 `K-24`）**：适配器启动时**预热 gRPC 连接**（`conn.Connect()` + 等 `connectivity.Ready`，最多 2s；失败只记日志、**不阻断启动**）。根因是"惰性建连的成本落在第一条请求上，而判定预算只有 3ms（`AR-29`）"。**实测**：整栈重建后第一条请求即得判定（`失败=nil（空）`，此前是 `DeadlineExceeded`）。
 ③ **日志优化**：`decide()` 失败分支加**无条件** warn（`判定失败，按 NI-3 放行到业务` + `decision_id` + `耗时` + `原因`），**不受逐请求日志开关控制** —— 默认部署下这是"引擎为什么没判"的唯一线索（此前只有开关打开的部署才看得到）。
 ④ **文档整合减量**：删除 docs/integrate/manual-test.md（本轮已删除），其"人工才做"的内容（故障注入 `NI-1` 现场验证 · 边界情形快速检查）并入 `docs/ops/functional-verification.md` **§7 人工测试（15 分钟一轮）**；integrate/ 从 5 份减到 4 份。同时修正 8 处引用（含"标签写 manual-test、链接指向别的文件"的错配），并修掉根 `README.md` 的 1 处悬空链接。
 
@@ -181,7 +181,7 @@
 | 门禁 | 绿 | ✅ 门禁通过 |
 | 接入自检 | 五项有结论 | ✅ 通过 3 · 失败 0 · 约束 1 · 无法判定 1 |
 | 判定验证 | 全量断言通过 | ✅ 27/27 · 缺口 8 · 出口卫生 0 |
-| 重建后首请求 | 应有判定（不再超时） | ✅ 判定：GET /k24-check … 失败=<nil> |
+| 重建后首请求 | 应有判定（不再超时） | ✅ 判定：GET /k24-check … 失败=nil（空） |
 | 适配器单测 | 全过 | ✅ go test ./edge/proxy/（17.9s） |
 | 文档引用 | 无悬空 | ✅ 追溯检查通过 |
 
@@ -269,7 +269,7 @@ docs/spec/README.md（新增）· `docs/README.md`
 | 场景 | 期望 | 实测 |
 | --- | --- | --- |
 | 核心逐判定日志 | 一行结构化、字段齐全 | ✅ `msg=decision decision_id=b1fd473f… action=route_origin score=0.6 signals=[ua-headless] method=GET path=/probe` |
-| 适配器逐请求日志 | 同一 `decision_id` | ✅ `proxy: 判定：GET /probe decision_id=b1fd473f… → route_origin（后端 ""，失败=<nil>）` |
+| 适配器逐请求日志 | 同一 `decision_id` | ✅ `proxy: 判定：GET /probe decision_id=b1fd473f… → route_origin（后端 ""，失败=nil（空））` |
 | 日志用设计术语 | 三值而非枚举名 | ✅ `TestActionName` 通过（含 `ACTION_UNSPECIFIED → route_origin`） |
 | 一键验证 | 报告 + 线索 | ✅ 报告写入临时目录；打印两条追查命令 |
 | 门禁 | 全绿 | ✅ `make gate` |
@@ -1822,4 +1822,15 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 | 在线冒烟 | 判定面应答且 `decision_id` 幂等 | ✅ 3 样本全通过，`action=origin severity=none` |
 | 影子模式回归 | 分数拉满也不处置 | ✅ 恒 `route_origin` |
 
-**没做 / 遗留**：下发面 `Pull` / `Watch` / `Ack` 未实现；`store` / `telemetry` 真实后端未接；`whitelist` 段只解析不消费（消费方是 `director`）；`severity` 档位与 `E2`（TLS 指纹一致性，项目级 P0）仍待。
+**没做 / 遗留**：下发面 `Pull` / `Watch` / `Ack` 未实现；`store` / `telemetry` 真实后端未接；`whitelist` 段只解析不消费（消费方是 `director`）；`severity` 档位与 `E2`（TLS 指纹一致性，项目级 P0）仍待。**补记（后续验证）**：`executed=mirage`（**真正进入幻境后端**）已**端到端验证**通过：
+
+```
+客户端[172.21.0.1] → 适配器 (L1)[GET /.git/config] → 核心判定[分值 0.90 · 信号 ua-headless,path-probe]
+  → 决策[改道（route_mirage）] → 幻境后端[mirage]
+```
+
+此前"验不到"的真因不是功能缺失，而是**部分重建**：compose 的 `up -d --build` 只重建**有变化**的服务，
+core 换了新网络命名空间而兄弟服务留在旧的里面 ⇒ 幻境/业务地址全部 `connection refused`（business 容器自连同地址是通的，可见问题在命名空间不在服务）。
+已把这一精确成因写进 `docs/kb/known-issues.md` K-21 与观测文档，并确认失败时应整栈重建（scripts/shen.sh restart）。验完已恢复默认影子栈。
+
+
