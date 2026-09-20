@@ -107,7 +107,7 @@ func main() {
 	findings = append(findings, checkCrossPlane(pkgs)...)
 	findings = append(findings, checkInternalRule(pkgs)...)
 	findings = append(findings, checkStoreIsSoleIO(pkgs)...)
-	findings = append(findings, checkModulesAgainstList(pkgs, mods)...)
+	findings = append(findings, checkModulesAgainstList(root, pkgs, mods)...)
 	findings = append(findings, checkNoCGO(pkgs, root)...)
 	findings = append(findings, checkLanguages(root)...)
 	findings = append(findings, checkGuardrailIsSoleExit(root)...)
@@ -314,7 +314,7 @@ var structuralDirs = map[string]bool{
 	"core/internal/contract": true,
 }
 
-func checkModulesAgainstList(pkgs []pkg, mods []module) []finding {
+func checkModulesAgainstList(root string, pkgs []pkg, mods []module) []finding {
 	// 清单里的源码目录集合（统一成不带首尾斜杠的相对路径）
 	listed := map[string]module{}
 	for _, m := range mods {
@@ -350,6 +350,18 @@ func checkModulesAgainstList(pkgs []pkg, mods []module) []finding {
 		}
 	}
 
+	// 非 Go 模块（L4 的 Python · L3 的声明式 · 纯配置模块）：`go list` 看不到它们，
+	// 因此改用「目录存在且有文件」判定 —— 否则它们会被列进「代码尚未实现」的提示里，
+	// 让那行提示变成噪声（读的人会以为这些模块没做）。依据：structure.md §1.5 的「已建 / 未建」。
+	for dir := range listed {
+		if found[dir] {
+			continue
+		}
+		if dirHasFiles(filepath.Join(root, dir)) {
+			found[dir] = true
+		}
+	}
+
 	var out []finding
 	for dir := range found {
 		if structuralDirs[dir] {
@@ -363,22 +375,51 @@ func checkModulesAgainstList(pkgs []pkg, mods []module) []finding {
 			})
 		}
 	}
-	// 反向：清单里有、代码里没有 —— 不是错误（阶段 2/3 尚未实现），但要说清
-	var missing []string
+	// 反向：清单里有、代码里没有 —— 不是错误（阶段 2/3 尚未实现），但要说清。
+	// 分两类说：目录都没建 vs 目录建了但里面是空的 —— 后者的排查方向完全不同。
+	var missing, empty []string
 	for dir := range listed {
-		if !found[dir] {
-			missing = append(missing, dir+"/")
+		if found[dir] {
+			continue
 		}
+		if dirExists(filepath.Join(root, dir)) {
+			empty = append(empty, dir+"/")
+			continue
+		}
+		missing = append(missing, dir+"/")
 	}
 	sort.Strings(missing)
-	if len(missing) > 0 {
-		fmt.Printf("  ℹ 清单里有、代码尚未实现的模块目录 %d 个（阶段 2/3，不算错）：\n", len(missing))
-		for _, m := range missing {
-			fmt.Printf("      %s\n", m)
+	sort.Strings(empty)
+	if len(missing)+len(empty) > 0 {
+		fmt.Printf("  ℹ 清单里有、代码尚未实现的模块目录 %d 个（阶段 2/3，不算错）：\n", len(missing)+len(empty))
+		for _, dir := range missing {
+			fmt.Printf("      %s（目录尚未创建）\n", dir)
+		}
+		for _, dir := range empty {
+			fmt.Printf("      %s（目录已建，里面还没有文件）\n", dir)
 		}
 		fmt.Println()
 	}
 	return out
+}
+
+// dirHasFiles 报告目录是否存在且含至少一个普通文件（不递归计数空目录）。
+// 非 Go 模块的「已实现」判据：不靠扩展名白名单（那会把声明式 / 配置模块漏掉），
+// 只看「有没有东西」——目录里放了东西就说明有人在维护它。
+func dirHasFiles(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			return true
+		}
+		if dirHasFiles(filepath.Join(path, e.Name())) {
+			return true
+		}
+	}
+	return false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

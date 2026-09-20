@@ -297,8 +297,8 @@ $ go run ./scripts/archcheck            # AR-33 负例：故意在别处 import 
 | 1 | **诱饵资产（`decoy`）到边缘的通路仍未接** —— 本轮接的是 AI 欺骗内容（另一条通路） | 诱饵面内容仍到不了响应 | [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」· `docs/kb/capabilities.md` §3 #5 |
 | 2 | **核心侧开关变更需要重启核心**（配置只在启动装载） | 「秒级关闭」在**适配器侧**成立（下一次 `Pull` + 不重启适配器），核心侧要重启 | [`spec/config.md`](../spec/config.md) §1（装载时机）· [ADR-0023](../background/decisions/0023-deception-content-injection.md)「后果」 |
 | 3 | 阶段 B 的六项未决（模型 / PII / 画像 / 轮换 / 分片 / 真实内容库） | 内容质量、规模与自愈能力 | [ADR-0023](../background/decisions/0023-deception-content-injection.md) 未解决 1–6 |
-| 4 | `analysis/aicap/` 未被 `go list` 覆盖 ⇒ `make archcheck` 仍把它列在「清单里有、代码未实现」的提示里 | 仅**提示**，不拦门禁；但读数会被误导 | 下一轮：让 `archcheck` 对非 Go 模块改用目录存在性判断（改动小、影响面清晰） |
-| 5 | 本轮的端到端验收**不进** `make gate`（要起一整套进程） | 日常门禁不会跑它 | `make ai-check`（已进 [`.pi/devloop.md`](../.pi/devloop.md) 的 `iteration_cmds`） |
+| 4 | ✅ **已做（2026-09-20 同日补轮）**：`archcheck` 对**非 Go 模块**改用「目录存在且有文件」判定 —— 提示从 9 条噪声降到 1 条真事实（`deception/shell/` 未建） | 原影响：提示读数被误导 | [`../log.md`](../log.md) 同日条目 · [`scripts/archcheck/README.md`](../../scripts/archcheck/README.md) |
+| 5 | 本轮的端到端验收**不进** `make gate`（要起一整套进程） | 日常门禁不会跑它 | `make ai-check`（已进 [`../../.pi/devloop.md`](../../.pi/devloop.md) 的 `iteration_cmds`） |
 | 6 | `Makefile` 被 shellcheck 误判（`SC1089` 等 3 条） | 只是工具误报，Makefile 头部已写明 | 不处理（历史项，非本轮引入） |
 
 ---

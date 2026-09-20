@@ -9,6 +9,34 @@
 
 ---
 
+## 2026-09-20 · archcheck 对非 Go 模块改用「目录 + 文件」判定（提示去噪）
+
+**做了什么**：`make archcheck` 的「清单里有、代码尚未实现的模块目录」提示先前把 **9 个**模块全列进去了 ——
+因为 `go list` 只看得到 Go 包，L4 的 Python（`analysis/aicap` · `intent` · `chain` · `strategy` · `llm`）、
+L3 声明式（`deception/netpolicy`）、纯配置（`edge/dns`）与控制台（`console/`）在它眼里不存在。
+现在对这类模块改用**「目录存在且含文件」**判定，并把剩下的分两类说清：
+「目录尚未创建」vs「目录已建但里面没有文件」（排查方向不同）。提示从 **9 条降到 1 条真事实**：只剩 `honeypot-shell`（模块 15，用户裁定推迟）的目录未建。
+
+**改了哪些文件**：`scripts/archcheck/main.go` · `scripts/archcheck/README.md` · `docs/plans/2026-09-20-ai-capability-guardrail.md`（遗留 4 标为已做）
+
+**对应文档**：`scripts/archcheck/README.md`（工具自身的说明）· `docs/design/structure.md` §1.5（「已建 / 未建」就是它的判据）
+
+**验证**：`make gate` 通过（含 `make archcheck`）；`go run ./scripts/archcheck` 输出见下。
+
+**证据**：
+
+```console
+$ go run ./scripts/archcheck
+  ℹ 清单里有、代码尚未实现的模块目录 1 个（阶段 2/3，不算错）：
+      honeypot-shell 的目录（尚未创建）
+架构检查通过。
+```
+
+**没做 / 遗留**：本轮是 S 档（工具提示精度），不动任何门禁规则与代码行为；
+阶段 B（真实模型后端 / 风格画像 / PII 检测 / 轮换接线 / 分片拉取）与诱饵资产通路仍待做，去向往 `docs/plans/2026-09-20-ai-capability-guardrail.md` §7 与 [ADR-0023](background/decisions/0023-deception-content-injection.md)。
+
+---
+
 ## 2026-09-20 · AI 能力服务（模块 25）+ 欺骗内容注入通路（阶段 A：通路 · 开关 · 强制护栏）
 
 **做了什么**：新增 L4 模块 **`ai-capability`（第 25 行）**——一个**可开关的共享生成出口**：
