@@ -71,7 +71,9 @@ CONTENT_PROFILE = GuardrailProfile(
     name="site-content",
     prompt="content",
     style_terms=PROFILE_VOCAB,
+    checked_fields=("body",),
 )
+"""内容任务的护栏档案；受检字段只有 `body`（黑名单与风格只作用在正文上，`AR-22` / `AR-33`）。"""
 
 CONTENT_LIMITS = TaskLimits(purpose="deception_content", max_output=65536)
 

@@ -27,21 +27,29 @@ from ..guardrail import prompts as guardrail_prompts
 
 if TYPE_CHECKING:  # pragma: no cover - 只用于类型标注，避免运行期循环导入
     from ..model import AnalysisClient
+    from ..ports import Artifact
     from ..service import TaskSpec
 
 # produce：把（已渲染的提示词, 任务输入, 模型客户端）变成**候选输出**（还没过护栏）。
 Produce = Callable[[str, "TaskSpec", "AnalysisClient"], Mapping[str, Any]]
-# build：把（过完护栏的输出, 任务输入, 生成时刻）变成**内容对象**（契约 §2）。
-Build = Callable[[Mapping[str, Any], "TaskSpec", str], Any]
+# build：把（过完护栏的输出, 任务输入, 生成时刻）变成**产物**（内核只认 `Artifact` 这个缝）。
+Build = Callable[[Mapping[str, Any], "TaskSpec", str], "Artifact"]
 
 
 @dataclass(frozen=True)
 class GuardrailProfile:
-    """护栏档案（契约 §1.4）：提示词模板 + 风格一致性判据。"""
+    """护栏档案（契约 §1.4）：提示词模板 + **受检字段** + 风格一致性判据。
+
+    `checked_fields` 回答「后置护栏的黑名单与风格检查作用在输出的**哪几个字段**上」。
+    它是**必填**且**必须非空** —— 缺了它，第二个消费方接入时那两关会**静默失效**
+    （[ADR-0025](../../../docs/background/decisions/0025-generic-guardrailed-outlet.md)
+    决定 3）。
+    """
 
     name: str
     prompt: str
     style_terms: tuple[str, ...]
+    checked_fields: tuple[str, ...]
 
     def assert_declared(self, *, kind: str) -> None:
         if not self.name:
@@ -50,11 +58,20 @@ class GuardrailProfile:
             raise AssertionError(f"任务 {kind} 的护栏档案缺 prompt（AR-33）")
         if not self.style_terms:
             raise AssertionError(f"任务 {kind} 的护栏档案缺 style_terms（AR-33）")
+        if not self.checked_fields:
+            raise AssertionError(
+                f"任务 {kind} 的护栏档案缺 checked_fields —— "
+                "缺了它黑名单与风格检查会静默失效（AR-33 / ADR-0025 决定 3）"
+            )
 
 
 @dataclass(frozen=True)
 class TaskLimits:
-    """长度与体积纪律（`AR-23`）：用途**必须**已登记，输出上限**必须**为正。"""
+    """长度与体积纪律（`AR-23`）：用途**必须**已登记，输出上限**必须**为正。
+
+    `max_output` 是**任务级**上限，与用途上限**取较小者**生效（ADR-0025 决定 3）。
+    不要把它当文档：它真的参与判定（在 `guardrail/inspect.py` 里交给 `blacklist.check` 的 `cap`）。
+    """
 
     purpose: str
     max_output: int

@@ -64,10 +64,20 @@ class Blacklist:
             leak_patterns=extra,
         )
 
-    def check(self, text: str, *, purpose: str) -> list[Finding]:
-        """检查一段生成内容；返回全部命中（空列表 = 通过）。用途未登记即失败（`AR-23`）。"""
+    def check(self, text: str, *, purpose: str, cap: int | None = None) -> list[Finding]:
+        """检查一段生成内容；返回全部命中（空列表 = 通过）。用途未登记即失败（`AR-23`）。
+
+        `cap` 是**调用方给的额外收紧上限**（任务级，如 `TaskLimits.max_output`）：
+        有效上限取 `min(用途上限, cap)`。`None` = 只用用途上限（默认行为不变）。
+        有一个「声明了却不生效」的实例就够危险了 —— 它看起来像保护。
+        """
         if purpose not in PURPOSE_LIMITS:
             raise LimitError(f"未知用途 {purpose!r}（AR-23）")
+        limit = PURPOSE_LIMITS[purpose]
+        if cap is not None:
+            if cap <= 0:
+                raise LimitError(f"任务级上限必须为正，实际 {cap}（AR-23）")
+            limit = min(limit, cap)
         found: list[Finding] = []
         for pattern in self.leak_patterns + self.self_disclosure:
             for match in pattern.finditer(text):
@@ -76,12 +86,12 @@ class Blacklist:
         for identifier in self.identifiers:
             if identifier and identifier in text:
                 found.append(Finding("leak", identifier, "命中真实业务标识（启动时注入）"))
-        if len(text) > PURPOSE_LIMITS[purpose]:
+        if len(text) > limit:
             found.append(
                 Finding(
                     "overlength",
                     f"{len(text)} 字符",
-                    f"超过用途 {purpose} 上限 {PURPOSE_LIMITS[purpose]}",
+                    f"超过上限 {limit}（用途 {purpose}）",
                 )
             )
         return found

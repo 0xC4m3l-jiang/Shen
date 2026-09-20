@@ -200,7 +200,7 @@ def test_generate_puts_content_in_store() -> None:
             deadline_s=5.0,
             payload={"resource": "/", "variant": 0, "version": 1, "profile_id": "site-a"},
         ),
-        store=store,
+        sink=store,
         generated_at=STAMP,
     )
     assert envelope.accepted
@@ -218,7 +218,7 @@ def test_generate_rejects_and_keeps_store_empty() -> None:
             deadline_s=5.0,
             payload={"resource": "/", "variant": 0, "version": 1, "profile_id": "site-a"},
         ),
-        store=store,
+        sink=store,
         identifiers=("Service status",),  # 命中真实业务标识 → 泄露类（AR-22）
         generated_at=STAMP,
     )

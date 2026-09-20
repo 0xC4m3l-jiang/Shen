@@ -83,6 +83,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     stamp = args.now or _now_iso()
     identifiers = tuple(item.strip() for item in args.identifiers.split(",") if item.strip())
     store = ContentStore()
+    # `ContentStore` 显式实现 `Sink`（`aicap/ports.py`）：只有过了护栏的产物才会走到这里（`AR-33`）
+    sink: service.Sink = store
     rejected: list[str] = []
 
     for resource in resources:
@@ -99,7 +101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "profile_id": args.profile,
                     },
                 ),
-                store=store,
+                sink=sink,
                 identifiers=identifiers,
                 generated_at=stamp,
             )

@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .ports import Artifact, Sink
+
 CONTENT_KIND = "content"
 MANIFEST_SCHEMA_VERSION = 1
 SELECTOR_SESSION = "session"
@@ -168,18 +170,29 @@ def make_content(
 
 
 @dataclass
-class ContentStore:
+class ContentStore(Sink):
     """内存内容库（阶段 A）—— **唯一写入者是生成器，且只写通过护栏的内容**。
 
     生产侧对应核心的 `store.ContentStore`（`MD-20`：核心唯一的 I/O 出口）。
+
+    **显式继承 `Sink`**（而不是靠结构性推断）：一个安全关键缝不该让类型检查器去猜，
+    也不该让读者去核对方法签名（ADR-0025 决定 2）。
     """
 
     items: dict[str, ContentObject] = field(default_factory=dict)
 
-    def put(self, item: ContentObject) -> str:
-        """按一致性键写入；同键覆盖（同输入必得同 ID ⇒ 覆盖是幂等的）。"""
-        self.items[item.key] = item
-        return item.key
+    def put(self, artifact: Artifact) -> str:
+        """按一致性键写入；同键覆盖（同输入必得同 ID ⇒ 覆盖是幂等的）。
+
+        参数类型写成 `Sink` 缝的 `Artifact`（而不是 `ContentObject`）：`Sink` 的契约是
+        「接受任何产物」，具体实现在这里判断自己认不认得 —— 不认得就**显式报错**，
+        而不是等到 `.key` 上报一个 `AttributeError`
+        （[ADR-0025](../../docs/background/decisions/0025-generic-guardrailed-outlet.md) 决定 2）。
+        """
+        if not isinstance(artifact, ContentObject):
+            raise TypeError(f"ContentStore 只接受 ContentObject，实际 {type(artifact).__name__}")
+        self.items[artifact.key] = artifact
+        return artifact.key
 
     def __len__(self) -> int:
         return len(self.items)

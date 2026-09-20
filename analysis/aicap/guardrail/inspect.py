@@ -10,6 +10,11 @@
 | 4 | 风格一致性（至少命中一个画像术语） | `AR-33` |
 
 **故意不在这里写「尝试修复」** —— 修复过的模型输出就不再是模型输出，而是一个没人验证过的新东西。
+
+**第 2/3/4 关作用在「任务声明的受检字段」上**（`GuardrailProfile.checked_fields`）：
+声明了却不在输出里、或不是字符串 ⇒ **拒绝**，**不**静默跳过 —— 否则新任务接入时
+那两关会静默失效，而调用方看不见 —— 见
+[ADR-0025](../../../docs/background/decisions/0025-generic-guardrailed-outlet.md) 决定 3）。
 """
 
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
@@ -57,25 +62,50 @@ def check(
         reasons.append({"check": CHECK_SCHEMA, "detail": f"{exc}（AR-15）"})
         return {}, reasons
 
-    body = checked.get("body")
-    if isinstance(body, str):
-        findings = blacklist.check(body, purpose=task.limits.purpose)
-        for finding in findings:
+    for name in task.guardrail_profile.checked_fields:
+        if name not in checked:
+            reasons.append(
+                {
+                    "check": CHECK_SCHEMA,
+                    "detail": (
+                        f"声明的受检字段 {name!r} 不在输出里 —— 拒绝，不跳过（AR-15 / AR-33）"
+                    ),
+                }
+            )
+            continue
+        value = checked[name]
+        if not isinstance(value, str):
+            reasons.append(
+                {
+                    "check": CHECK_SCHEMA,
+                    "detail": (
+                        f"声明的受检字段 {name!r} 必须是字符串，"
+                        f"实际 {type(value).__name__}（AR-15）"
+                    ),
+                }
+            )
+            continue
+        # 有效上限 = min(用途上限, 任务上限) —— max_output 不是文档，它真的生效（AR-23）
+        for finding in blacklist.check(
+            value, purpose=task.limits.purpose, cap=task.limits.max_output
+        ):
             check_id = CHECK_LENGTH if finding.kind == "overlength" else CHECK_BLACKLIST
             reasons.append(
                 {
                     "check": check_id,
                     "detail": (
-                        f"{finding.kind}: {finding.match} —— {finding.detail}（AR-22 / AR-23）"
+                        f"{name}: {finding.kind}: {finding.match} —— "
+                        f"{finding.detail}（AR-22 / AR-23）"
                     ),
                 }
             )
-        if not any(term in body for term in task.guardrail_profile.style_terms):
+        if not any(term in value for term in task.guardrail_profile.style_terms):
             reasons.append(
                 {
                     "check": CHECK_STYLE,
                     "detail": (
-                        f"未命中任何画像术语 {list(task.guardrail_profile.style_terms)}"
+                        f"{name}: 未命中任何画像术语 "
+                        f"{list(task.guardrail_profile.style_terms)}"
                         " —— 不像该文档画像，拒绝（AR-33）"
                     ),
                 }

@@ -12,6 +12,7 @@
 //	modules.md          MD-18 / MD-19（清单与目录一致）/ MD-20（store 是唯一 I/O 出口）
 //	language.md         TB-20 / TB-21（语言层数上限）/ TB-24（禁止 CGO 与本地库）
 //	architecture.md     AR-33（欺骗内容生成必须经 ai-capability 的护栏出口）
+//	modules.md   §3     MD-4（依赖方向单向 —— Python 侧的 AI 能力独立性）
 //
 // 清单**从文档解析，不硬编码** —— 文档改则检查跟着改，不会两边漂移。
 // 解析结果不达预期时**直接报错退出**，绝不静默放行：静默通过等于假绿。
@@ -25,6 +26,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -111,6 +113,7 @@ func main() {
 	findings = append(findings, checkNoCGO(pkgs, root)...)
 	findings = append(findings, checkLanguages(root)...)
 	findings = append(findings, checkGuardrailIsSoleExit(root)...)
+	findings = append(findings, checkPythonDependencyDirection(root)...)
 
 	report(findings)
 }
@@ -865,6 +868,202 @@ func isGuardrailExempt(rel string) bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 检查 9 · MD-4 Python 侧的依赖方向（AI 能力必须独立、可被第二个消费方复用）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// independenceAllowed 是「从某个顶层子包出发，允许依赖哪些顶层子包」（`MD-4` 依赖方向单向）。
+//
+// 为什么只列这两个：它们是 **AI 能力本体** —— 用户要求它「独立、解耦、可被第二个消费方复用」。
+// 消费方侧（`intent` / `chain` / `strategy` / `worker` / `tests`）**不在表里**：
+// 方向是**消费方 → 能力**，它们依赖 ai-capability 是设计意图，不是耦合。
+//
+//	aicap  → 只允许 `analysis.llm` 与自己（能力不依赖纪律层之外的任何东西）
+//	llm    → 只允许自己（纪律层不依赖出口，否则就是反向依赖）
+var independenceAllowed = map[string]map[string]bool{
+	"aicap": {"aicap": true, "llm": true},
+	"llm":   {"llm": true},
+}
+
+// pyAbsImport 抓**绝对**导入里的仓内目标：`from analysis.X… import` / `import analysis.X…`。
+var pyAbsImport = regexp.MustCompile(
+	`(?m)^\s*(?:from\s+(analysis(?:\.[\w]+)*)\s+import|import\s+(analysis(?:\.[\w]+)*))`,
+)
+
+// pyRelImport 抓**相对**导入的点号数与点号后的第一段名字：`from ...llm.contract import X`。
+//
+// 这只是个文本近似 —— 它不解析 Python 的 import 语法，也看不见 `importlib.import_module`。
+// 与 `AR-33` 的模型客户端检查同口径：**只看 import 语句**（注释与文档串里的示例不算），
+// 并且只在这两种形式**都不能解析**时报告「无法解析」，不静默放过。
+var pyRelImport = regexp.MustCompile(`(?m)^\s*from\s+(\.+)([\w]*)`)
+
+// checkPythonDependencyDirection 把「AI 能力独立」变成可执行检查。
+//
+// 它拦两类事：
+//
+//	① `analysis/aicap/**` 依赖了 `analysis.llm` 之外的东西
+//	   （例如回头去 import `analysis.intent` —— 能力反过来依赖消费者）；
+//	② `analysis/llm/**` 依赖了 `analysis.aicap` —— 纪律层反向依赖出口。
+//
+// 扫描不到任何受约束文件时**报错**，不静默通过（路径或过滤条件坏了必须是可见的失败）。
+func checkPythonDependencyDirection(root string) []finding {
+	dir := filepath.Join(root, "analysis")
+	if !dirExists(dir) {
+		return []finding{{
+			ID:    "MD-4",
+			Human: "找不到 analysis/ 目录 —— Python 依赖方向检查无法执行（不静默放行）",
+			Where: "analysis/",
+		}}
+	}
+
+	scanned := 0
+	var out []finding
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			rel, _ := filepath.Rel(root, p)
+			out = append(out, finding{
+				ID:    "MD-4",
+				Human: "遍历 analysis/ 失败，依赖方向检查不完整",
+				Where: fmt.Sprintf("%s：%v", rel, walkErr),
+			})
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			// `.venv` / `.pytest_cache` 等隐藏目录、pycache、以及生成物 proto/ 不属源码
+			if strings.HasPrefix(name, ".") || name == "__pycache__" || name == "proto" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(p) != ".py" {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		rel = filepath.ToSlash(rel)
+		owner := pyOwnerSubpackage(rel)
+		allowed, constrained := independenceAllowed[owner]
+		if !constrained {
+			return nil
+		}
+		scanned++
+		b, rerr := os.ReadFile(p)
+		if rerr != nil {
+			out = append(out, finding{
+				ID:    "MD-4",
+				Human: "无法读取源文件，依赖方向检查不完整",
+				Where: fmt.Sprintf("%s：%v", rel, rerr),
+			})
+			return nil
+		}
+		for _, target := range pyImportTargets(rel, string(b)) {
+			if !allowed[target] {
+				out = append(out, finding{
+					ID: "MD-4",
+					Human: fmt.Sprintf(
+						"禁止依赖 analysis.%s —— analysis/%s 只允许依赖：%s（AI 能力必须独立、依赖方向单向）",
+						target, owner, strings.Join(sortedKeys(allowed), " / ")),
+					Where: rel,
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		out = append(out, finding{ID: "MD-4", Human: "遍历 analysis/ 失败", Where: err.Error()})
+	}
+	if scanned == 0 {
+		out = append(out, finding{
+			ID:    "MD-4",
+			Human: "analysis/aicap 与 analysis/llm 下一个 .py 都没扫到 —— 路径或过滤条件可能坏了，拒绝静默放行",
+			Where: "analysis/",
+		})
+	}
+	return out
+}
+
+// pyOwnerSubpackage 取模块所属的**顶层**子包：`analysis/aicap/tasks/x.py` → `aicap`。
+// 直接放在 `analysis/` 下的文件（如 `worker.py`）返回 ""（它是装配层，不在此检查范围）。
+func pyOwnerSubpackage(rel string) string {
+	parts := strings.Split(strings.TrimPrefix(rel, "analysis/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0]
+}
+
+// pyImportTargets 解析出该文件**指向 analysis 下顶层子包**的依赖目标（已去重、已排序）。
+//
+// 返回的每个元素都是 `analysis.<target>` 里的 `<target>`；指向标准库 / 第三方 /
+// 本包内模块的导入**不入结果**（它们不构成跨子包依赖）。
+func pyImportTargets(rel, src string) []string {
+	pkgParts := pyPackageParts(rel)
+	seen := map[string]bool{}
+	var out []string
+	add := func(target string) {
+		if target == "" || seen[target] {
+			return
+		}
+		seen[target] = true
+		out = append(out, target)
+	}
+
+	for _, m := range pyAbsImport.FindAllStringSubmatch(src, -1) {
+		path := m[1]
+		if path == "" {
+			path = m[2]
+		}
+		// `analysis` / `analysis.a.b` → 第一段子包名
+		if rest, ok := strings.CutPrefix(path, "analysis."); ok {
+			add(strings.SplitN(rest, ".", 2)[0])
+		}
+	}
+
+	for _, m := range pyRelImport.FindAllStringSubmatch(src, -1) {
+		dots, name := len(m[1]), m[2]
+		if name == "" {
+			// `from . import x` / `from .. import x`：指向包本身，解析不出子包 —— 跳过
+			continue
+		}
+		// 相对导入：D 个点 = 从当前包向上走 D-1 层（Python 的语义）
+		up := dots - 1
+		if up > len(pkgParts) {
+			// 点号数超出 analysis 包 —— Python 自己也会报错，这里显式指出，不静默放过
+			add("???")
+			continue
+		}
+		base := pkgParts[:len(pkgParts)-up]
+		if len(base) == 0 {
+			add(name) // 落在 analysis 包上 → name 就是顶层子包名
+			continue
+		}
+		add(base[0]) // 落在某个子包内部 → 顶层子包是 base 的第一段
+	}
+
+	sort.Strings(out)
+	return out
+}
+
+// pyPackageParts 取模块所在包相对于 analysis 的路径段：
+// `analysis/aicap/tasks/x.py` → `[aicap tasks]`；`analysis/aicap/x.py` → `[aicap]`。
+func pyPackageParts(rel string) []string {
+	dir := path.Dir(strings.TrimPrefix(rel, "analysis/"))
+	if dir == "." || dir == "" {
+		return nil
+	}
+	return strings.Split(dir, "/")
+}
+
+// sortedKeys 返回集合的键（已排序）—— 错词信息里列出来的「允许集合」必须稳定。
+func sortedKeys(set map[string]bool) []string {
+	keys := make([]string, 0, len(set))
+	for k := range set {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 输出
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -878,6 +1077,7 @@ func report(findings []finding) {
 		fmt.Println("架构检查通过。")
 		fmt.Println("  顶层目录 · 跨平面依赖 · 核心内部可见性 · store 唯一 I/O 出口")
 		fmt.Println("  模块清单一致性 · CGO 与本地库 · 语言层数 · 护栏为唯一出口（AR-33）")
+		fmt.Println("  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）")
 		return
 	}
 	fmt.Fprintf(os.Stderr, "架构检查发现 %d 个问题：\n\n", len(findings))

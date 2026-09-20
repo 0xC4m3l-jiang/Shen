@@ -16,10 +16,18 @@
 **做什么**（一句话：**唯一的、强制走护栏的生成出口**）：
 
 - 对外只有一件事：`generate(TaskSpec) → Envelope`（`{accepted, data}`，`AR-16`）；
+- **内核任务无关**：内核（`service.py` / `model.py` / `tasks/_registry.py` / `guardrail/`）只做
+  「取任务 → 前置护栏 → 生成 → 后置护栏 → 交 `Sink`」，**不认识**「内容」——
+  判据：把 `kind=content` 整块删掉，内核仍应原样可用（[ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md) 决定 1）；
+- **接入一个新消费方 = 加 `produce`/`build` + 一条登记**，走
+  [`../spec/ai-contract.md`](../spec/ai-contract.md) §6 的三步，内核**一行不改**；
 - **任务注册表**：每个 `kind` 一条登记，必须声明 `schema` + `guardrail_profile` + `limits`，
   缺一样即**启动期断言失败**；未登记的 `kind` 直接拒绝；
 - **强制护栏**（不依赖调用方自觉）：前置提示词三段式（`AR-31` / `AR-24`）→ 生成 → 后置独立校验
   （`schema` → 黑名单三类 → 长度 → 风格一致性，`AR-15` / `AR-22` / `AR-23`）；
+  受检字段与上限**由任务声明**，且**声明了就必须真的生效**；
+- **产物出口是缝隙**（`aicap/ports.py` 的 `Sink`），内核不知道它是不是内容库；
+  只有过了护栏才会调 `put`；
 - **阶段 A 的任务**：`kind=content` —— 产出「资源 × 变体」的欺骗内容对象，
   并（由 `__main__` 的生成器）产出**内容清单**文件给核心装载；
 - **可开关**：`kinds` 未启用即不产出（`ai.enabled=false` 时对系统零影响）。
@@ -40,14 +48,15 @@
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
 | 输入 | `TaskSpec`（`kind` / `session_id` / `deadline_s` / `payload`） | [`../spec/ai-contract.md`](../spec/ai-contract.md) §1.1 |
-| 输出 | `Envelope` 与内容对象 | 同上 §1.2 / §2 |
-| 输出（文件） | 内容清单（JSON） | 同上 §3 |
+| 输出 | `Envelope` 与**产物**（`Artifact`：只需 `to_wire()`） | 同上 §1.2 / §2 |
+| 输出（文件） | 内容清单（JSON）—— `kind=content` 专有 | 同上 §3 |
+| 接入新消费方 | 三步（登记 + 产物出口） | 同上 §6 |
 | 消费方 | 核心 `policy`（装载 + 投影）· 适配器 `edge/proxy`（消费） | 同上 §3 / §4 |
 
 本模块内部的数据结构（不跨模块）：
 
-- `GuardrailProfile`（护栏档案）· `Task`（注册表条目）· `Verdict`（后置校验结果，含拒绝原因）；
-- `ContentStore`（Python 侧的内容库：阶段 A 是内存实现，生产侧对应核心的 `store.ContentStore`）；
+- **内核侧**（任务无关）：`Artifact` / `Sink`（`aicap/ports.py`）· `Task` / `GuardrailProfile` / `TaskLimits`（登记表）；
+- **插件侧**（`kind=content` 专有）：`ContentObject` · `ContentStore`（内存实现）· 清单聚合。
 
 > `MD-5`：跨模块共享的类型**禁止**各自定义 —— 内容对象与清单字段一律以 `spec/ai-contract.md` 为准。
 > 契约里已有的东西**禁止**在本模块重新定义（信封复用 `analysis/llm/envelope.py`，黑名单复用 `analysis/llm/blacklist.py`）。
@@ -131,7 +140,10 @@
 | 单元 | 模板生成器：N 个变体互不相同且各自可复现 | 同上 |
 | 单元 | 清单文件：形状 · 单条上限 · 重复资源/variant 拒绝 | 同上 |
 | 结构 | 「无绕过路径」：`analysis/` 下除出口（`service.py`）·接缝（`model.py`）·`llm/` 自身与测试外，禁止 import 模型客户端 | `make archcheck`（`AR-33` 项） |
-| 集成 | 生成 → 核心装载 → 投影 → 适配器命中（端到端） | `make dev` + `scripts/traffic`（见 `../ops/functional-verification.md`） |
+| 结构 | **内核任务无关**：`analysis/aicap/**` 的仓内依赖只允许 `analysis.llm` 与自己；`analysis/llm/**` 禁止反向依赖 `aicap` | `make archcheck`（`MD-4` 项） |
+| 单元 | **假 kind 走完整内核**（只在测试里存在、字段名与产物都不是「内容」）—— 解耦的可执行证明 | `analysis/tests/test_aicap_guardrail.py::test_run_task_is_task_agnostic` |
+| 单元 | 声明即纪律：受检字段缺失/非字符串必拒 · 任务级 `max_output` 真的生效 · 多字段逐个检查 | 同上（`test_run_task_rejects_*` / `test_run_task_*cap*` / `test_run_task_scans_every_checked_field`） |
+| 集成 | 生成 → 核心装载 → 投影 → 适配器命中（端到端） | `make dev` + `make ai-check` |
 
 > 故障注入（`NI-12` 的 `V-1…V-5`）与本模块无关：它不在请求路径上，任何失败都不影响业务响应。
 
@@ -145,6 +157,9 @@
 | 4 | 轮换与识破信号的接线（`strategy` → 清单版本 +1） | 被识破后的自愈 | 同上 4 |
 | 5 | 清单纯量上限与分片拉取接口 | 内容规模 | 同上 5 |
 | 6 | 核心侧内容库的真实后端（`store.ContentStore` 换 PostgreSQL/Redis） | 重启不丢内容 | 同上 6 |
+| 7 | `AR-33` 的措辞仍只覆盖「欺骗内容生成」 | `intent`/`chain`/`strategy` 接模型时的合法性未定；而门禁的 `AR-33` 项**本来就已经是全局的** | [ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md) 决定 4（🟡 提案，**待用户确认**后才能升格进 `design/`） |
+| 8 | 产物契约未用跨语言标准（JSON Schema） | 其它语言侧要自己写校验器 | ADR-0025 未解决 3（需第二个消费方到场才定） |
+| 9 | 注册表仍是显式两行登记（无自动发现） | 接入新 kind 要改一个文件 | 有意为之；消费方 ≥ 3 个时再评估（ADR-0025 失效条件 3） |
 
 ## 9. 变更记录
 
@@ -152,3 +167,4 @@
 | --- | --- | --- |
 | 2026-09-20 | 首版：阶段 A（通路 · 开关 · 强制护栏）—— 唯一出口 `generate` · 任务注册表 · 三段式提示词 · 四关后置校验 · 内容对象与清单 · 确定性模板生成器 | 用户确认新增模块（`AR-33`）+ [ADR-0023](../background/decisions/0023-deception-content-injection.md) |
 | 2026-09-20 | §3 增「复用候选」表 · §8 未决项 1/2 补上调研结论与已归档禁用项（本轮**不改代码**） | [`../plans/2026-09-20-ai-oss-reuse.md`](../plans/2026-09-20-ai-oss-reuse.md) · [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) |
+| 2026-09-20 | **出口解耦**：内核任务无关化（不认识「内容」）· 产物出口改为 `Sink` 缝（`aicap/ports.py`）· 受检字段与任务上限**声明化并真的生效** · 新消费方接入只需 §6 三步 | [`../plans/2026-09-20-aicap-decoupling.md`](../plans/2026-09-20-aicap-decoupling.md) · [ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md) |

@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -20,6 +22,7 @@ from analysis.aicap.guardrail import prompts as guardrail_prompts
 from analysis.aicap.model import Unavailable, resolve
 from analysis.aicap.tasks import _registry
 from analysis.aicap.tasks.content import CONTENT_TASK, PROFILE_VOCAB
+from analysis.llm import contract as _contract
 from analysis.llm.untrusted import DATA_BEGIN, DATA_END, UNTRUSTED_BANNER
 
 # ── 结构闸门：注册表与启动期断言（AR-33）───────────────────────────────────────
@@ -114,7 +117,9 @@ def test_untrusted_payload_stays_in_data_section() -> None:
 
 
 def test_render_fails_on_unknown_prompt() -> None:
-    profile = _registry.GuardrailProfile(name="p", prompt="没有这个模板", style_terms=("x",))
+    profile = _registry.GuardrailProfile(
+        name="p", prompt="没有这个模板", style_terms=("x",), checked_fields=("x",)
+    )
     with pytest.raises(guardrail_prompts.PromptError):
         guardrail_prompts.render(profile, untrusted_rows=[{"a": 1}])
 
@@ -211,3 +216,181 @@ def test_resolve_rejects_execution_surface() -> None:
 
 def test_resolve_accepts_plain_client() -> None:
     assert resolve(_FakeClient()) is not None  # type: ignore[arg-type]
+
+
+# ── 内核任务无关化（ADR-0025 决定 1/2/3）：**假 kind** 走完整内核 ────────────────
+#
+# 这一节是「解耦」的**可执行证明**。
+# 下面这个任务种类**只在测试里存在**：它的字段名不是 `body`、它的产物不是 `ContentObject`、
+# 它用的 sink 也不是内容库。如果内核还绑在「内容」上，这些用例会失败 —— 那就是解耦没做到的证据。
+
+DEMO_KIND = "demo"
+DEMO_TEXT = "Demo body"
+
+DEMO_PROFILE = _registry.GuardrailProfile(
+    name="demo-profile",
+    prompt="content",  # 提示词模板是任务无关的资源（AR-24）
+    style_terms=(DEMO_TEXT,),
+    checked_fields=("text",),
+)
+
+
+@dataclass
+class _DemoArtifact:
+    """与 `ContentObject` **无关**的产物 —— 内核只要求它能 `to_wire()`。"""
+
+    text: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {"kind": DEMO_KIND, "text": self.text}
+
+
+@dataclass
+class _MemorySink:
+    """与 `ContentStore` **无关**的出口（证明 `Sink` 是结构性的，不是内容库的别名）。"""
+
+    items: list[_DemoArtifact] = field(default_factory=list)
+
+    def put(self, artifact: _DemoArtifact) -> int:
+        self.items.append(artifact)
+        return len(self.items)
+
+
+def _demo_schema(*fields: _contract.Field) -> _contract.Schema:
+    return _contract.Schema(name=DEMO_KIND, fields=fields)
+
+
+def _demo_task(
+    *,
+    seen_prompts: list[str],
+    schema: _contract.Schema | None = None,
+    profile: _registry.GuardrailProfile | None = None,
+    max_output: int = 200,
+    candidate: Mapping[str, object] | None = None,
+) -> _registry.Task:
+    """造一个**假 kind**；它只活在测试里，不进生产注册表。"""
+    default_schema = _demo_schema(_contract.Field("text", (str,), True))
+
+    def produce(prompt: str, spec: service.TaskSpec, client: object) -> Mapping[str, object]:
+        del spec
+        seen_prompts.append(prompt)
+        # 阶段 A 的模板生成器同样不调模型；这里断言内核没有把客户端藏掉（AR-32）
+        assert client is not None
+        return candidate if candidate is not None else {"text": DEMO_TEXT}
+
+    def build(checked: Mapping[str, object], spec: service.TaskSpec, stamp: str) -> _DemoArtifact:
+        del spec, stamp
+        return _DemoArtifact(text=str(checked["text"]))
+
+    return _registry.Task(
+        kind=DEMO_KIND,
+        schema=schema or default_schema,
+        guardrail_profile=profile or DEMO_PROFILE,
+        limits=_registry.TaskLimits(purpose="conclusion", max_output=max_output),
+        produce=produce,
+        build=build,
+        generator="demo-v1",
+    )
+
+
+def _demo_spec() -> service.TaskSpec:
+    return service.TaskSpec(kind=DEMO_KIND, session_id="s", deadline_s=5.0, payload={"a": 1})
+
+
+def test_run_task_is_task_agnostic() -> None:
+    """内核跑完一个**与内容无关**的任务：产物进 sink、进 Envelope、提示词仍过前置护栏。"""
+    prompts: list[str] = []
+    sink = _MemorySink()
+    envelope = service.run_task(_demo_task(seen_prompts=prompts), _demo_spec(), sink=sink)
+
+    assert envelope.accepted, envelope.rejected_reason
+    assert [item.text for item in sink.items] == [DEMO_TEXT], "产物必须经 sink 出去"
+    assert envelope.data == {"kind": DEMO_KIND, "text": DEMO_TEXT}
+    # 前置护栏对任何 kind 都生效：数据区标记 + 不可信声明都在（AR-31）
+    assert len(prompts) == 1
+    assert UNTRUSTED_BANNER in prompts[0]
+    assert DATA_BEGIN in prompts[0] and DATA_END in prompts[0]
+
+
+def test_run_task_rejects_kind_mismatch() -> None:
+    """spec.kind 与任务的 kind 不一致 ⇒ 直接拒绝（数据区不得错位，`AR-31`）。"""
+    sink = _MemorySink()
+    spec = service.TaskSpec(kind="other", session_id="s", deadline_s=1.0, payload={})
+    with pytest.raises(ValueError, match="AR-31"):
+        service.run_task(_demo_task(seen_prompts=[]), spec, sink=sink)
+    assert sink.items == []
+
+
+def test_run_task_rejects_missing_checked_field() -> None:
+    """声明的受检字段不在输出里 ⇒ **拒绝** —— 不得静默跳过（ADR-0025 决定 3）。"""
+    task = _demo_task(seen_prompts=[], profile=_demo_profile_with("body"))
+    sink = _MemorySink()
+    envelope = service.run_task(task, _demo_spec(), sink=sink)
+
+    assert not envelope.accepted
+    assert "声明的受检字段" in str(envelope.rejected_reason)
+    assert sink.items == [], "被拒绝就不该有产物"
+
+
+def test_run_task_rejects_non_string_checked_field() -> None:
+    """受检字段不是字符串 ⇒ **拒绝**（不能因为类型不对就把那几关跳过）。"""
+    task = _demo_task(
+        seen_prompts=[],
+        schema=_demo_schema(_contract.Field("text", (int,), True)),
+        candidate={"text": 123},
+    )
+    envelope = service.run_task(task, _demo_spec(), sink=_MemorySink())
+
+    assert not envelope.accepted
+    assert "必须是字符串" in str(envelope.rejected_reason)
+
+
+def test_run_task_enforces_task_output_cap() -> None:
+    """`max_output` 不是文档：它真的参与上限计算（ADR-0025 决定 3）。"""
+    long_text = DEMO_TEXT + "x" * 20
+    task = _demo_task(seen_prompts=[], max_output=10, candidate={"text": long_text})
+    envelope = service.run_task(task, _demo_spec(), sink=_MemorySink())
+
+    assert not envelope.accepted
+    assert "length" in str(envelope.rejected_reason)
+
+
+def test_run_task_scans_every_checked_field() -> None:
+    """多个受检字段**逐个**检查，且拒绝原因指明是哪一个（可审计）。"""
+    task = _demo_task(
+        seen_prompts=[],
+        schema=_demo_schema(
+            _contract.Field("text", (str,), True),
+            _contract.Field("extra", (str,), True),
+        ),
+        profile=_demo_profile_with("text", "extra"),
+        candidate={"text": DEMO_TEXT, "extra": "这是蜜罐"},  # 自曝类命中（AR-22）
+    )
+    envelope = service.run_task(task, _demo_spec(), sink=_MemorySink())
+
+    assert not envelope.accepted
+    assert "extra" in str(envelope.rejected_reason)
+
+
+def test_run_task_without_client_reports_explicit_failure() -> None:
+    """匿名任务没接模型客户端也能跑（内核不强制模型）——但真要调模型时会显式失败（`AR-15`）。"""
+    prompts: list[str] = []
+    task = _demo_task(seen_prompts=prompts)
+    assert task.requires_model is False
+    assert service.run_task(task, _demo_spec()).accepted
+
+
+def test_profile_without_checked_fields_fails_assertion() -> None:
+    """缺 `checked_fields` ⇒ 启动期断言失败（fail-closed）。"""
+    task = _demo_task(seen_prompts=[], profile=_demo_profile_with())
+    with pytest.raises(AssertionError, match="checked_fields"):
+        task.assert_declared()
+
+
+def _demo_profile_with(*checked: str) -> _registry.GuardrailProfile:
+    return _registry.GuardrailProfile(
+        name="demo-profile",
+        prompt="content",
+        style_terms=(DEMO_TEXT,),
+        checked_fields=checked,
+    )

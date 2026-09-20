@@ -58,7 +58,7 @@
 | 层 | 状态 | 说明 |
 | --- | --- | --- |
 | **注入机制** | ✅ 已实现 | [`edge/injection/`](../../edge/injection)：只改**改道侧** HTML 响应（`INT-8`），按 `marker` 定位、找不到就跳过（不阻断响应）；规则由策略面 `inject_rules` 下发（`injects[]` 为 `[]` 表示显式关闭） |
-| **AI 能力服务**（生成出口） | ✅ **已实现（阶段 A）** | [`analysis/aicap/`](../../analysis/aicap)：唯一出口 `generate(TaskSpec) → Envelope`，**内部强制走护栏**（前置三段式提示词 + 后置四关）——未登记的 kind 必拒、缺护栏档案**启动期就失败**（`AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)） |
+| **AI 能力服务**（生成出口） | ✅ **已实现（阶段 A）** | [`analysis/aicap/`](../../analysis/aicap)：唯一出口 `generate(TaskSpec) → Envelope`，**内部强制走护栏**（前置三段式提示词 + 后置四关）——未登记的 kind 必拒、缺护栏档案**启动期就失败**（`AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)）。**已解耦**（[ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md)）：内核不认识「内容」，接一个新消费方 = 加 `produce`/`build` + 一条登记（[`../spec/ai-contract.md`](../spec/ai-contract.md) §6），内核零改动；「独立」由 `make archcheck` 的 `MD-4` 项保证 |
 | **欺骗内容通路** | ✅ **已实现（阶段 A）** | 离线生成 → 过护栏 → 清单（[`../spec/ai-contract.md`](../spec/ai-contract.md)）→ 核心装载进 `store.ContentStore` → 策略面 `content_manifest` 下发 → 适配器按（资源 + 会话哈希）**确定性命中**并注入改道侧；DAG 上多一跳「内容注入」 |
 | **三层开关** | ✅ 已实现（默认全关） | `ai.enabled`（能力）· `inject_enabled`（下发）· `SHEN_PROXY_INJECT_CONTENT`（适配器兜底，默认 `false`）——取**与**；不打开时行为与以前逐字节一致 |
 | 诱饵资产 | 🟡 定义与多态已实现 | [`core/internal/decoy/`](../../core/internal/decoy)（`MD-25` observe-only）；**资产内容 → 边缘的执行通路未接通**（设计登记的未接通项） |

@@ -9,6 +9,85 @@
 
 ---
 
+## 2026-09-20 · AI 生成出口解耦：内核不认识「内容」，接入新消费方零改内核
+
+**做了什么**：把 `ai-capability` 从「欺骗内容生成器」改成「**受护栏的结构化生成出口**」。
+
+背景：ADR-0023 承诺过「为第二个消费方留了同一出口」，但**只做到一半** —— 注册表是可插拔的，
+**出口本身却绑死在内容上**：`generate()` 内部直接写 `ContentStore`、`build` 必须返回 `ContentObject`、
+风格检查写死读 `body`。用户已明确 L4 的 AI 分析与后续的动态沙箱都要用这个能力，
+所以第二个消费方一到，要么改内核，要么**复制护栏**（后者正是 `AR-33` 要防的绕过路径）。
+
+改四件事：
+
+1. **内核任务无关化**：抽出 `run_task(task, spec, …)`，五步只做「取任务 → 前置护栏 → 生成 → 后置护栏 → 交 sink」。
+   内核**不再 import `content.py`** —— 「把 `kind=content` 整块删掉内核仍可用」是它的判据；
+2. **产物出口是缝隙**：新增 `analysis/aicap/ports.py`（`Artifact` / `Sink` 两个 Protocol，**不 import 本包任何模块**），
+   `generate(store=…)` 改为 `generate(sink=…)`；`ContentStore` 显式继承 `Sink`；
+3. **声明即纪律**（修两处 fail-open）：受检字段从写死 `body` 改为**任务声明的** `checked_fields`
+   （声明了却不在输出里 / 不是字符串 ⇒ **拒绝**，不再静默跳过）；`TaskLimits.max_output` 以前**声明了却从不生效**，
+   现在有效上限 = `min(用途上限, 任务上限)`；
+4. **「解耦」变成机器判据**：`make archcheck` 新增 `MD-4` 项 —— `analysis/aicap/**` 的仓内依赖白名单只允许 `analysis.llm`
+   与它自己，`analysis/llm/**` 禁止反向依赖 `aicap`。判据与失效条件写进 [ADR-0025](background/decisions/0025-generic-guardrailed-outlet.md)。
+
+`kind=content` **零行为变化**（`make ai-check` 17/17，三组基线 sha256 逐个相等）。
+本轮**未改 `docs/design/`** —— `AR-33` 的措辞从「欺骗内容生成」放宽为「任何生成」是**升格**，
+作为 ADR-0025 的 🟡 提案列出，**待用户确认**。
+
+**改了哪些文件**：新增 `analysis/aicap/ports.py` · `docs/background/decisions/0025-generic-guardrailed-outlet.md` ·
+`docs/plans/2026-09-20-aicap-decoupling.md`；修改 `analysis/aicap/service.py` · `analysis/aicap/tasks/_registry.py` ·
+`analysis/aicap/guardrail/inspect.py` · `analysis/aicap/content.py` · `analysis/aicap/__init__.py` ·
+`analysis/aicap/tasks/content.py` · `analysis/aicap/__main__.py` · `analysis/llm/blacklist.py` ·
+`analysis/tests/test_aicap_guardrail.py` · `analysis/tests/test_aicap_content.py` · `scripts/archcheck/main.go` ·
+`scripts/archcheck/README.md` · `docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` ·
+`docs/background/decisions/README.md`。
+
+**对应文档**：`docs/plans/2026-09-20-aicap-decoupling.md`（含追溯矩阵与审视 10 条）·
+`docs/spec/ai-contract.md`（§1.3/§1.4/§1.6 修准 + **新增 §6「接入一个新 kind」三步**）·
+`docs/modules/ai-capability.md` · `docs/background/decisions/0025-generic-guardrailed-outlet.md` ·
+`analysis/aicap/__init__.py`（内核 / 插件两张表）· `scripts/archcheck/README.md`。
+
+**验证**：`make gate` 通过（含 `make trace`）· `make dev` 通过 · `make ai-check` **17/17**。
+新增单测 **8** 例（**71 → 79** 全绿）。`make archcheck` 新增 `MD-4` 项并做了**构造性反证**。
+
+**证据**：
+
+```console
+$ make gate
+架构检查通过。
+  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）      ← 本轮新增的门禁项
+79 passed in 0.18s                                   ← 本轮前 71
+门禁通过。
+
+$ make ai-check
+  ✓ 改道侧与「未注入基线」逐字节一致：9eef5471e0ca88c0 vs 9eef5471e0ca88c0
+  ✓ 业务侧与业务基线逐字节一致：3e535d75f9418bcc vs 3e535d75f9418bcc
+  ✓ 同会话同资源三次 → 响应 sha256 相同：sha256=744905218c9cee91
+✅ 全部通过（17 项）
+
+# 反证：临时在 analysis/llm/envelope.py 加一行反向依赖 ⇒ 必须被拦
+  ✗ MD-4   禁止依赖 analysis.aicap —— analysis/llm 只允许依赖：llm（AI 能力必须独立、依赖方向单向）
+        analysis/llm/envelope.py
+```
+
+**解耦的可执行证明**：新单测里有一个**只在测试里存在**的假 kind（`kind="demo"`：字段叫 `text`、
+产物叫 `_DemoArtifact`、出口叫 `_MemorySink`），它完整走完内核（前置数据区 → 四关 → 产物进 sink → 进 `Envelope`）。
+内核若还绑在「内容」上，这一组会全红。
+
+**没做 / 遗留**：① `AR-33` 措辞放宽**仍在提案**（待用户确认）；② 动态沙箱**未立项**（形态 / 层次 / 语言待用户裁定）；
+③ 产物契约未用跨语言标准（JSON Schema），需第二个消费方到场才定；④ 注册表仍是显式两行登记（有意为之）；
+⑤ 三项 OSS 复用候选仍未落地；⑥ `ports.py` 的两个缝是**只有一个消费方时**抽的预置抽象
+（失效条件：2026-12-20 前第二个消费方仍未出现则重新审视）；⑦ `analysis/aicap/**` 其余文件的 docstring 链接深度
+（`../../../docs/`，超出仓库根）未修。去向：`docs/plans/2026-09-20-aicap-decoupling.md` §7 与
+[ADR-0025](background/decisions/0025-generic-guardrailed-outlet.md)。
+
+**另一件值得记的事**：本轮定位一条**工具缓存造成的假失败**花了三轮 —— 分析器反复回放一句引用旧签名的诊断
+（`put(item: ContentObject) -> str`），而那时磁盘上的 `ContentStore.put` 早已是 `(artifact: Artifact) -> str`，
+且全仓只有一处定义。教训写进审视表第 6 条：**碰到「分析器说的」与「磁盘上写的」不一致，
+先把它当缓存问题证伪（全仓 grep + 运行期 `inspect.signature` + 刷新后的探针），再动手改代码**。
+
+---
+
 ## 2026-09-20 · AI 能力层的开源复用审查 + Python 依赖许可审计面（`TB-16` 的实现缺口）
 
 **做了什么**：把阶段 A 的 AI 代码（`analysis/llm` 9 模块 + `analysis/aicap` 9 模块，除 `PyYAML` 外零第三方依赖）

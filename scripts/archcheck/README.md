@@ -5,7 +5,7 @@
 | 项 | 值 |
 | --- | --- |
 | 阶段 | 1 |
-| 依据 | `ST-1` · `ST-2` · `ST-3`（兜底）· `ST-4` · `MD-18` · `MD-19` · `MD-20` · `TB-20` · `TB-21` · `TB-24` · `AR-33` |
+| 依据 | `ST-1` · `ST-2` · `ST-3`（兜底）· `ST-4` · `MD-4` · `MD-18` · `MD-19` · `MD-20` · `TB-20` · `TB-21` · `TB-24` · `AR-33` |
 
 ## 它是什么
 
@@ -26,6 +26,7 @@
 | 禁止 CGO 与本地库 | `import "C"`、`.c` / `.so` / `.dylib` 等文件 | `TB-24` |
 | 语言层数 | 引入第 6 种实现语言 | `TB-20` · `TB-21` |
 | 护栏是唯一出口 | `analysis/` 下除 `ai-capability` 的出口（`service.py`）、接缝（`model.py`）、`llm/` 自身与测试外，import 模型客户端 | `AR-33` |
+| AI 能力独立性 | `analysis/aicap/**` 依赖了 `analysis.llm` 之外的东西（能力反过来依赖消费者）；`analysis/llm/**` 依赖了 `analysis.aicap`（纪律层反向依赖出口） | `MD-4`（Python 侧依赖方向） |
 
 ## 怎么跑
 
