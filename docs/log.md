@@ -40,6 +40,10 @@
 | 真进入幻境后端 | executed=mirage | ⚠️ 未观测到（本机无可用后端，如实登记） |
 | 门禁 | 绿 | ✅ |
 
+**补记（同轮修复）**：终验时发现一处**跨尝试错误配对** —— 判定失败（failopen）的请求会按 decision_id 配上窗口里的**旧判定**，
+于是图上出现"分值 0.90 + 落点 failopen"这种自相矛盾的组合。已改为 **failopen 不参与 join**（它本来就没有判定），
+并加用例 `TestFailOpenDoesNotInheritStaleDecision`；实测修复后为 `intent=(未判定) score=0 executed=failopen`。
+
 **没做 / 遗留**：① `executed=mirage` 与 `whitelist` 未实测（需一个真实可达的蜜罐后端）；② `--check-graph` 一致性断言仍未实现；③ 验证配置含 `shadow: false`（危险设置，仅验证用，已加警告）；④ 事件 id 形态变化对旧数据靠控制台兼容路径兜住。
 
 ---

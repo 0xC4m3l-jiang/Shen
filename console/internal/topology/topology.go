@@ -415,7 +415,12 @@ func BuildRequests(in Input, alertScore float64) []RequestGraph {
 
 	out := make([]RequestGraph, 0, len(in.Judged))
 	for _, j := range in.Judged {
+		// 判定失败（failopen）**不做 join**：这次请求根本没有判定，若按 decision_id 配上窗口里的**旧判定**，
+		// 图上就会出现"分值 0.90 + 落点 failopen"这种自相矛盾的组合（实测踩过）。
 		dec, paired := decisions[j.DecisionID]
+		if j.Executed == "failopen" {
+			dec, paired = DecisionEvent{}, false
+		}
 		rg := RequestGraph{
 			DecisionID: j.DecisionID, At: j.At, Method: j.Method, Path: j.Path, UA: j.UA,
 			Executed: j.Executed, Backend: j.Backend, Status: j.Status, Bytes: j.Bytes,

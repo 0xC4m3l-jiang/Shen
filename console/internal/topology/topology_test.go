@@ -189,3 +189,27 @@ func TestDecisionPayloadUsesDesignTerms(t *testing.T) {
 		t.Fatalf("action=block 应计真实告警：%+v", g2)
 	}
 }
+
+// TestFailOpenDoesNotInheritStaleDecision 守住一条反面规则：判定失败的请求**不得**继承同 id 的旧判定。
+// 否则图上会出现"分值 0.90 + 落点 failopen"这种自相矛盾的组合（实测踩过）。
+func TestFailOpenDoesNotInheritStaleDecision(t *testing.T) {
+	g := BuildRequests(Input{
+		Judged:    []JudgedEvent{{DecisionID: "d1", Executed: "failopen", DecisionError: "DeadlineExceeded"}},
+		Decisions: []DecisionEvent{{DecisionID: "d1", Action: ActionMirage, Score: 0.9, Signals: []string{"ua-headless"}}},
+	}, 0.9)
+	if len(g) != 1 {
+		t.Fatalf("应有一条链路：%+v", g)
+	}
+	rg := g[0]
+	if rg.Score != 0 || rg.Action != "" || len(rg.Signals) != 0 {
+		t.Fatalf("判定失败不该带判定值（实际 score=%v action=%q signals=%v）", rg.Score, rg.Action, rg.Signals)
+	}
+	if !rg.Unjudged {
+		t.Fatal("判定失败应计为未判定")
+	}
+	for _, n := range rg.Chain {
+		if n.ID == "decision" {
+			t.Fatal("判定失败不应出现决策节点")
+		}
+	}
+}
