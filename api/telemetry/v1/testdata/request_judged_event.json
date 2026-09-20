@@ -1,0 +1,13 @@
+{
+  "action": "ACTION_MIRAGE",
+  "backend": "mirage",
+  "bytes": 8123,
+  "decision_error": "",
+  "duration_ms": 4.2,
+  "executed": "origin_fallback",
+  "method": "GET",
+  "path": "/.git/config",
+  "shadow": false,
+  "status": 200,
+  "ua": "HeadlessChrome/120"
+}

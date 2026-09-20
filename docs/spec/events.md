@@ -54,3 +54,34 @@
 
 > 为什么这么严：L4 曾按**自造的字段名**解析，测试自洽但运行时一条也解不出（取到事件却 0 条可分析）。
 > 契约测试就是那次事故的防线。
+
+## 2.2 `request_judged` 载荷（适配器 → 核心）
+
+适配器在**每次请求处理结束后**上报一条（异步、幂等：`event_id` = `decision_id`，`AR-11`）。
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `method` / `path` / `ua` | string | 请求身份（攻击者可控，仅内部可见） |
+| `action` | string | **核心判成什么**（`ACTION_ORIGIN` / `ACTION_MIRAGE` / `ACTION_BLOCK`）—— 意图 |
+| `shadow` | bool | 是否影子模式（`INT-11`） |
+| `executed` | string | **适配器实际走了哪** —— 见下表（图与验证页靠它区分意图/实际） |
+| `backend` | string | 实际使用的幻境后端名（仅 `mirage` 时非空） |
+| `status` | int | 返回给客户端的状态码（`block`=403） |
+| `bytes` | int | 响应体字节数 |
+| `duration_ms` | float | 从进入适配器到响应结束（毫秒） |
+| `decision_error` | string | 判定失败原因（空 = 判定成功） |
+
+`executed` 的七个取值（**唯一权威定义**，改它必须同步 `edge/proxy` 的 `executedFor` 与本文）：
+
+| 取值 | 何时 |
+| --- | --- |
+| `whitelist` | 白名单命中，未调核心（`INT-25`） |
+| `cache` | 本地判定缓存命中，未调核心（`ST-10`） |
+| `failopen` | 调核心失败（超时/不可达），按 `NI-3`/`NI-4` 放行 |
+| `origin` | 决策 `route_origin`（含影子模式下的一切处置） |
+| `origin_fallback` | 决策 `route_mirage` 但后端未登记/不可达 ⇒ 回落源站（`NI-5`） |
+| `mirage` | 决策 `route_mirage` 且成功转发到幻境后端 |
+| `block` | 决策 `block`，返回 403 |
+
+**夹具**：[`../../api/telemetry/v1/testdata/request_judged_event.json`](../../api/telemetry/v1/testdata/request_judged_event.json)（由 `edge/proxy` 的契约测试逐键比对）。
+**消费者**：控制台的流量调度图与链路详情（`/api/topology` · `/api/trace`）。**L4 worker 不消费本事件**（它只读 `decision`），所以**无需** Python 侧改动。

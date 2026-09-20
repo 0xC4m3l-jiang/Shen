@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -30,11 +31,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	telemetryv1 "shen/api/telemetry/v1"
+	"shen/console/internal/topology"
 	"shen/console/web"
 )
 
 // 默认地址：核心在同机监听 127.0.0.1:9443；控制台自己监听 127.0.0.1:9444。
 const (
+	defaultAlertScore = 0.9 // 「高风险」显示阈值：只影响图的标色，不改变任何处置
+
 	defaultCoreAddr = "127.0.0.1:9443"
 	defaultListen   = "127.0.0.1:9444"
 	// decisionEventType 是核心写侧用的判定事件类型（见 core/cmd/core 的观测面适配器）。
@@ -42,6 +46,9 @@ const (
 
 	// analysisEventType 是 L4 近线分析上报的结论事件类型（见 analysis/worker.py）。
 	analysisEventType = "analysis"
+
+	// judgedEventType 是适配器上报的逐请求执行事件（含实际落点与返回信息）。
+	judgedEventType = "request_judged"
 )
 
 // flowRecord 是**判定事件**的载荷形状（跨进程契约：与核心写侧的 DecisionRecord 字段一一对应）。
@@ -123,6 +130,8 @@ func main() {
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/flow", s.handleFlow)
 	mux.HandleFunc("/api/analysis", s.handleAnalysis)
+	mux.HandleFunc("/api/topology", s.handleTopology)
+	mux.HandleFunc("/api/trace", s.handleTrace)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		// 存活探针只反映**本进程**存活；核心是否可达由页面上的错误提示体现（ST-17 的语义区分）。
 		w.WriteHeader(http.StatusOK)
@@ -210,6 +219,133 @@ func (s *server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, out)
+}
+
+// handleTopology 把观测面事件聚合成**流量调度图**（只读；AR-10：控制面不参与判定）。
+//
+// 数据来源：核心的 decision 事件（意图：分值/信号/决策）+ 适配器的 request_judged 事件
+// （实际落点与返回信息）+ L4 的 analysis 事件（注解）。三者以 decision_id 关联。
+func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
+	events, err := s.fetch(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	in := topology.Input{}
+	for _, ev := range events {
+		switch ev.Type {
+		case decisionEventType:
+			var d topology.DecisionEvent
+			if json.Unmarshal(ev.Raw, &d) == nil && d.DecisionID != "" {
+				in.Decisions = append(in.Decisions, d)
+			}
+		case judgedEventType:
+			var j topology.JudgedEvent
+			if json.Unmarshal(ev.Raw, &j) == nil {
+				j.DecisionID = ev.EventID // 事件 id 就是 decision_id（AR-11 的幂等键）
+				j.At = ev.CreatedAt
+				in.Judged = append(in.Judged, j)
+			}
+		case analysisEventType:
+			var a topology.AnalysisEvent
+			if json.Unmarshal(ev.Raw, &a) == nil {
+				a.At = ev.CreatedAt
+				in.Analysis = append(in.Analysis, a)
+			}
+		}
+	}
+	writeJSON(w, topology.Build(in, alertScore()))
+}
+
+// traceView 是单条请求的完整链路（页面的详情面板用它）。
+type traceView struct {
+	DecisionID string            `json:"decision_id"`
+	Judged     json.RawMessage   `json:"judged,omitempty"`   // 适配器：实际落点 + 返回信息
+	Decision   json.RawMessage   `json:"decision,omitempty"` // 核心：意图（分值 / 信号 / 决策）
+	Analysis   []json.RawMessage `json:"analysis,omitempty"` // L4 注解（引用到这条判定的结论）
+	Alerts     traceAlerts       `json:"alerts"`
+	Notes      []string          `json:"notes"`
+}
+
+type traceAlerts struct {
+	Real     bool   `json:"real"`      // 现行口径：拦截 或 severity≠none
+	HighRisk bool   `json:"high_risk"` // 仅显示用：score ≥ 阈值
+	Reason   string `json:"reason"`
+}
+
+// handleTrace 返回某条 decision_id 的完整链路。
+func (s *server) handleTrace(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("decision_id"))
+	if id == "" {
+		writeErr(w, errors.New("缺 decision_id 参数"))
+		return
+	}
+	events, err := s.fetch(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+
+	out := traceView{DecisionID: id}
+	threshold := alertScore()
+	out.Notes = append(out.Notes, fmt.Sprintf("高风险阈值 %.2f 仅用于显示，不改变处置", threshold))
+	var score float64
+	var hasScore bool
+	for _, ev := range events {
+		switch ev.Type {
+		case judgedEventType:
+			if ev.EventID == id {
+				out.Judged = ev.Raw
+			}
+		case decisionEventType:
+			var d topology.DecisionEvent
+			if json.Unmarshal(ev.Raw, &d) == nil && d.DecisionID == id {
+				out.Decision = ev.Raw
+				score, hasScore = d.Score, true
+				if d.Action == "ACTION_BLOCK" || (d.Severity != "" && d.Severity != "none") {
+					out.Alerts.Real = true
+					out.Alerts.Reason = "拦截 或 severity≠none（现行告警口径）"
+				}
+				if d.Severity == "" || d.Severity == "none" {
+					out.Notes = append(out.Notes, "severity 档位未定（恒为 none）⇒ 影子模式下真实告警恒为 0")
+				}
+			}
+		case analysisEventType:
+			var a topology.AnalysisEvent
+			if json.Unmarshal(ev.Raw, &a) != nil {
+				continue
+			}
+			for _, evidence := range a.EvidenceIDs {
+				if evidence == id {
+					out.Analysis = append(out.Analysis, ev.Raw)
+					break
+				}
+			}
+		}
+	}
+	if hasScore && score >= threshold {
+		out.Alerts.HighRisk = true
+	}
+	if out.Judged == nil {
+		out.Notes = append(out.Notes, "没有适配器执行记录：可能是白名单/缓存之前的老数据，或事件已被缓冲挤出")
+	}
+	if out.Decision == nil {
+		out.Notes = append(out.Notes, "没有核心判定记录：这条未被判定（白名单命中 / 判定缓存命中 / 判定失败后放行）")
+	}
+	writeJSON(w, out)
+}
+
+// alertScore 读取「高风险」显示阈值（仅显示用；默认 0.9，非法值回落到默认）。
+func alertScore() float64 {
+	raw := strings.TrimSpace(os.Getenv("SHEN_CONSOLE_ALERT_SCORE"))
+	if raw == "" {
+		return defaultAlertScore
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 || value > 1 {
+		return defaultAlertScore
+	}
+	return value
 }
 
 // handleSummary 返回概览：总数、按决策分布、告警条数、时间范围。

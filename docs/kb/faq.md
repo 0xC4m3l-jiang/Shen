@@ -129,3 +129,8 @@ make run        # 本地起核心（影子模式）
 
 [`../ops/functional-verification.md`](../ops/functional-verification.md)：§2 缺口清单（含怎么关）· §3 当前环境验不了的能力 ·
 §4 运维陷阱 · §5 方法论边界。完成度看 [`../progress.md`](../progress.md)。
+
+## Q15 · 流量调度图上为什么"判定=改道、实际落点=源站"？
+
+因为**影子模式**（`INT-11`）：核心照算判定（意图可能是 `route_mirage`），但适配器**不执行**改道，仍把请求送到业务源站。
+这是首次上线必须的状态。要看到真正的改道，需要：关掉影子 + 在 `honeypots[]` 里登记一个可用后端（否则执行会记为 `origin_fallback`，即 `NI-5` 回落，图上画成虚线）。

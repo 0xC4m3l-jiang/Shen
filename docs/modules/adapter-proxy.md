@@ -264,3 +264,11 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/2026-09-19-forwarding-deception-hardening.md) |
 | 2026-09-19 | **转发边界实测锁定**：协议升级（WebSocket）· 流式不被缓冲 · 2 MiB 响应不注入不截断 · 8 MiB 上传完整送达 · 观测不含 body · h2 下行 + h1.1 上行；新增 6 例集成测试 | [`../plans/2026-09-19-forwarding-boundary-verification.md`](../plans/2026-09-19-forwarding-boundary-verification.md) |
 | 2026-09-19 | **`NI-12` 的 `V-1…V-4` 自动化**（真 Caddy + 真 gRPC/裸 TCP 故障注入，每条连打 20 次要求 100% 正常）· 新增 `AR-29` 空载下界基准与 `make bench`；`V-5` 归入接入演练 | [`../plans/2026-09-19-ni12-vseries-and-ar29-floor.md`](../plans/2026-09-19-ni12-vseries-and-ar29-floor.md) |
+
+## 9.1 执行落点与响应观测（供流量调度图）
+
+每次请求结束都会异步上报一条 `request_judged`（见 [`../spec/events.md`](../spec/events.md) §2.2），其中：
+
+- `executed`：**实际落点**，由纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定 —— 穷举测试在 `edge/proxy/wire_test.go`；
+- `status` / `bytes` / `duration_ms`：由 `headerSanitizer` 顺带观测（它本就包住整个请求的 `ResponseWriter`，不再加一层包装）；
+- 影子模式下 `action` 可能显示 `route_mirage`（意图）而 `executed=origin`（实际）—— 这正是页面上要区分两者、避免误判"已经改道了"的原因（`INT-11`）。

@@ -101,3 +101,13 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：策略编排 + 资产管理 + 审计查询 | 既有清单（`modules.md` §1.1） |
+
+## 9.1 流量调度图（DAG）与链路详情（2026-09-20 新增）
+
+| 项 | 内容 |
+| --- | --- |
+| 接口 | `GET /api/topology?limit=N`（聚合图模型）· `GET /api/trace?decision_id=...`（单请求四段：请求/判定/执行与返回/告警） |
+| 聚合逻辑 | [`../../console/internal/topology/`](../../console/internal/topology/)（纯函数 + 单测；join 键 = `decision_id`） |
+| 页面 | 内联 SVG 分层布局（固定列、不做力导向）；点节点/边过滤请求、点行看详情；**禁止 `innerHTML`**（路径与 UA 是攻击者可控字符串） |
+| 告警口径 | 真实告警 = `block` 或 `severity≠none`（不变）；「高风险」= `score ≥ SHEN_CONSOLE_ALERT_SCORE`（默认 0.9）**仅显示**、不改变处置（`AR-10` 边界未变） |
+| 已知限制 | 影子模式下真实告警恒为 0（`severity` 档位未定）；没登记幻境后端时图上不会出现幻影分支 —— 页面用 `notes` 明确写出这些事实 |

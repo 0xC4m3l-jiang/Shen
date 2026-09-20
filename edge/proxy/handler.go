@@ -311,66 +311,69 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	//    · `Server` 的规则是「与上游一致或直接透传」：上游给了就保留（下面按值判断），我们的默认值删掉。
 	sw := &headerSanitizer{ResponseWriter: w}
 	r.Header.Del("Via") // 也不让上游 / 幻境后端看到我们的栈指纹
+	started := time.Now()
+	// decision_id 在**最前面**就派生好：白名单命中也要上报逐判定事件（图上要能看见这条分支），
+	// 而事件 id 就是 decision_id（幂等键，AR-11）。
+	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
 
 	// ① 白名单先于改道判定（INT-25）—— 命中则不调核心，直接透传。
 	// 本地白名单（env）与远端白名单（策略面）取**并集**：护栏只增不减（见 applyEdgePolicy）。
 	ip := clientIP(r, h.TrustXFF)
 	if whitelisted(ip, h.whitelist) || h.remoteWhitelisted(ip) {
-		if h.LogRequests {
-			log.Printf("proxy: 白名单命中，跳过判定：%s %s 来源=%s", r.Method, r.URL.Path, ip)
-		}
-		return h.forward(sw, r, next, targetOrigin)
+		ferr := h.forward(sw, r, next, targetOrigin)
+		h.reportRoute(r, id, judgev1.Action_ACTION_ORIGIN, routeInfo{executed: executedWhitelist}, sw, started)
+		return ferr
 	}
 
-	// ② 派生 decision_id（ST-10）并查本地判定缓存（AR-6 第 2 件事）。
-	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
+	// ② 本地判定缓存（AR-6 第 2 件事）：命中则不调核心，按缓存结果处置。
 	if act, backend, ok := h.cache.get(id); ok {
-		if h.LogRequests {
-			log.Printf("proxy: 判定缓存命中：%s %s decision_id=%s → %s（后端 %q）",
-				r.Method, r.URL.Path, id, actionName(act), backend)
-		}
-		return h.dispatch(sw, r, next, act, backend)
+		executed, derr := h.dispatch(sw, r, next, act, backend)
+		// 落点记 `cache`（“未重新判定”）；图按 action/backend 归到意图分支上。
+		h.reportRoute(r, id, act, routeInfo{executed: executedCache, backend: backend, dispatched: executed}, sw, started)
+		return derr
 	}
 
 	// ③ 调核心判定。任何失败都已折叠成「放行」（NI-3 / NI-4 / NI-5）。
 	act, backend, err := h.decide(r, id)
 	h.cache.put(id, act, backend)
-	if h.LogRequests {
-		// 本地排查的主线索：判定 id + 结果 + 后端 +（若有）失败原因。
-		log.Printf("proxy: 判定：%s %s decision_id=%s → %s（后端 %q，失败=%v）",
-			r.Method, r.URL.Path, id, actionName(act), backend, err)
+
+	// ④ 按结果路由 → 再异步上报（AR-6 第 3 / 4 件事）。
+	if err != nil {
+		// 判定失败：放行到业务（NI-3），落点记 failopen —— 这是“为什么没判”在图上的唯一痕迹。
+		ferr := h.forward(sw, r, next, targetOrigin)
+		h.reportRoute(r, id, act, routeInfo{executed: executedFailOpen, cause: err}, sw, started)
+		return ferr
 	}
-
-	// ④ 异步上报（AR-6 第 4 件事）—— 不阻塞请求。
-	h.enqueueEvent(r, id, act, err)
-
-	return h.dispatch(sw, r, next, act, backend)
+	executed, derr := h.dispatch(sw, r, next, act, backend)
+	h.reportRoute(r, id, act, routeInfo{executed: executed, backend: backend}, sw, started)
+	return derr
 }
 
 // dispatch 按决策结果选择路径。
 //
 // Shadow 为真时**永不改道、永不拦截**（INT-11：首次上线必须影子模式）；
 // 决策照算、照上报，只是不执行。
-func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, act judgev1.Action, backend string) error {
+func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, act judgev1.Action, backend string) (string, error) {
 	if h.Shadow {
-		return h.forward(w, r, next, targetOrigin)
+		return executedFor(true, act, false, false), h.forward(w, r, next, targetOrigin)
 	}
 	switch act {
 	case judgev1.Action_ACTION_MIRAGE:
 		// 后端名查不到一律回落业务（NI-5）—— 宁可漏改道，不可断业务。
 		if _, ok := h.mirageHandler(backend); !ok {
-			return h.forward(w, r, next, targetOrigin)
+			return executedFor(false, act, false, false), h.forward(w, r, next, targetOrigin)
 		}
-		return h.forwardMirage(w, r, next, backend)
+		fellBack, err := h.forwardMirage(w, r, next, backend)
+		return executedFor(false, act, true, fellBack), err
 	case judgev1.Action_ACTION_BLOCK:
 		// 403 是对手可见的处置 —— 这是**已承认的设计**（ADR-0002：引擎是欺骗调度器，
 		// 不是 WAF，可见拦截交接入层）。block 只用于「明确拒绝已知恶意」，不用于透明误导；
 		// route_mirage 才是本项目的核心价值。
 		w.WriteHeader(http.StatusForbidden)
-		return nil
+		return executedFor(false, act, false, false), nil
 	default:
 		// ACTION_ORIGIN 与任何未识别取值都放行。
-		return h.forward(w, r, next, targetOrigin)
+		return executedFor(false, act, false, false), h.forward(w, r, next, targetOrigin)
 	}
 }
 
@@ -405,22 +408,22 @@ func (h *Handler) mirageHandler(name string) (caddyhttp.MiddlewareHandler, bool)
 //
 // 用 trackingWriter 记录「是否已写出字节」：没写过 → 可安全重放到业务；
 // 写过 → 只能把错误如实抛出（由 Caddy 错误路由处理），否则会输出半截响应。
-func (h *Handler) forwardMirage(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) error {
+func (h *Handler) forwardMirage(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (bool, error) {
 	rp, ok := h.mirageHandler(backend)
 	if !ok {
 		// 理论上到不了这里（dispatch 已查过表）；真到了就回落业务，不报 500。
-		return h.origin.ServeHTTP(w, r, next)
+		return true, h.origin.ServeHTTP(w, r, next)
 	}
 	tw := &trackingWriter{ResponseWriter: w}
 	if err := rp.ServeHTTP(tw, r, next); err != nil {
 		if !tw.wrote {
 			log.Printf("proxy: 引流后端不可达，回落业务：%v", err)
-			return h.origin.ServeHTTP(w, r, next)
+			return true, h.origin.ServeHTTP(w, r, next)
 		}
 		log.Printf("proxy: 引流后端中途失败：%v", err)
-		return err
+		return false, err
 	}
-	return nil
+	return false, nil
 }
 
 // ── 与核心交互 ───────────────────────────────────────────────────────────────
@@ -473,19 +476,96 @@ func warmUp(ctx context.Context, conn *grpc.ClientConn, wait time.Duration) erro
 
 // ── 遥测上报 ─────────────────────────────────────────────────────────────────
 
-func (h *Handler) enqueueEvent(r *http.Request, id string, act judgev1.Action, cause error) {
-	if h.report == nil {
-		return
+// executed 的取值（唯一权威表见 docs/spec/events.md §2.2 与 docs/modules/adapter-proxy.md）。
+const (
+	executedWhitelist = "whitelist"       // 白名单命中，未调核心（INT-25）
+	executedCache     = "cache"           // 本地判定缓存命中，未调核心（ST-10）
+	executedFailOpen  = "failopen"        // 调核心失败，按 NI-3 放行
+	executedOrigin    = "origin"          // route_origin（含影子模式下的一切处置）
+	executedFallback  = "origin_fallback" // route_mirage 但后端不可用 ⇒ 回落源站（NI-5）
+	executedMirage    = "mirage"          // route_mirage 且成功转发到幻境后端
+	executedBlock     = "block"           // block，返回 403
+)
+
+// executedFor 决定「实际落点」的取值 —— 这是图上区分「核心判成什么」与「实际走了哪」的唯一依据。
+//
+// 纯函数（不碰任何依赖），因此可以穷举测试；`shadow` 优先于一切（影子模式只观测）。
+func executedFor(shadow bool, act judgev1.Action, mirageFound bool, mirageFellBack bool) string {
+	if shadow {
+		return executedOrigin
 	}
-	payload, err := json.Marshal(map[string]any{
+	switch act {
+	case judgev1.Action_ACTION_MIRAGE:
+		if !mirageFound || mirageFellBack {
+			return executedFallback
+		}
+		return executedMirage
+	case judgev1.Action_ACTION_BLOCK:
+		return executedBlock
+	default:
+		return executedOrigin
+	}
+}
+
+// routeInfo 是一次请求的「执行结果」，也是逐判定事件的载荷来源。
+type routeInfo struct {
+	executed   string  // 见 executed* 常量
+	backend    string  // 实际使用的幻境后端名（仅 mirage 时非空）
+	dispatched string  // 仅缓存命中时使用：缓存决策实际走到的落点
+	status     int     // 返回给客户端的状态码（在 reportRoute 里补齐）
+	bytes      int     // 响应体字节数（在 reportRoute 里补齐）
+	durationMs float64 // 从进入中间件到响应结束（在 reportRoute 里补齐）
+	cause      error   // 判定失败原因（非 nil 时必记 warn 日志）
+}
+
+// reportRoute 收尾：补全响应观测 → 记日志（失败必记；逐请求按开关）→ 异步上报逐判定事件。
+func (h *Handler) reportRoute(r *http.Request, id string, act judgev1.Action, info routeInfo, sw *headerSanitizer, started time.Time) {
+	info.status = sw.statusCode()
+	info.bytes = sw.bytesWritten()
+	info.durationMs = float64(time.Since(started).Microseconds()) / 1000.0
+
+	if info.cause != nil {
+		// 判定失败是「引擎没能判定」的唯一线索，**不受 SHEN_PROXY_LOG_REQUESTS 控制**（K-24 踩过）。
+		log.Printf("proxy: 判定失败，按 NI-3 放行到业务：%s %s decision_id=%s 耗时=%.1fms 原因=%v",
+			r.Method, r.URL.Path, id, info.durationMs, info.cause)
+	} else if h.LogRequests {
+		// 逐请求的主线索：判定意图 + 实际落点 + 返回信息（图/手册都按这四个维度看）。
+		log.Printf("proxy: 路由：%s %s decision_id=%s 判定=%s 落点=%s（后端 %q）状态=%d 字节=%d 耗时=%.1fms",
+			r.Method, r.URL.Path, id, actionName(act), info.executed, info.backend,
+			info.status, info.bytes, info.durationMs)
+	}
+	h.enqueueEvent(r, id, act, info)
+}
+
+// ── 遥测上报 ─────────────────────────────────────────────────────────────────
+
+// judgedEventPayload 构造 `request_judged` 事件的载荷。
+//
+// 字段表是**跨语言契约**（docs/spec/events.md §2.2）：夹具
+// api/telemetry/v1/testdata/request_judged_event.json 与契约测试都读它，改键必须同步三处。
+func (h *Handler) judgedEventPayload(r *http.Request, act judgev1.Action, info routeInfo) map[string]any {
+	return map[string]any{
 		"method": r.Method,
 		"path":   r.URL.Path,
 		"ua":     r.UserAgent(),
 		"action": act.String(),
 		"shadow": h.Shadow,
 		// 判定失败的原因要留下 —— 否则运营看到的是「全是放行」而不知道核心挂了。
-		"decision_error": errString(cause),
-	})
+		"decision_error": errString(info.cause),
+		// 以下为「实际落点 + 返回信息」（图与验证页靠它们）：
+		"executed":    info.executed,
+		"backend":     info.backend,
+		"status":      info.status,
+		"bytes":       info.bytes,
+		"duration_ms": info.durationMs,
+	}
+}
+
+func (h *Handler) enqueueEvent(r *http.Request, id string, act judgev1.Action, info routeInfo) {
+	if h.report == nil {
+		return
+	}
+	payload, err := json.Marshal(h.judgedEventPayload(r, act, info))
 	if err != nil {
 		payload = nil
 	}
@@ -683,17 +763,37 @@ const caddyDefaultServerHeader = "Caddy"
 type headerSanitizer struct {
 	http.ResponseWriter
 	done bool
+	// status / wrote 是**响应观测**：逐判定事件要报「返回给客户端的状态码与字节数」。
+	// 放在这里是因为它已经包住了整个请求的 ResponseWriter，不需要再加一层包装。
+	status int
+	wrote  int
 }
 
 func (s *headerSanitizer) WriteHeader(code int) {
+	s.status = code
 	s.sanitize()
 	s.ResponseWriter.WriteHeader(code)
 }
 
 func (s *headerSanitizer) Write(b []byte) (int, error) {
-	s.sanitize()
-	return s.ResponseWriter.Write(b)
+	n, err := func() (int, error) {
+		s.sanitize()
+		return s.ResponseWriter.Write(b)
+	}()
+	s.wrote += n
+	return n, err
 }
+
+// statusCode 返回实际状态码；从未显式写过头就是 200（net/http 的默认行为）。
+func (s *headerSanitizer) statusCode() int {
+	if s.status == 0 {
+		return http.StatusOK
+	}
+	return s.status
+}
+
+// bytesWritten 返回实际写出的响应体字节数。
+func (s *headerSanitizer) bytesWritten() int { return s.wrote }
 
 func (s *headerSanitizer) sanitize() {
 	if s.done {

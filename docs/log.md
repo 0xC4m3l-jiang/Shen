@@ -9,6 +9,38 @@
 
 ---
 
+## 2026-09-20 · 流量调度 DAG 图（意图 vs 实际落点）+ 告警入图
+
+**做了什么**：用户要看清"流量进来后实际走到哪"——是后段业务服务，还是进了我们设的幻境/蜜罐，并要求图上带请求与返回信息、告警也在图里。落地：
+① **契约扩展**（用户选定）：适配器的 `request_judged` 事件新增 `executed`（**实际落点**）+ `backend` + `status` + `bytes` + `duration_ms`。`executed` 七值有**唯一权威定义**：`whitelist` / `cache` / `failopen` / `origin` / `origin_fallback`（NI-5 回落）/ `mirage` / `block`。文档 + 夹具 + Go 契约测试三处同步。
+② **适配器**：`headerSanitizer` 顺带观测状态码与字节数（不新增包装层，不影响延迟预算 AR-29）；`ServeHTTP` 统一收尾到 `reportRoute`（**白名单命中与缓存命中此前根本不上报事件**，图上会缺分支 —— 一并修掉）；纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定落点，**7 值穷举单测**。
+③ **控制台聚合**（新增纯函数包 `console/internal/topology`）：按 `decision_id` join「核心判定（意图）」与「适配器执行（实际）」与 L4 结论；输出节点/边计数 + 汇总 + `notes`；**告警两段式**——真实告警（`block` 或 `severity≠none`，口径不变）+「高风险」显示标记（`score ≥ SHEN_CONSOLE_ALERT_SCORE`，默认 0.9，**仅显示**）。
+④ **两个只读接口**（`AR-10`）：`GET /api/topology`（聚合图）· `GET /api/trace?decision_id=…`（单请求四段：请求 / 判定 / 执行与返回 / 告警）。
+⑤ **页面**：新增「流量调度图（DAG）」区块 —— 内联 SVG 分层布局（固定列、边宽∝计数、回落画虚线）、图例、点击节点/边过滤请求、点请求看四段详情；全页仍是 DOM + `textContent`（路径与 UA 是攻击者可控字符串，`innerHTML` 只出现在注释里）。
+⑥ **如实标注**：影子模式提示（意图已判、执行仍在源站）、无幻境后端提示、判定失败计数与原因，都写进图的 `notes`，避免把缺口看成没问题。
+
+**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/wire_test.go`（新增）· `api/telemetry/v1/testdata/request_judged_event.json`（新增）·
+`console/internal/topology/topology.go`（新增）· `console/internal/topology/topology_test.go`（新增）· `console/cmd/console/main.go` · `console/web/index.html` ·
+`docs/spec/events.md` · `docs/spec/metrics.md` · `docs/modules/adapter-proxy.md` · `docs/modules/console.md` · `docs/integrate/observability.md` · `docs/kb/quick-tour.md` · `docs/kb/faq.md`
+
+**对应文档**：[`docs/plans/2026-09-20-traffic-dag-view.md`](docs/plans/2026-09-20-traffic-dag-view.md)（含追溯矩阵与审视 5 条）· [`docs/spec/events.md`](docs/spec/events.md) §2.2 · [`docs/integrate/observability.md`](docs/integrate/observability.md) §5
+
+**验证**：`make gate` 通过；拓扑单测与落点穷举测试通过；两个新接口对 Docker 栈**实跑有数据**。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 落点穷举 | 七值全覆盖 | ✅ `TestExecutedFor` 7/7 |
+| 契约 | 键集与夹具一致 | ✅ `TestRequestJudgedWireContract` |
+| 拓扑聚合 | 意图/实际配对 · 回落 · 告警分级 · 缺数据 | ✅ 4 用例（含空输入） |
+| /api/topology | 有节点/边/说明 | ✅ 节点 4 · 边 3 · `to_origin=2` · 含影子模式提示 |
+| /api/trace | 四段齐全 | ✅ 请求/判定/执行（executed=origin status=200 bytes=39 44.47ms）/告警 |
+| 页面渲染纪律 | 无 innerHTML 拼接 | ✅ 仅注释出现 |
+
+**没做 / 遗留**：① **`--check-graph` 一致性断言未实现**（原计划：拓扑计数 ↔ 判定条数，纳入 `verify`）；② 未在**真实改道**（非影子 + 登记可用幻境后端）下验证过图，`mirage` 分支目前只有单测；③ 页面布局未做真机视觉检查；④ 事件量大时只取最近 `limit` 条。
+
+---
+
 ## 2026-09-19 · 验证 + 代码/日志优化 + 文档整合减量
 
 **做了什么**：按用户要求"先验证，再优化代码与日志，再优化并整合文档"。

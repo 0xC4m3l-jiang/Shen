@@ -49,6 +49,22 @@
   </section>
 
   <section>
+    <h2>流量调度图（DAG） <span class="muted" id="dagHint"></span></h2>
+    <p class="muted" style="margin:0 0 8px">
+      **意图**（核心判成什么）与**实际**（适配器执行了什么）分开画：影子模式下意图可能判为改道，执行仍在业务源站（`INT-11`）；
+      幻境后端不可用时执行会回落业务（`NI-5`）。图为只读展示，**不改变任何处置**（`AR-10`）。
+    </p>
+    <div id="dagNotes" class="muted" style="margin:0 0 8px"></div>
+    <svg id="dag" viewBox="0 0 1100 420" width="100%" height="420" role="img" aria-label="流量调度图"></svg>
+    <div id="dagLegend" class="muted" style="margin:6px 0"></div>
+    <div id="dagBreadcrumb" class="muted" style="margin:4px 0"></div>
+    <table id="dagList"><thead><tr>
+      <th>时间</th><th>方法</th><th>路径</th><th>判定</th><th>实际落点</th><th>状态</th><th>字节</th><th>耗时 ms</th>
+    </tr></thead><tbody></tbody></table>
+    <div id="dagDetail"></div>
+  </section>
+
+  <section>
     <h2>告警 <span class="muted" id="alertHint"></span></h2>
     <table id="alerts"><thead><tr>
       <th>时间</th><th>决策</th><th>来源 IP</th><th>方法</th><th>路径</th><th>分值</th><th>命中信号</th><th>后端</th>
@@ -140,6 +156,174 @@ function summarizeConclusion(c) {
   return JSON.stringify(d);
 }
 
+// ── 流量调度图（DAG）────────────────────────────────────────────────────────
+// 只读展示（AR-10）：从 /api/topology 取聚合模型，从 request_judged 事件取逐请求明细用于下钻。
+// 渲染纪律与全页一致：只用 DOM / SVG textContent，绝不拼 innerHTML（路径与 UA 是攻击者可控字符串）。
+let dagModel = null;
+let dagRequests = [];
+let dagPick = null; // {kind:'node', id} 或 {kind:'edge', from, to}
+
+const DAG_COL = { client: 0, adapter: 1, branch: 2, judge: 2, origin: 3, mirage: 3, block: 3, analysis: 3, decision: 3 };
+function dagColumn(n) {
+  if (n.id === 'branch:fallback') return 3; // 回落发生在判定之后
+  return DAG_COL[n.kind] !== undefined ? DAG_COL[n.kind] : 2;
+}
+const COL_X = [70, 260, 470, 800];
+
+function dagNodeById(id) { return dagModel ? dagModel.nodes.find(n => n.id === id) : null; }
+
+function renderDag() {
+  const svg = $("dag"); svg.textContent = "";
+  if (!dagModel) return;
+  const NS = "http://www.w3.org/2000/svg";
+  const cols = [[], [], [], []];
+  for (const n of dagModel.nodes) cols[dagColumn(n)].push(n);
+  const pos = {};
+  cols.forEach((list, ci) => {
+    list.forEach((n, i) => { pos[n.id] = { x: COL_X[ci], y: 60 + (i * 300) / Math.max(1, list.length) }; });
+  });
+  const mk = (tag) => document.createElementNS(NS, tag);
+
+  for (const e of dagModel.edges) {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) continue;
+    const path = mk("path");
+    const mx = (a.x + b.x) / 2;
+    path.setAttribute("d", `M ${a.x + 90} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${b.x} ${b.y}`);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", e.alerts ? "#d33" : (e.high_risk ? "#e6a700" : (e.kind === "mirage" ? "#7a4fd6" : "#7a7a7a")));
+    path.setAttribute("stroke-width", String(1 + Math.min(8, Math.log2(e.count + 1) * 1.6)));
+    if (e.kind === "fallback") path.setAttribute("stroke-dasharray", "5 4");
+    path.style.cursor = "pointer";
+    path.setAttribute("aria-label", `${e.from} → ${e.to}：${e.count} 条`);
+    path.onclick = () => pickDag({ kind: "edge", from: e.from, to: e.to });
+    svg.appendChild(path);
+
+    const label = mk("text");
+    label.setAttribute("x", String(mx)); label.setAttribute("y", String((a.y + b.y) / 2 - 4));
+    label.setAttribute("font-size", "12"); label.setAttribute("text-anchor", "middle");
+    label.setAttribute("fill", "#444");
+    label.textContent = String(e.count) + (e.alerts ? " 🔴" + e.alerts : "") + (e.high_risk ? " 🟠" + e.high_risk : "");
+    svg.appendChild(label);
+  }
+
+  for (const n of dagModel.nodes) {
+    const p = pos[n.id];
+    const rect = mk("rect");
+    rect.setAttribute("x", String(p.x - 90)); rect.setAttribute("y", String(p.y - 18));
+    rect.setAttribute("width", "180"); rect.setAttribute("height", "36"); rect.setAttribute("rx", "8");
+    rect.setAttribute("fill", n.alerts ? "#ffe8e8" : (n.high_risk ? "#fff6e0" : "#f4f6f8"));
+    rect.setAttribute("stroke", n.alerts ? "#d33" : (n.high_risk ? "#e6a700" : "#c8ced6"));
+    rect.style.cursor = "pointer";
+    rect.onclick = () => pickDag({ kind: "node", id: n.id });
+    svg.appendChild(rect);
+    const text = mk("text");
+    text.setAttribute("x", String(p.x)); text.setAttribute("y", String(p.y + 4));
+    text.setAttribute("font-size", "12"); text.setAttribute("text-anchor", "middle");
+    text.textContent = `${n.label} （${n.count}）`;
+    text.style.pointerEvents = "none";
+    svg.appendChild(text);
+  }
+
+  $("dagHint").textContent = dagModel.totals.requests
+    ? `（最近 ${dagModel.totals.requests} 条请求；意图与实际分开看）`
+    : "（暂无流量：先造点请求）";
+  const notes = $("dagNotes"); notes.textContent = "";
+  for (const note of dagModel.notes || []) { const div = document.createElement("div"); div.textContent = "· " + note; notes.appendChild(div); }
+  const legend = $("dagLegend"); legend.textContent = "";
+  for (const [txt, color] of [["真实告警 🔴", "#d33"], ["高风险（仅显示）🟠", "#e6a700"], ["改道到幻境", "#7a4fd6"], ["回落 / 普通", "#7a7a7a"]]) {
+    const span = document.createElement("span");
+    span.textContent = "■ " + txt + "　";
+    span.style.color = color;
+    legend.appendChild(span);
+  }
+}
+
+function dagMatches(ev) {
+  if (!dagPick) return true;
+  const pick = dagPick;
+  const id = pick.kind === "node" ? pick.id : pick.to;
+  if (id === "client" || id === "adapter") return true;
+  if (id === "judge") return !["whitelist", "cache", "failopen"].includes(ev.executed);
+  if (id === "branch:whitelist") return ev.executed === "whitelist";
+  if (id === "branch:cache") return ev.executed === "cache";
+  if (id === "branch:failopen") return ev.executed === "failopen";
+  if (id === "branch:fallback") return ev.executed === "origin_fallback";
+  if (id === "origin") return ["origin", "origin_fallback", "whitelist", "cache", "failopen"].includes(ev.executed);
+  if (id === "block") return ev.executed === "block";
+  if (id.startsWith("mirage:")) return ev.executed === "mirage" && ("mirage:" + ev.backend) === id;
+  return true; // analysis 等注解节点不过滤
+}
+
+function pickDag(pick) { dagPick = pick; renderDagList(); }
+
+function renderDagList() {
+  if (!dagRequests.length) return;
+  const rows = dagRequests.filter(dagMatches).slice(0, 50);
+  $("dagBreadcrumb").textContent = dagPick
+    ? `已选：${dagPick.kind === "node" ? dagPick.id : dagPick.from + " → " + dagPick.to}　（${rows.length} 条；点空白处可清除）`
+    : "点节点或边可只看该分支的请求；点某行看完整链路。";
+  const body = rows.map(ev => {
+    const row = tr([
+      td((ev.at || "").slice(11, 19)), td(show(ev.method)), td(show(ev.path), "flow"),
+      td(show(ev.action)), td(show(ev.executed)), td(ev.status ? String(ev.status) : "—"),
+      td(ev.bytes ? String(ev.bytes) : "—"), td(ev.duration_ms ? String(ev.duration_ms) : "—"),
+    ]);
+    row.style.cursor = "pointer";
+    row.onclick = () => showTrace(ev.decision_id || ev.event_id);
+    return row;
+  });
+  fillTable("dagList", body);
+}
+
+async function showTrace(id) {
+  const panel = $("dagDetail"); panel.textContent = "";
+  if (!id) return;
+  let data;
+  try { data = await get(`/api/trace?decision_id=${encodeURIComponent(id)}`); }
+  catch (e) { panel.textContent = "读取链路失败：" + e.message; return; }
+
+  const title = document.createElement("h3"); title.textContent = "请求链路：" + id;
+  panel.appendChild(title);
+  const block = (name, pairs) => {
+    const h = document.createElement("h4"); h.textContent = name; panel.appendChild(h);
+    const table = document.createElement("table");
+    const tb = document.createElement("tbody");
+    for (const [k, v] of pairs) tb.appendChild(tr([td(k), td(v === undefined || v === null || v === "" ? "未采集" : String(v), "flow")]));
+    table.appendChild(tb); panel.appendChild(table);
+  };
+  const judged = data.judged || {};
+  const decision = data.decision || {};
+  block("① 请求", [
+    ["方法", judged.method], ["路径", judged.path], ["UA", judged.ua],
+    ["来源 IP", decision.source_ip], ["判定 id", data.decision_id],
+  ]);
+  block("② 判定（核心）", [
+    ["决策", decision.action], ["分值", decision.score], ["命中信号", (decision.signals || []).join(", ")],
+    ["severity", decision.severity], ["幻境后端", decision.backend],
+  ]);
+  block("③ 执行与返回（适配器）", [
+    ["实际落点", judged.executed], ["后端", judged.backend], ["状态码", judged.status],
+    ["字节", judged.bytes], ["耗时 ms", judged.duration_ms], ["判定失败原因", judged.decision_error],
+  ]);
+  block("④ 告警", [
+    ["真实告警", data.alerts && data.alerts.real ? "是（" + (data.alerts.reason || "") + "）" : "否"],
+    ["高风险（仅显示）", data.alerts && data.alerts.high_risk ? "是" : "否"],
+    ["L4 结论引用", (data.analysis || []).length + " 条"],
+  ]);
+  for (const note of data.notes || []) { const div = document.createElement("div"); div.className = "muted"; div.textContent = "注：" + note; panel.appendChild(div); }
+}
+
+async function loadDag() {
+  const [model, judged] = await Promise.all([get("/api/topology?limit=300"), get("/api/events?type=request_judged&limit=300")]);
+  dagModel = model;
+  dagRequests = judged.map(e => Object.assign({ decision_id: e.event_id, at: e.created_at }, e.raw || {}));
+  renderDag();
+  renderDagList();
+}
+
+$("dag").onclick = (e) => { if (e.target === $("dag")) { dagPick = null; renderDag(); renderDagList(); } };
+
 async function load() {
   try {
     const [sum, flows, events, conclusions] = await Promise.all([
@@ -193,6 +377,8 @@ async function load() {
       td(c.accepted ? summarizeConclusion(c) : show(c.rejected_reason), "flow"),
       td(show(c.analyzed)), td((c.evidence_ids || []).length + " 个"),
     ])));
+
+    await loadDag();
 
     fillTable("events", events.map(e => tr([
       td(fmtTime(e.created_at)), td(show(e.type)), td(show(e.actor_id)), td(show(e.event_id), "flow"),
