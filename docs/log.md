@@ -9,6 +9,66 @@
 
 ---
 
+## 2026-09-20 · AI 能力详解补上「生命周期」与「怎么接入使用」（§12 / §13）
+
+**做了什么**：上一轮交的 AI 能力详解讲了「有哪些能力」，但没讲清用户明确要看的两件事，本轮补上：
+
+1. **§12 模块的生命周期** —— 一张从「生成器启动」到「适配器注入」的 **10 节点时间轴**（含失败分支）：
+   `[0]` 启动期断言 → `[1]` 批次解析 → `[2]` 逐条生成 → `[3]` 写清单 → `[4]` 生成器退出 →
+   `[5]` 核心装载 → `[6]` 适配器拉策略 → `[7]` 运行期注入 → `[8]` 轮换（未接通）→ `[9]` 关闭；
+   加上三阶段寿命、时间轴上的失败分支（末列全是「业务不受影响」）、**三层开关**与「秒级关闭只在下发级成立」。
+2. **§13 怎么接入被使用** —— 三种角色（生成侧 / 下游消费方 / 部署方）· 生成侧两种用法（库 / CLI + 退出码）·
+   消费侧配置（核心 YAML + 适配器环境变量 `SHEN_PROXY_INJECT_CONTENT`）· **8 项接线核对清单** · 六个常见误解。
+
+同时修正一处数字漂移：上一轮写「5 条关键发现」，定稿时实际是 **6** 条（历史快照不改正文，只在上一轮变更包追加一行「修正」）。
+**本轮仍是纯文档轮：不动一行代码、不引依赖、不改 `docs/design/`**。
+
+**改了哪些文件**：修改 `docs/kb/ai-capabilities.md`（新增 §12 / §13，原变更记录顺延为 §14）·
+`docs/kb/README.md`（索引行补上新章节 + 数字更正）· `docs/kb/capabilities.md`（§1.5 指针同步）·
+`docs/modules/ai-capability.md`（§1 指针 + 声明两张表的权威分工）·
+`docs/plans/2026-09-20-ai-capability-detail.md`（§8 追加「修正」行）；新增
+`docs/plans/2026-09-20-ai-capability-lifecycle.md`；修改 `docs/log.md`。
+
+**对应文档**：`docs/plans/2026-09-20-ai-capability-lifecycle.md`（含追溯矩阵、7 条场景表、审视 9 条）·
+`docs/kb/ai-capabilities.md` §12/§13 · 契约不复制（指向 `docs/spec/ai-contract.md` §6 与 `docs/spec/config.md` §2.13）。
+
+**验证**：`make gate` 通过（含 `make trace`、`make archcheck` 的 `AR-33`/`MD-4` 项、79 例 pytest）。
+**独立评审**（冷上下文 `reviewer`，只看产物与 diff）：**有异议 8 组，已全部修完** ——
+其中 **4 条 P1 都是真错**：① 写「清单任何一处坏 ⇒ 核心启动失败」（实际单条坏是**丢该条 + warn**，
+只有结构性问题才启动失败）② 写「`produce` 抛错 ⇒ 该条作废」（实际**整批中断**，没有按条捕获）
+③ 写「开关开但无清单 ⇒ `no_content`」（实际报 **`disabled`**）④ `startup_assert()` 的调用主体写成「任何消费方」
+（实际只有生成侧调，核心与适配器**永远不调**）。另有两条是**重复维护已经捣出瘗痕**（§12.3/§12.4 与模块文档 §5/§6
+同构且说法不一致）——已改为只留「寿命」与「时间轴分支」两列并声明权威处。
+
+**证据**：
+
+```console
+$ make gate
+架构检查通过。
+  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）
+追溯检查通过。
+79 passed · L4 单测（pytest）
+门禁通过。
+
+# 评审要求逐项核的六条配置/代码事实（全部无误）
+$ grep -n SHEN_PROXY_INJECT_CONTENT edge/proxy/cmd/proxy/main.go:114
+  InjectContent: envBool("SHEN_PROXY_INJECT_CONTENT", false)   ← 默认 false
+$ grep -n 'Inject.* = "' edge/proxy/content.go
+  30: applied   31: disabled   32: no_content   33: off      ← 四个值（初稿只列了三个，自检改正）
+$ grep -n "AI 内容已装载" core/cmd/core/main.go:480
+  AI 内容已装载：%s（内容版本 v%d · 变体 %d · 资源 %d · 内容 %d 条）
+$ grep -n "return 0\|return 1\|return 2" analysis/aicap/__main__.py
+  70/75/78/81: 2（入参非法 或 启动断言失败）  117: 1  136: 0
+```
+
+**没做 / 遗留**：① 轮换接线仍未接通（`ai.content.rotate_cooldown` 只解析不消费，阶段 B）；
+② 第二个消费方（动态沙箱）未立项，§13.1 只给它留了角色位；
+③ §13 将来可能需要**提炼**成独立的接入文档（若沙箱是外部语言 / 外部团队）；
+④ 上一轮记录的 `intent` 越界静默回落仍未修（建议单开 S 档小轮）。
+去向：`docs/plans/2026-09-20-ai-capability-lifecycle.md` §7 与 `docs/kb/ai-capabilities.md` §12/§13。
+
+---
+
 ## 2026-09-20 · AI 能力（模型能力）详解文档：7 个能力逐个写清 + 16 条优化候选 + 6 条关键发现
 
 **做了什么**：把散在三处的「AI 能力」一次性写全，交用户评审。
