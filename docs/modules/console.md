@@ -108,6 +108,7 @@
 | --- | --- |
 | 接口 | **`GET /api/graphs?limit=N`（逐请求链路，页面主视图）** · `GET /api/topology?limit=N`（聚合视图，程序化用）· `GET /api/trace?decision_id=...`（单请求四段详情） |
 | 聚合逻辑 | [`../../console/internal/topology/`](../../console/internal/topology/)（纯函数 + 单测；join 键 = `decision_id`） |
+| 逐步详情 | 链路里**每一步可点**：显示该步的「请求 / 响应 / 为什么执行」三段（数据随 `/api/graphs` 一起返回，点开无需再请求） |
 | 页面 | **每条请求一张横向小图**（客户端 → 适配器 → 分支/核心判定 → 决策 → 实际落点），每跳写该请求自己的值；5 秒刷新（新流量在最上）；筛选：告警/高风险/幻境/源站；点卡片看四段详情；**禁止 `innerHTML`** |
 | 告警口径 | 真实告警 = `block` 或 `severity≠none`（不变）；「高风险」= `score ≥ SHEN_CONSOLE_ALERT_SCORE`（默认 0.9）**仅显示**、不改变处置（`AR-10` 边界未变） |
 | 已知限制 | 影子模式下真实告警恒为 0（`severity` 档位未定）；没登记幻境后端时图上不会出现幻影分支 —— 页面用 `notes` 明确写出这些事实 |

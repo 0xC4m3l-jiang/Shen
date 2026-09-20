@@ -357,9 +357,14 @@ type ChainNode struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 	Kind  string `json:"kind"`            // client|adapter|branch|judge|decision|origin|mirage|block|analysis
-	Value string `json:"value,omitempty"` // 这一跳上该请求的具体值
+	Value string `json:"value,omitempty"` // 这一跳上该请求的具体值（画在方框里）
 	Alert bool   `json:"alert,omitempty"` // 真实告警所在的一跳
 	Warn  bool   `json:"warn,omitempty"`  // 高风险（仅显示）或回落/失败
+
+	// 以下是**点开这一跳**要看的三段（页面上逐步可点，用于定位"哪儿需要优化"）：
+	Request  string `json:"request,omitempty"`  // 这一步收到的输入是什么
+	Response string `json:"response,omitempty"` // 这一步给出/返回了什么
+	Why      string `json:"why,omitempty"`      // 为什么会走到这一步（规则依据 + 约束）
 }
 
 // RequestGraph 是**单条请求**的链路（页面一行一个 DAG）。
@@ -421,41 +426,115 @@ func BuildRequests(in Input, alertScore float64) []RequestGraph {
 		rg.Unjudged = j.Executed == "whitelist" || j.Executed == "cache" || j.Executed == "failopen"
 
 		// 链路：客户端 → 适配器 → （分支 or 核心判定）→ 意图 → 实际落点（→ L4）
+		obs := fmt.Sprintf("%s %s（来源 %s · UA %s）", j.Method, j.Path,
+			firstNonEmpty(rg.SourceIP, "未采集"), firstNonEmpty(j.UA, "未采集"))
 		rg.Chain = append(rg.Chain,
-			ChainNode{ID: "client", Label: "客户端", Kind: "client", Value: firstNonEmpty(rg.SourceIP, "来源未采集")},
-			ChainNode{ID: "adapter", Label: "适配器 (L1)", Kind: "adapter", Value: j.Method + " " + j.Path},
+			ChainNode{
+				ID: "client", Label: "客户端", Kind: "client", Value: firstNonEmpty(rg.SourceIP, "来源未采集"),
+				Request:  obs,
+				Response: "—（这是链路的起点，观测由适配器采集）",
+				Why:      "请求到达接入层后进入引擎：L0 负责 TLS 与路由，适配器负责观测与处置执行（判定逻辑只在核心，AR-2）。",
+			},
+			ChainNode{
+				ID: "adapter", Label: "适配器 (L1)", Kind: "adapter", Value: j.Method + " " + j.Path,
+				Request:  obs,
+				Response: fmt.Sprintf("判定来源：%s", adapterSource(j.Executed)),
+				Why:      "适配器按顺序做四件事：白名单 → 本地判定缓存 → 调核心判定 → 异步上报（AR-6）；它只执行处置，不做判定（AR-7）。",
+			},
 		)
 		switch j.Executed {
 		case "whitelist":
-			rg.Chain = append(rg.Chain, ChainNode{ID: "branch:whitelist", Label: "白名单命中", Kind: "branch", Value: "跳过判定（INT-25）"})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "branch:whitelist", Label: "白名单命中", Kind: "branch", Value: "跳过判定（INT-25）",
+				Request:  obs,
+				Response: "不出判定，直接放行到业务",
+				Why: "命中白名单（INT-25）：内部探针 / 健康检查 / 监控必须在引流判定**之前**放行；" +
+					"本地（env）与远端（策略面）白名单取**并集**，护栏只增不减。",
+			})
 		case "cache":
-			rg.Chain = append(rg.Chain, ChainNode{ID: "branch:cache", Label: "判定缓存命中", Kind: "branch", Value: "复用同窗判定（ST-10）"})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "branch:cache", Label: "判定缓存命中", Kind: "branch", Value: "复用同窗判定（ST-10）",
+				Request:  obs,
+				Response: fmt.Sprintf("复用判定 decision_id=%s（未重新调用核心）", j.DecisionID),
+				Why: "命中本地判定缓存（ST-10）：键是 (来源, 会话, 方法, 路径) 加时间窗；" +
+					"**同窗内谁先到谁定调** —— 这是已知取舍（K-20），排查误判时要先看这里。",
+			})
 		case "failopen":
-			rg.Chain = append(rg.Chain, ChainNode{ID: "branch:failopen", Label: "判定失败", Kind: "branch",
-				Value: firstNonEmpty(j.DecisionError, "核心不可达/超时"), Alert: true})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "branch:failopen", Label: "判定失败", Kind: "branch",
+				Value: firstNonEmpty(j.DecisionError, "核心不可达/超时"), Alert: true,
+				Request:  obs,
+				Response: "没有判定结果 ⇒ 按放行处理",
+				Why: "调核心失败（不可达 / 超时，判定预算 3ms，AR-29）⇒ 按 NI-3 / NI-4 **放行到真实业务**：" +
+					"业务优先于观测（NI-1）；代价是这条请求没有判定记录（K-24 讲的就是这个）。",
+			})
 		default:
-			rg.Chain = append(rg.Chain, ChainNode{ID: "judge", Label: "核心判定", Kind: "judge",
-				Value: judgeValue(rg), Warn: rg.HighRisk})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "judge", Label: "核心判定", Kind: "judge", Value: judgeValue(rg), Warn: rg.HighRisk,
+				Request:  obs,
+				Response: judgeValue(rg),
+				Why: fmt.Sprintf("judge 按配置里的规则逐条匹配（权重求和，1.0 截断）⇒ 分值 %.2f，命中 %d 条规则%s；"+
+					"是否处置由 director 按阈值与灰度决定。", rg.Score, len(rg.Signals), signalSuffix(rg.Signals)),
+			})
 		}
 		if paired && !rg.Unjudged {
-			rg.Chain = append(rg.Chain, ChainNode{ID: "decision", Label: "决策", Kind: "decision", Value: actionLabel(dec.Action)})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "decision", Label: "决策", Kind: "decision", Value: actionLabel(dec.Action),
+				Request:  fmt.Sprintf("分值 %.2f · 信号 %s", rg.Score, joinSignals(rg.Signals)),
+				Response: actionLabel(dec.Action),
+				Why: "director 输出**三值**（放行 / 改道 / 拦截）+ severity 旁路字段；" +
+					"影子模式下只算不执行（INT-11）——所以下一跳可能仍是业务源站。",
+			})
 		}
 		switch j.Executed {
 		case "mirage":
-			rg.Chain = append(rg.Chain, ChainNode{ID: "mirage", Label: "幻境后端", Kind: "mirage", Value: firstNonEmpty(j.Backend, "未命名")})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "mirage", Label: "幻境后端", Kind: "mirage", Value: firstNonEmpty(j.Backend, "未命名"),
+				Request:  obs,
+				Response: routeValue(rg),
+				Why: fmt.Sprintf("决策为改道 ⇒ 转发到幻境后端 %q（改道后端表由策略面下发，ADR-0018）；"+
+					"注入只发生在改道侧（INT-8：业务侧响应零改写）。", j.Backend),
+			})
 		case "origin_fallback":
 			rg.Chain = append(rg.Chain,
-				ChainNode{ID: "branch:fallback", Label: "幻境不可用", Kind: "branch", Value: "回落业务（NI-5）", Warn: true},
-				ChainNode{ID: "origin", Label: "业务源站", Kind: "origin", Value: routeValue(rg)},
+				ChainNode{
+					ID: "branch:fallback", Label: "幻境不可用", Kind: "branch", Value: "回落业务（NI-5）", Warn: true,
+					Request:  obs,
+					Response: "放弃改道，改走业务源站",
+					Why: "决策是改道，但后端**未登记或不可达**（或中途失败且尚未写出字节）⇒ 回落真实业务：" +
+						"宁可漏改道，不可断业务（NI-5 / NI-1）。",
+				},
+				ChainNode{
+					ID: "origin", Label: "业务源站", Kind: "origin", Value: routeValue(rg),
+					Request:  obs,
+					Response: routeValue(rg),
+					Why:      "这是**回落**到业务（不是原本就放行）——路由决策与最终落点不一致时，这一跳就是原因。",
+				},
 			)
 		case "block":
-			rg.Chain = append(rg.Chain, ChainNode{ID: "block", Label: "拦截", Kind: "block", Value: "403", Alert: true})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "block", Label: "拦截", Kind: "block", Value: "403", Alert: true,
+				Request:  obs,
+				Response: routeValue(rg),
+				Why: "决策为拦截 ⇒ 返回 403。403 是对手**可见**的处置，属已承认的设计（ADR-0002）：" +
+					"block 只用于「明确拒绝已知恶意」，透明误导由 route_mirage 承担。",
+			})
 		default:
-			rg.Chain = append(rg.Chain, ChainNode{ID: "origin", Label: "业务源站", Kind: "origin", Value: routeValue(rg)})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "origin", Label: "业务源站", Kind: "origin", Value: routeValue(rg),
+				Request:  obs,
+				Response: routeValue(rg),
+				Why:      originWhy(rg),
+			})
 		}
 		if rg.L4 > 0 {
-			rg.Chain = append(rg.Chain, ChainNode{ID: "analysis", Label: "L4 分析", Kind: "analysis",
-				Value: fmt.Sprintf("%d 条结论引用", rg.L4)})
+			rg.Chain = append(rg.Chain, ChainNode{
+				ID: "analysis", Label: "L4 分析", Kind: "analysis", Value: fmt.Sprintf("%d 条结论引用", rg.L4),
+				Request:  "该判定的证据（decision_id 作为证据 ID）",
+				Response: fmt.Sprintf("%d 条结论引用了这条判定", rg.L4),
+				Why: "近线 worker 读遥测事件 → 态势去重（AR-14）→ 意图 / 攻击链 / 策略 → 结论作为事件回写（AR-12：" +
+					"引用必须真实存在）；L4 **不在请求路径上**，不影响这条请求的处置。",
+			})
 		}
 		out = append(out, rg)
 	}
@@ -502,6 +581,43 @@ func joinNonEmpty(parts []string, sep string) string {
 		b.WriteString(part)
 	}
 	return b.String()
+}
+
+// adapterSource 说明这次判定是从哪来的（页面上"为什么没调核心"一眼可见）。
+func adapterSource(executed string) string {
+	switch executed {
+	case "whitelist":
+		return "白名单（未调核心）"
+	case "cache":
+		return "本地判定缓存（未调核心）"
+	case "failopen":
+		return "调核心失败 ⇒ 放行"
+	default:
+		return "核心判定"
+	}
+}
+
+func signalSuffix(signals []string) string {
+	if len(signals) == 0 {
+		return ""
+	}
+	return "（" + joinSignals(signals) + "）"
+}
+
+// originWhy 解释"为什么最终落在业务源站" —— 三种情形要分清，否则会误判引擎没工作。
+func originWhy(rg RequestGraph) string {
+	if rg.Unjudged {
+		return "未经过判定（白名单 / 缓存命中 / 判定失败后放行）⇒ 直接到业务源站。"
+	}
+	if rg.executedOriginBecauseShadow() {
+		return "决策可能是放行，也可能是改道/拦截但**影子模式**不执行（INT-11）：引擎照算判定、照上报，只观测不处置。"
+	}
+	return "决策为放行（route_origin）⇒ 业务响应**原样透传**（INT-8：业务侧响应零改写）。"
+}
+
+// executedOriginBecauseShadow 判断"落在源站"是否因为影子模式（意图不是放行时才有意义）。
+func (rg RequestGraph) executedOriginBecauseShadow() bool {
+	return rg.Action != "" && rg.Action != "ACTION_ORIGIN"
 }
 
 // actionLabel 把核心的三值决策转成人话（与页面其余部分一致）。

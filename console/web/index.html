@@ -56,6 +56,7 @@
       <span id="dagFilterBar"></span>
     </p>
     <div id="dagNotes" class="muted" style="margin:0 0 8px"></div>
+    <div id="dagStep"></div>
     <div id="dagCards"></div>
     <div id="dagDetail"></div>
   </section>
@@ -192,9 +193,13 @@ function chainSvg(rg) {
     rect.setAttribute("rx", "8");
     rect.setAttribute("fill", node.alert ? "#ffe8e8" : (node.warn ? "#fff6e0" : "#f4f6f8"));
     rect.setAttribute("stroke", node.alert ? "#d33" : (node.warn ? "#e6a700" : "#c8ced6"));
+    rect.style.cursor = "pointer";
+    // 点这一跳 → 看它的「请求 / 响应 / 为什么执行」；stopPropagation 避免同时触发整卡详情
+    rect.onclick = (ev) => { ev.stopPropagation(); showStep(rg, node, i); };
     svg.appendChild(rect);
     textIn(svg, x + nodeW / 2, y + 19, node.label, node.alert ? "#a11" : "#333", 12);
     textIn(svg, x + nodeW / 2, y + 37, node.value || "—", "#666", 10);
+    for (const t of svg.querySelectorAll("text")) t.style.pointerEvents = "none"; // 点击由方框接
     if (i < n - 1) {
       const line = document.createElementNS(NS, "line");
       line.setAttribute("x1", String(x + nodeW)); line.setAttribute("y1", String(y + nodeH / 2));
@@ -262,6 +267,29 @@ function renderRequestDags() {
     empty.textContent = "（没有符合筛选条件的请求：先造点流量，或换一个筛选）";
     host.appendChild(empty);
   }
+}
+
+// showStep 显示**某一跳**的三段：该步的请求、该步的响应、为什么执行到这一步。
+// 这三段正是"哪儿需要优化"的定位依据：规则没命中看②③，落点不对看③，影子模式看③的说明。
+function showStep(rg, node, index) {
+  const panel = $("dagStep"); panel.textContent = "";
+  const title = document.createElement("h3");
+  title.textContent = `第 ${index + 1} 步 · ${node.label}（${rg.method} ${rg.path}）`;
+  panel.appendChild(title);
+  const note = document.createElement("div");
+  note.className = "muted";
+  note.textContent = `这一跳的实际值：${node.value || "—"}　·　判定 id ${rg.decision_id}`;
+  panel.appendChild(note);
+  const rows = [
+    ["请求（这一步收到什么）", node.request || "未采集"],
+    ["响应（这一步给出什么）", node.response || "未采集"],
+    ["为什么执行到这一步", node.why || "未采集"],
+  ];
+  const table = document.createElement("table");
+  const tb = document.createElement("tbody");
+  for (const [k, v] of rows) tb.appendChild(tr([td(k), td(v, "flow")]));
+  table.appendChild(tb);
+  panel.appendChild(table);
 }
 
 async function showTrace(id) {
