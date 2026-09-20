@@ -262,23 +262,15 @@ make smoke   # 在线冒烟：判定面形状 + decision_id 幂等
 bash ~/.pi/agent/skills/dev-loop/scripts/devloop-init.sh /path/to/project
 ```
 
-## 环境与产物放在哪（避免"某个层的私有工具占满仓库根"）
+## 环境与产物放在哪 / 怎么起环境
 
-| 东西 | 位置 | 为什么不放根目录 |
-| --- | --- | --- |
-| L4 的 Python 环境 | `analysis/.venv` | Python 是 L4 的实现选择（`TB-2`/`TB-20`），它的 venv 与依赖属于这一层 |
-| L4 的工具/依赖配置 | `analysis/pyproject.toml` · `analysis/requirements*.txt` | 同上；根目录只留 Go 的 `go.mod`/`go.sum` |
-| 门禁工具二进制 | `scripts/bin/` | 是产物、不入库；放 `scripts/` 下与其它工具同处 |
-| Go 依赖副本 | `vendor/`（**入库**） | 让构建与门禁离线可用；本机访问不了 `proxy.golang.org` |
-| 容器定义 | `deploy/docker/` | 部署物料归 `deploy/`；一键入口是 `make up` |
-| 忽略清单自检 | `make check-ignore` | 防「源码被 .gitignore 静默排除」（必须用 `--no-index`，否则检查永远通过） |
+**这两件事的权威在运行手册**，本文件不再重复（避免两处维护）：
 
-## 起环境的两种方式
+| 我要… | 去哪 |
+| --- | --- |
+| 看某个东西（Python 环境 / 门禁二进制 / Go 依赖副本 / 容器定义）放在哪 | [`../ops/runbook.md`](../ops/runbook.md) §5「产物卫生」 |
+| 起环境（Docker 一键 / 本地进程）与端口、日志命令 | [`../ops/runbook.md`](../ops/runbook.md) §1「启动」 |
+| 只想知道"改了代码之后怎么重建" | [`../ops/runbook.md`](../ops/runbook.md) §4「更新」 |
 
-```sh
-make up      # Docker 全套（本机只需 Docker）；宿主端口默认 18080 / 19444，可用 SHEN_HTTP_PORT / SHEN_CONSOLE_PORT 改
-make dev     # 本地一键验证（Go + Python）：配置干跑 → 起核心 → 冒烟 → 规则回放 → 跑一轮 L4
-```
-
-看容器日志：`make docker-log S=core`（**不跟随**，取尾部后立即返回）· `make docker-logs S=core`（跟随）。
-> ⚠️ `docker logs -f` / `make docker-logs` 不会自己返回 —— 脚本或自动化里用 `docker-log`。
+> 一句话版：容器与本地产物**都不落仓库**（统一落临时目录），改了代码必须 `scripts/shen.sh restart`（带 `--build`），
+> 日志默认**不跟随**（`make docker-log S=core`）。

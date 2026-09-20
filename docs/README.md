@@ -6,6 +6,7 @@
 > ① 想**快速了解项目并定位能力点** → [`kb/quick-tour.md`](kb/quick-tour.md)（速览 · 能力点定位表 · 五分钟跑起来 · 定位三招）
 > ② 想**跑起来 / 验证 / 排障 / 升级** → [`ops/runbook.md`](ops/runbook.md)（`scripts/shen.sh up|verify|traffic`）
 > ③ 想**知道某能力在哪个模块、怎么接** → [`modules/_map.md`](modules/_map.md)
+> ④ 想**顺着一条请求读懂整体逻辑**（判定 / 决策 / 处置 / 观测 / L4 / 策略面） → [`logic.md`](logic.md)
 >
 > 想先知道「它是什么 / 效果什么样」→ 看根 [`README.md`](../README.md)。
 > 本文件是**开发与设计**的导航：规则在哪、模块文档在哪、每轮的改动怎么复核。
