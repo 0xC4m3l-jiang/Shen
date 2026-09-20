@@ -5,7 +5,7 @@
 | 所属层 | L1 |
 | 语言 | Go（[ADR-0008](../../docs/background/decisions/0008-edge-language-go.md)） |
 | 底座 | **内嵌 Caddy**（Apache-2.0）：转发 + TLS 终结（[ADR-0017](../../docs/background/decisions/0017-caddy-l1-base.md)） |
-| 阶段 | **2a**（接管与改道打通）· **消费策略面**（`api/policy/v1`）|
+| 阶段 | **2a**（接管与改道打通）· **消费策略面**（`api/policy/v1`）· **注入 AI 欺骗内容**（阶段 A，`ADR-0023`） |
 | 模块文档 | [`../../docs/modules/adapter-proxy.md`](../../docs/modules/adapter-proxy.md) |
 | 模块清单 | [`../../docs/design/modules.md`](../../docs/design/modules.md) §1.1 第 11 行 |
 
@@ -32,19 +32,45 @@
 
 外加两件与改道正确性直接相关的事：**白名单先于改道判定**（`INT-25`）、**透传真实来源 IP**（`INT-23`）。
 
-## 从策略面取改道后端 · 白名单 · 响应改写规则（`S4`）
+## 从策略面取改道后端 · 白名单 · 响应改写规则 · AI 内容清单（`S4`）
 
 适配器按间隔向核心拉取策略（`api/policy/v1` 的 `Pull`），把**改道后端表**与**白名单**应用到运行态：
 
 | 项 | 语义 |
 | --- | --- |
-| 合并 | **远端覆盖本地**（后端表按逻辑名覆盖）；**白名单取并集**（护栏只增不减，`INT-25`）；**响应改写规则**：字段缺省 = 沿用本地 env，出现（含空数组）= 远端整份接管 |
+| 合并 | **远端覆盖本地**（后端表按逻辑名覆盖）；**白名单取并集**（护栏只增不减，`INT-25`）；**响应改写规则**：字段缺省 = 沿用本地 env，出现（含空数组）= 远端整份接管；**AI 内容清单**：出现即整块取代 |
 | 完整性 | 先验 `sha256(payload) == checksum` 再应用（`ST-8`）；不匹配 → 拒绝 + 回执 `applied=false` |
 | 失败 | 拉不到就**沿用当前策略**（本地 env 兜底）—— 策略面不是请求路径上的依赖（`NI-1`） |
 | 回执 | 应用成功/失败都回执，带适配器标识（`AR-13` 版本对账） |
 | 未启用 | `SHEN_PROXY_POLICY_INTERVAL=0` 时完全不拉，只用本地 env |
 
 载荷格式见 [`../../docs/spec/policy-payload.md`](../../docs/spec/policy-payload.md)；决策背景见 [ADR-0018](../../docs/background/decisions/0018-policy-plane-pull-model.md)。
+
+## AI 欺骗内容注入（`ADR-0023` / `AR-33`）
+
+改道侧响应可以带上由 `ai-capability` **离线生成、强制过护栏**的内容（契约
+[`../../docs/spec/ai-contract.md`](../../docs/spec/ai-contract.md)）：
+
+| 项 | 语义 |
+| --- | --- |
+| 命中 | 清单条目的 `resource` 与**请求路径精确相等**（阶段 A 不做前缀匹配） |
+| 选变体 | `variant = fnv1a(会话键 Cookie 原值) mod N` —— **确定性**（`AR-30`），不同会话分散到不同变体（多态，`ADR-0016`） |
+| 会话钉定 | 会话 → 槽位缓存（TTL = `SHEN_PROXY_CACHE_TTL`）：**冻结的是槽位选择**，不是内容体 —— 清单换代（`version` +1）时钉定失效并重算，而槽位由 `fnv1a(会话)` 决定 ⇒ **不漂移**；内容体则取自**新版本**清单（阶段 A 未接轮换，`ai.content.rotate_cooldown` 只解析与校验） |
+| 再验 | 注入**前**再算 `sha256(body)` 与清单的 `checksum` 比对；不符即丢弃（宁可漏注入，不可注入错内容） |
+| 改写 | 复用 [`../injection/`](../injection)：插在 `marker`（默认 `</body>`）之前；找不到标记就跳过 |
+| 开关 | `SHEN_PROXY_INJECT_CONTENT`（**默认 `false`**）与策略载荷的 `inject_enabled` **取与** |
+| 上报 | 逐请求事件带 `inject`（`applied` / `disabled` / `no_content` / `off`）与 `content_id` |
+| 边界 | **只改改道侧**（`INT-8`）；任何一步不成立就原样返回（`NI-1`）；本进程**不生成、不调模型** |
+
+怎么自己验一遍：
+
+```sh
+# ① 生成内容清单（离线；护栏不过的内容不会进清单）
+python -m analysis.aicap --out deploy/content/manifest.json --profile site-a --resources / --variants 8
+
+# ② 核心带上它（配置 ai.enabled=true + ai.manifest=...），适配器打开本地开关：
+SHEN_PROXY_INJECT_CONTENT=true SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 go run ./edge/proxy/cmd/proxy
+```
 
 ## 默认是影子模式
 

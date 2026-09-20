@@ -57,6 +57,7 @@ leak_cmd: make leakcheck
 iteration_cmds:
   - make check          # 构建 + 格式化 + vet + 架构 + 追溯 + 泄漏（不需下载工具）
   - make dev            # 效果验证：配置干跑 → 起核心 → 冒烟 → 规则回放
+  - make ai-check       # AI 欺骗内容注入端到端验收（阶段 A 六项，scripts/dev/ai-inject-check.py）
   - make replay         # 规则回放：样本 → 分数 → 命中信号
   - make smoke          # 在线冒烟：判定面形状 + decision_id 幂等
 

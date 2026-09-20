@@ -19,6 +19,10 @@
   列表硬截断（`AR-18`）；
 - **超时纪律**：双阶段收尾（`AR-19` / `AR-20` / `AR-21`）；
 - **内容纪律**：生成内容黑名单（`AR-22`）、分用途长度上限（`AR-23`）、话术与提示词资源化（`AR-24`）；
+  已登记用途：`session_response` 2000 · `conclusion` 8000 · `intermediate` 20000 · `deception_content` 65536
+  （后者供 `ai-capability` 的欺骗内容使用，见 [ADR-0023](../background/decisions/0023-deception-content-injection.md)）；
+  已登记用途：`session_response` 2000 · `conclusion` 8000 · `intermediate` 20000 · `deception_content` 65536
+  （后者供 `ai-capability` 的欺骗内容使用，见 [ADR-0023](../background/decisions/0023-deception-content-injection.md)）；
 - **间接注入防护**（[ADR-0015](../background/decisions/0015-indirect-prompt-injection.md)）：
   攻击者可控内容**必须**以结构化数据传入（`AR-31`）；分析 LLM **禁止**持有执行能力（`AR-32`）；
 - **高保真内容预生成**：离线/近线生成诱饵内容（假用户 / 假订单 / 假日志），落库供 `responder` 消费。
@@ -121,3 +125,4 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：LLM 契约纪律 + 间接注入防护 + 内容预生成 | [ADR-0015](../background/decisions/0015-indirect-prompt-injection.md) · [`../design/architecture.md`](../design/architecture.md) §5（`AR-15`…`AR-27`） |
+| 2026-09-20 | 新增长度用途 `deception_content`（65536），供 `ai-capability` 的欺骗内容使用；本层增加第二个消费者（仍**只能**经 `ai-capability` 的护栏出口，`AR-33`） | [`../plans/2026-09-20-ai-capability-guardrail.md`](../plans/2026-09-20-ai-capability-guardrail.md) · [ADR-0023](../background/decisions/0023-deception-content-injection.md) |

@@ -37,6 +37,7 @@ type configDoc struct {
 	Decoys     *decoysDoc     `yaml:"decoys"`
 	Honeypots  *[]honeypotDoc `yaml:"honeypots"`
 	Injects    *[]injectDoc   `yaml:"injects"`
+	AI         *aiDoc         `yaml:"ai"`
 }
 
 // injectDoc 是一条**响应改写规则**（数据，不是代码分支 —— ST-24）。
@@ -138,9 +139,11 @@ type honeypotDoc struct {
 // AR-9（核心必须无状态多副本、进程内禁止模块级可变容器）：本类型没有模块级变量，
 // 快照在 Load 时一次构造、之后只读；它不承载请求级状态。
 type Loader struct {
-	snap      contract.PolicySnapshot
-	thr       contract.Thresholds
-	shadow    bool
+	snap   contract.PolicySnapshot
+	thr    contract.Thresholds
+	shadow bool
+	// ai 是 `ai:` 段的运行时配置（未配置即默认全关，见 docs/spec/config.md §2.13）。
+	ai        contract.AIConfig
 	decoys    []contract.DecoyAsset
 	honeypots []contract.HoneypotBackend
 	wl        contract.Whitelist
@@ -319,6 +322,9 @@ func (d *configDoc) validate() ([]contract.Rule, error) {
 		return nil, err
 	}
 	if err := d.validateInjects(); err != nil {
+		return nil, err
+	}
+	if err := d.validateAI(); err != nil {
 		return nil, err
 	}
 	return rules, nil
@@ -752,6 +758,7 @@ func (d *configDoc) build(rules []contract.Rule) (*Loader, error) {
 			Block:  *d.Thresholds.Block,
 		},
 		shadow:    *d.Shadow,
+		ai:        d.buildAI(),
 		decoys:    d.buildDecoys(),
 		honeypots: d.buildHoneypots(),
 		wl:        d.buildWhitelist(),

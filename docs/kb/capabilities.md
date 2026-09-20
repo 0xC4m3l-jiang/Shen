@@ -49,24 +49,32 @@
 | 核心配置 | [`deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml)（153 行）+ 字段全表与约束 [`../spec/config.md`](../spec/config.md)（429 行） |
 | 校验 | **严格拒绝未知键**；示例配置有**漂移守卫单测**（`core/internal/policy` 的 `TestExampleConfigLoads`）；`make check-config` 可干跑 |
 | 策略面（S4） | 改道后端表 / 白名单 / 注入规则经 `Pull` + `Ack` 下发（`ADR-0018`），载荷契约 [`../spec/policy-payload.md`](../spec/policy-payload.md)；远端优先、本地兜底 |
-| 适配器/控制台/L4 | 环境变量表见 [`../ops/runbook.md`](../ops/runbook.md) §6 与 [`deploy/docker/README.md`](../../deploy/docker/README.md) |
+| 适配器/控制台/L4 | 适配器的全量环境变量示例：[`../../edge/proxy/config/front-proxy.example.env`](../../edge/proxy/config/front-proxy.example.env)（含 `SHEN_PROXY_INJECT_CONTENT`）；部署入口的变量在 [`../../deploy/docker/README.md`](../../deploy/docker/README.md) 与 [`deploy/docker/compose.yaml`](../../deploy/docker/compose.yaml)；本地进程起法见 [`../ops/runbook.md`](../ops/runbook.md) §1.2 |
 | 部署 | `deploy/docker/`（3 镜像 + compose + README）；验证配方 `deploy/config/config.verify-mirage.yaml` + `deploy/docker/compose.verify-mirage.yaml` |
 | 怎么验 | `make check-config` · `scripts/shen.sh status` · `scripts/shen.sh doctor` |
 
-### 1.5 注入 AI 欺骗信息 ⚠️ **部分实现**（机制在，AI 内容没接上）
+### 1.5 注入 AI 欺骗信息 🟡 **分阶段**（阶段 A 通路已通：生成 → 护栏 → 下发 → 注入；模型后端待接）
 
 | 层 | 状态 | 说明 |
 | --- | --- | --- |
 | **注入机制** | ✅ 已实现 | [`edge/injection/`](../../edge/injection)：只改**改道侧** HTML 响应（`INT-8`），按 `marker` 定位、找不到就跳过（不阻断响应）；规则由策略面 `inject_rules` 下发（`injects[]` 为 `[]` 表示显式关闭） |
+| **AI 能力服务**（生成出口） | ✅ **已实现（阶段 A）** | [`analysis/aicap/`](../../analysis/aicap)：唯一出口 `generate(TaskSpec) → Envelope`，**内部强制走护栏**（前置三段式提示词 + 后置四关）——未登记的 kind 必拒、缺护栏档案**启动期就失败**（`AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)） |
+| **欺骗内容通路** | ✅ **已实现（阶段 A）** | 离线生成 → 过护栏 → 清单（[`../spec/ai-contract.md`](../spec/ai-contract.md)）→ 核心装载进 `store.ContentStore` → 策略面 `content_manifest` 下发 → 适配器按（资源 + 会话哈希）**确定性命中**并注入改道侧；DAG 上多一跳「内容注入」 |
+| **三层开关** | ✅ 已实现（默认全关） | `ai.enabled`（能力）· `inject_enabled`（下发）· `SHEN_PROXY_INJECT_CONTENT`（适配器兜底，默认 `false`）——取**与**；不打开时行为与以前逐字节一致 |
 | 诱饵资产 | 🟡 定义与多态已实现 | [`core/internal/decoy/`](../../core/internal/decoy)（`MD-25` observe-only）；**资产内容 → 边缘的执行通路未接通**（设计登记的未接通项） |
 | 欺骗响应一致性 | ✅ 已实现 | [`core/internal/responder/`](../../core/internal/responder)：同 `(会话, 资源)` 命中同一内容（`AR-30`，禁非确定性） |
 | LLM 契约纪律 | ✅ 已实现 | [`analysis/llm/`](../../analysis/llm)：契约校验（`AR-15`）· 信封（`AR-16`）· 三段式解析（`AR-17`）· 双阶段收尾（`AR-19`…`AR-21`）· 黑名单（`AR-22`）· 提示词资源化（`AR-24`）· 注入防护（`AR-31`/`AR-32`） |
 | L4 分析链路 | ✅ 已实现（近线） | [`analysis/worker.py`](../../analysis/worker.py)：读事件 → 去重（`AR-14`）→ 意图/攻击链/策略 → 结论事件；**不持有执行能力**（`AR-32`） |
-| **AI 生成内容** | ❌ **未接入** | 没有真实模型后端：`UnconfiguredClient` **显式失败**（`AR-15`：禁止用模板冒充模型输出） |
-| L4 → 策略/注入 | ❌ **未接通** | 结论目前只是事件（控制台可见）；`AR-32` 要求**经 `policy` 间接生效**，该接缝未接 |
+| **真实模型后端** | ❌ **未接入（阶段 B）** | 阶段 A 的生成器是**确定性模板生成器**（证明通路 + 保证 `AR-30`）；接模型时 `UnconfiguredClient` **显式失败**（`AR-15`：禁止用模板冒充模型输出） |
+| L4 结论 → 内容轮换 | ❌ **未接通（阶段 B）** | `strategy` 已产出识破信号，但「谁消费它把清单 `version` +1」未接（[ADR-0023](../background/decisions/0023-deception-content-injection.md) 未解决 4） |
 
-**结论（诚实版）**：现在能注入的是**静态片段**（`injects[]` 配置 / 策略面下发），**不是 AI 现场生成的内容**；
-要达成"注入 AI 欺骗信息"，需要两步：① 部署侧注入真实 `AnalysisClient`（模型后端）；② 把 L4 结论经 `policy` 接到 `inject_rules`（并保留黑名单与 `AR-15` 契约校验）。
+**结论（诚实版）**：现在的注入是**预生成、过护栏、确定性命中**的内容（不是现场生成）——这正是设计要的形状：
+响应路径**永不调模型**（`AR-30` / `AR-29`）。
+阶段 A 证明的是**通路与护栏**（生成 → 校验 → 下发 → 注入 → 观测都能跑通）；
+内容像不像、多样性够不够，要等阶段 B 接真实模型与画像（那时的引入项要先过许可证台账 `TB-16`）。
+怎么验：`python -m analysis.aicap --out …` 生成 → 配置 `ai.enabled=true` + `ai.manifest` →
+适配器 `SHEN_PROXY_INJECT_CONTENT=true` → 改道侧响应多出 `<section class="service-detail">`，
+且 `inject=applied` + `content_id` 进逐请求事件（控制台 DAG 可见「内容注入」跳）。
 
 ---
 
@@ -93,8 +101,8 @@
 | 1 | **查询串不参与判定** | 参数型攻击（SQLi/穿越）默认不判 | [`../ops/functional-verification.md`](../ops/functional-verification.md) §2 #1 |
 | 2 | **一次 URL 编码即绕过**规则匹配 | 同上 | 同上 #2 |
 | 3 | 前缀规则误伤 / 可绕过 | `/.gitignore` 误伤；加前缀可绕过 | 同上 #3/#4 |
-| 4 | **AI 生成内容未接入**（无模型后端） | 注入的是静态片段 | 见本文 §1.5 |
-| 5 | **诱饵资产 / 预生成正文 → 边缘**未接通 | 诱饵面内容到不了响应 | 同上 |
+| 4 | **真实模型后端未接入** | 阶段 A 的内容由确定性模板生成器产出（像不像另说） | 阶段 B（ADR-0023 未解决 1/2/3，含许可评估） |
+| 5 | **诱饵资产 → 边缘**未接通 | 诱饵面内容到不了响应（与 AI 内容是两条通路） | 见本文 §1.5 |
 | 6 | `severity` 档位未定 | 控制台"告警"恒为 0 | [`../spec/metrics.md`](../spec/metrics.md) §2 |
 | 7 | 真实存储未接 | 重启丢观测数据 | `NI-13` |
 | 8 | 蜜罐协议栈内容 | 只有接入架构 | 用户裁定的专项调研 |

@@ -27,7 +27,7 @@ Shen/
 ├── core/                       # 核心 —— 判定与响应生成的唯一实现（Go）
 ├── edge/                       # L1 数据平面 —— 四个接入形态的适配器 + L1 处置（Go / 配置）
 ├── deception/                  # L2+L3 执行平面 —— 蜜罐、假 shell、网络策略（Go / Rust / 声明式）
-├── analysis/                   # L4 分析平面 —— 意图 / 攻击链 / 策略 / LLM 契约 + 近线 worker（Python）
+├── analysis/                   # L4 分析平面 —— 意图 / 攻击链 / 策略 / LLM 契约 + AI 能力服务 + 近线 worker（Python）
 │                               #   本层的工具链与配置**全部收在本目录**：pyproject.toml · requirements*.txt · .venv/
 ├── console/                    # 控制平面 —— 控制台（TypeScript）
 ├── deploy/                     # 部署物料
@@ -111,7 +111,7 @@ edge/
 | `core/cmd/core` | ✅ 已建 |
 | `edge/mirror/` | ✅ 已建（`receiver.go` + 单测） |
 | `core/internal/director` | ✅ 已建（阶段 2a：阈值→三值 + 灰度，含单测） |
-| `core/internal/{responder,isolation,decoy,honeypot}` | ✅ 已建（阶段 2b，含单测；**未接到请求路径** —— 处置内容的边缘通路未接通） |
+| `core/internal/{responder,isolation,decoy,honeypot}` | ✅ 已建（阶段 2b，含单测；**不在判定调用链上**）。⚠️ **处置内容的边缘通路只有一部分接通**：AI 欺骗内容已接通（`ai-capability` → 策略面 `content_manifest` → 适配器，`ADR-0023`）；诱饵资产仍未接 |
 | `edge/mirror/` 的 L0 配置模板 | ✅ 已建（`iptables-tee` / `nginx-mirror` / `envoy-mirror`） |
 | `edge/proxy/` | ✅ 已建（③前置 + ④边车的同一份实现，39 测试：内嵌 Caddy 转发 + TLS + 策略面消费） |
 | `edge/dns/` | 🟡 [`Corefile.example`](../../edge/dns/config/Corefile.example) 已建（② 纯配置，无源码） |
@@ -120,6 +120,7 @@ edge/
 | `deception/netpolicy/` | 🟡 阶段 3：三份声明式产物（微隔离 / 假拓扑 / 运行时检测，复用 Cilium / Tetragon，**无源码**） |
 | `deception/shell/` | ⏸ **推迟**（用户裁定：蜜罐只做接入架构，内容与协议栈待专项调研） |
 | `analysis/*` | ✅ 已建（阶段 3，Python：`llm` 契约层 · `intent` · `chain` · `strategy` + 24 例测试；工具链见 `requirements-dev.txt`） |
+| `analysis/aicap/` | ✅ 已建（阶段 3，模块 25：**可开关的 AI 能力服务**——`service.py` 是唯一出口且**内部强制走护栏**，子包 `tasks/`（任务注册表 + `content`）与 `guardrail/`（前置提示词 + 后置独立校验）；阶段 A 产出欺骗内容 + 清单给核心装载。依据 `AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)） |
 | `console/` | ✅ 已建（阶段 2b：Go 进程 + 静态页，只读观测；语言偏离见 [ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)） |
 | `scripts/*` | 🟡 部分已建：`archcheck/` `gate/` `licensecheck/` `tracecheck/` `check-leak/` ✅ 已实现；`devcheck/`（开发期在线冒烟）+ `dev/smoke.sh`（一键验证）✅ 已实现；`sentinel/` `doctor/` 仍只有说明 |
 | `deploy/` | 🟡 配置示例已建；helm / compose 未建 |
@@ -254,14 +255,17 @@ edge/
 | `control.Decider` | `control.ShadowDecider`（影子，恒放行）/ `director`（接管） | ✅ **已接**（`config.shadow` 决定装配哪个） |
 | `judge.RuleSource` | `policy`（配置文件装载） | ✅ **已接** |
 | `control.IsolationChecker` | `isolation` | ✅ **已接**（`WithIsolation`，命中即短路） |
-| `store.EventStore` / `PolicyStore` / `DecisionStore` / `SessionStore` / `IsolationStore` / `DecoyStore` / `ContentStore` | 内存实现（生产应换 ClickHouse / PostgreSQL / Redis） | 🟡 已接内存实现 |
+| `store.EventStore` / `PolicyStore` / `DecisionStore` / `SessionStore` / `IsolationStore` / `DecoyStore` / `ContentStore` | 内存实现（生产应换 ClickHouse / PostgreSQL / Redis） | 🟡 已接内存实现；**`ContentStore` 自 2026-09-20 起有真实消费方**（`policy` 装载期 `Put` / 投影期 `Get`，见 [ADR-0023](../../docs/background/decisions/0023-deception-content-injection.md)） |
 | **`api/policy/v1`（策略面 S4）** | `policy.Server`（核心侧）+ `edge/proxy` 的策略客户端 | ✅ **已接**：`Pull` 轮询 + `Ack` 回执（`ST-8` / `AR-13`）· `Watch` 未实现（见 [ADR-0018](../../docs/background/decisions/0018-policy-plane-pull-model.md)） |
-| `decoy` / `responder` / `honeypot` 到边缘的通路 | 经策略面下发 | 🟡 **部分接通**：改道后端表 · 白名单 · **响应改写规则（`injects` → `inject_rules`）** 已能下发；**诱饵资产与预生成响应内容**仍未接通路（核心侧尚无「谁产出、存在哪」的定义） |
+| `decoy` / `responder` / `honeypot` 到边缘的通路 | 经策略面下发 | 🟡 **部分接通**：改道后端表 · 白名单 · **响应改写规则（`injects` → `inject_rules`）** · **AI 欺骗内容（`ai-capability` → `content_manifest`）** 已能下发；**诱饵资产**仍未接通路（核心侧尚无「谁产出、存在哪」的定义） |
 
 > ✅ **2026-09-19：策略面已落地** —— 核心不再只能靠「改 env + 重启适配器」传递改道后端表：
 > 版本 + 校验和 + 回执三条都有了（`ST-8` / `AR-13` 首次真正落地）。
-> 仍未接通的是**处置内容**（诱饵资产 / 预生成响应 / 注入片段）：它们的边缘通路需要先在核心侧定下
-> 「谁产出、存在哪」，见 [ADR-0018](../../docs/background/decisions/0018-policy-plane-pull-model.md) 的「未解决」。
+> ✅ **2026-09-20：AI 欺骗内容也已落地**（阶段 A）—— `ai-capability` 离线生成 → 护栏 → 清单 → 核心装载 →
+> 策略面 `content_manifest` → 适配器注入改道侧（[ADR-0023](../../docs/background/decisions/0023-deception-content-injection.md)）。
+> 仍未接通的只剩**诱饵资产**（`decoy`）：需要先在核心侧定下「谁产出、存在哪」。
+> 仍未接通的是**诱饵资产**（`decoy`）到边缘的通路：需要先在核心侧定下「谁产出、存在哪」，
+> 见 [ADR-0018](../../docs/background/decisions/0018-policy-plane-pull-model.md) 的「未解决」。
 
 
 ### 1.7 规则

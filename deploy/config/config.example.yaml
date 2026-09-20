@@ -151,3 +151,26 @@ injects: []
 #  - kind: "developer_api"
 #    snippet: "<!-- 站点 API 文档：/api/v1 -->"
 #    marker: "</body>"
+
+# ── AI 能力服务与欺骗内容（ADR-0023 / AR-33）─────────────────────────────────
+#
+# 可选段：**整段不写 = 全关**（等价于 enabled: false），行为与今天逐字节一致。
+# 开起来之后，改道侧（幻境）响应里的欺骗内容来自这里；**业务侧响应永不改写**（INT-8）。
+#
+# 内容由离线生成器产出（Python，`analysis/aicap/`）—— 生成**必须**经护栏校验才入库：
+#   python -m analysis.aicap --out deploy/content/manifest.json --variants 8 \
+#          --profile site-a --resources /,/api/users
+# 生成规则与字段见 docs/spec/ai-contract.md。
+#
+# 三层开关（默认全关，ADR-0023 决定 4）：
+#   ① 能力级 ai.enabled=false  —— 不生成、不新增内容；
+#   ② 下发级 inject_enabled    —— 由本段投影进策略载荷，适配器停止注入但不改判定；
+#   ③ 兜底级 SHEN_PROXY_INJECT_CONTENT=false（适配器 env）—— 策略面不可达时的本地急停。
+ai:
+  enabled: false            # 默认关：先影子观察（INT-11），再显式打开
+  kinds: ["content"]        # 启用的任务种类；未登记的 kind 由生成侧拒绝（AR-33）
+  model: ""                 # 模型后端标识；阶段 A 空串合法（模板生成器不调模型）
+  manifest: ""              # 内容清单文件路径；空 = 无内容（适配器报 inject=no_content）
+  content:
+    variants: 8             # 变体数 N：必须与清单文件的 variants 一致（不一致拒绝装载）
+    rotate_cooldown: "30m"  # 轮换冷却；阶段 A 只解析与校验（轮换接线在阶段 B）

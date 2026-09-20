@@ -327,6 +327,14 @@ EXECUTED_VALUES = {
 }
 """`executed` 的合法取值（权威表见 docs/spec/events.md §2.2）。多一个少一个都说明契约漂了。"""
 
+INJECT_VALUES = {
+    "applied",
+    "disabled",
+    "no_content",
+    "off",
+}
+"""`inject` 的合法取值（AI 欺骗内容注入的结果；权威表见 docs/spec/events.md §2.2 与 ADR-0023）。"""
+
 
 def check_graph(console: str) -> dict[str, Any]:
     """核对逐请求链路（DAG）：每条请求一条链路，且每一步的「请求/响应/为什么」都在。
@@ -344,6 +352,12 @@ def check_graph(console: str) -> dict[str, Any]:
         executed = str(ch.get("executed") or "")
         if executed not in EXECUTED_VALUES:
             problems.append(f"{did}: executed={executed!r} 不在合法取值内")
+        # `inject` 是**可选**字段（旧的夹具/旧适配器不带它）：带了就必须是登记值。
+        inject = str(ch.get("inject") or "")
+        if inject and inject not in INJECT_VALUES:
+            problems.append(f"{did}: inject={inject!r} 不在合法取值内")
+        if inject == "applied" and not ch.get("content_id"):
+            problems.append(f"{did}: inject=applied 却没有 content_id（定位不到是哪份内容）")
         hops = ch.get("chain") or []
         if len(hops) < 3:
             problems.append(f"{did}: 链路只有 {len(hops)} 跳（至少应有 客户端 → 适配器 → … ）")

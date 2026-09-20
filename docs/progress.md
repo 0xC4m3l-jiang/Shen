@@ -1,7 +1,7 @@
 # 模块规划进度
 
 > **本文件 = 模块实现进度的唯一维护处**，与 [`log.md`](log.md)（变更日志）同在 `docs/` 下，供**人工审计**对照。
-> 权威模块清单在 [`design/modules.md`](design/modules.md) §1.1（**23 个有效模块**，共 24 行；第 12 行已合并）；代码结构实况（包级依赖 / 进程边界 / 接缝）见 [`design/structure.md`](design/structure.md) §1.6。
+> 权威模块清单在 [`design/modules.md`](design/modules.md) §1.1（**24 个有效模块**，共 25 行；第 12 行已合并）；代码结构实况（包级依赖 / 进程边界 / 接缝）见 [`design/structure.md`](design/structure.md) §1.6。
 > **每轮开发落地后必须同步更新本文件**（状态列 / 阶段表），并在 [`log.md`](log.md) 追加一条 —— 两处对齐，缺一不算完成。
 
 | 项 | 值 |
@@ -13,7 +13,7 @@
 | 阶段图例 | `1` = MVP（只观察）· `2a` = 接管与引流打通 · `2b` = 处置内容 · `3` = 高交互与智能 |
 | 起环境 | `make up`（Docker 全套：核心 + 代理 + 控制台 + L4 + 演示业务站）· `make dev`（本地一键验证） |
 
-> **本清单共 24 行**（第 12 行已合并 ⇒ **23 个有效模块**）。
+> **本清单共 25 行**（第 12 行已合并 ⇒ **24 个有效模块**）。
 > 阶段 2b 起新增 `decoy`（诱饵面，[ADR-0010](background/decisions/0010-functional-camouflage.md)）与
 > `honeypot`（蜜罐入口与后端池，[ADR-0011](background/decisions/0011-honeypot-entry-external-backends.md)）。
 
@@ -43,13 +43,14 @@
 | 18 | `chain` | **攻击链还原** + **识破信号识别**（触发诱饵再生成） | L4 | Python | `analysis/chain/` | ✅ [`modules/chain.md`](modules/chain.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 19 | `strategy` | **策略生成** + 诱饵再生成决策（经 `policy` 下发） | L4 | Python | `analysis/strategy/` | ✅ [`modules/strategy.md`](modules/strategy.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 20 | `llm-components` | LLM 契约纪律（`AR-15`…`AR-27`）+ **间接注入防护** + 内容预生成 | L4 | Python | `analysis/llm/` | ✅ [`modules/llm-components.md`](modules/llm-components.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
+| 25 | `ai-capability` | **AI 能力服务**：可开关的生成出口（强制护栏）—— 阶段 A 产出欺骗内容 + 内容清单，经策略面下发到改道侧 | L4 | Python | `analysis/aicap/` | ✅ [`modules/ai-capability.md`](modules/ai-capability.md) | ✅ **已实现（阶段 A：通路 + 开关 + 护栏）** | 3 |
 | 21 | `console` | 控制台：**观测（只读）** —— 告警 · 流量访问 · 请求流动 | 控制台 | **Go + 静态页**（[ADR-0020](background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | `console/` | ✅ [`modules/console.md`](modules/console.md) | ✅ **已实现（最小可用）**（页面 + 4 个只读接口） | 2b |
 | 22 | `control` | **服务面**：gRPC 入参映射 · 会话身份提取 · 熔断（`NI-10`）· **禁止回显的强制点** | 核心 | Go | `core/internal/control/` | ✅ [`modules/control.md`](modules/control.md) | ✅ 3 文件 + 1 单测 | 1 |
 | 23 | `decoy` | **诱饵面**：五类（Developer API / 指令文件 / MCP / 数据集 / 蜜饵）+ 多态轮换 | 核心 | Go | `core/internal/decoy/` | ✅ [`modules/decoy.md`](modules/decoy.md) | ✅ 2 文件 + 1 单测 | 2b |
 | 24 | `honeypot` | **蜜罐入口**：类型注册 + `config` 开关 + 后端池解析；**不实现具体蜜罐**（接第三方） | 核心 | Go | `core/internal/honeypot/` | ✅ [`modules/honeypot.md`](modules/honeypot.md) | ✅ 2 文件 + 1 单测 | 2b |
 
 > ✅ 第 12 行 `adapter-sidecar` **已合并入第 11 行 `adapter-proxy`**（同一份代码的另一种部署形态）。
-> 编号保留不重排 —— 编号是引用句柄（同 `D-6` 精神）。因此共 **24 行**（含已合并行），其中 **23 个有效模块**。
+> 编号保留不重排 —— 编号是引用句柄（同 `D-6` 精神）。因此共 **25 行**（含已合并行），其中 **24 个有效模块**。
 
 ---
 
@@ -114,8 +115,8 @@
 
 | # | 模块 | 文档 | 代码 |
 | --- | --- | --- | --- |
-| 6 | `policy` | ✅ | ✅ 含单测 + **下发面已实现**（`Pull` / `Ack`，22 例） |
-| 11 | `adapter-proxy` | ✅ | ✅ 39 测试（含 `-race`；内嵌 Caddy + 策略面消费：后端表 / 白名单 / 注入规则） |
+| 6 | `policy` | ✅ | ✅ 含单测 + **下发面已实现**（`Pull` / `Ack`，36 顶层测试；含 AI 内容清单装载与投影） |
+| 11 | `adapter-proxy` | ✅ | ✅ 75 顶层测试（含 `-race`；内嵌 Caddy + 策略面消费：后端表 / 白名单 / 注入规则 / **AI 内容清单**） |
 | 13 | `adapter-dns` | ✅ | 🟡 `Corefile.example` 已就绪 |
 | 2 | `director` | ✅ | ✅ 6 项决策已确认并实现（阈值→三值 + 灰度 + 后端名） |
 

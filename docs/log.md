@@ -9,6 +9,46 @@
 
 ---
 
+## 2026-09-20 · AI 能力服务（模块 25）+ 欺骗内容注入通路（阶段 A：通路 · 开关 · 强制护栏）
+
+**做了什么**：新增 L4 模块 **`ai-capability`（第 25 行）**——一个**可开关的共享生成出口**：
+唯一入口 `generate(TaskSpec) → Envelope`，**内部强制走护栏**（前置三段式提示词 + 后置四关：结构 / 黑名单 / 长度 / 风格）；
+未登记的任务种类必拒、缺护栏档案**启动期就失败**。同时接通**欺骗内容通路**：
+离线生成 → 过护栏 → 清单文件 → 核心装载进 `store.ContentStore`（该接口的**首个真实消费方**）→
+策略载荷 `content_manifest` 下发 → 适配器按（资源精确匹配 + **会话哈希**）确定性命中、**会话钉定**、注入前再验校验和 →
+`edge/injection` 写入**改道侧**响应。三层开关默认**全关**（`ai.enabled` · `inject_enabled` · `SHEN_PROXY_INJECT_CONTENT`），
+不打开时行为与以前**逐字节一致**。
+新增规则 **`AR-33`**（生成必须经护栏出口，判据 = 门禁结构检查 + 单测）与 [ADR-0023](background/decisions/0023-deception-content-injection.md)。
+
+**改了哪些文件**：新增 `analysis/aicap/`（service / model / content / tasks / guardrail / resources）· `analysis/tests/test_aicap_guardrail.py` · `analysis/tests/test_aicap_content.py` · `core/internal/contract/content.go` · `core/internal/policy/ai.go` · `core/internal/policy/ai_test.go` · `edge/proxy/content.go` · `edge/proxy/content_test.go` · `scripts/dev/ai-inject-check.py` · `docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/background/decisions/0023-deception-content-injection.md`；修改 `analysis/llm/limits.py` · `analysis/pyproject.toml` · `core/internal/policy/policy.go` · `core/internal/policy/server.go` · `core/cmd/core/main.go` · `edge/proxy/policy.go` · `edge/proxy/handler.go` · `edge/proxy/cmd/proxy/main.go` · `console/internal/topology/topology.go` · `scripts/archcheck/main.go` · `scripts/traffic/send.py` · `Makefile` · `api/telemetry/v1/testdata/request_judged_event.json` · `deploy/config/config.example.yaml` · `docs/design/`（modules / structure / architecture / README）· `docs/spec/`（policy-payload / events / config / README）· `docs/modules/`（adapter-proxy / policy / store / console / llm-components）· `docs/kb/capabilities.md` · `docs/kb/quick-tour.md` · `docs/progress.md` · `docs/modules/_map.md` · `docs/modules/README.md` · `docs/README.md` · `.pi/devloop.md` · `docs/background/decisions/README.md`
+
+**对应文档**：`docs/plans/2026-09-20-ai-capability-guardrail.md`（含追溯矩阵与审视 15 条）· `docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/design/architecture.md` §5 的 `AR-33`
+
+**验证**：`make gate` 通过（含 `make archcheck` 的 `AR-33` 项与 71 例 pytest）· `make dev` 通过 ·
+`make ai-check` **17/17 通过**（连续 4 次一致）· `AR-33` 结构检查做了正/负两例（含 `from analysis.llm import client` 这种等价写法）。
+**独立评审**（冷上下文 `reviewer`，抽查 24 条 ✅ 断言）：**有异议 5 条，已全部修完** —— 内容库值的契约描述 · 会话钉定语义 · `inject` 四值的失败表 · `ai.kinds` 关闭态漏校 · `AR-33` 正则漏一种等价写法（其中第 4 条修的是**实现**）。
+
+**证据**：
+
+| 判据 | 期望 | 实测 |
+| --- | --- | --- |
+| ① 关闭态 | 与未注入基线逐字节一致 | ✅ 改道侧 `9eef5471…` == 幻境直连；业务侧 `3e535d75…` == 业务直连 |
+| ② 打开态 | 改道侧含注入内容；业务侧不变 | ✅ `<html><body>MIRAGE-BACKEND<section class="service-detail">…`（40 → 374 字节）；业务侧 sha256 不变（`INT-8`） |
+| ③ `AR-30` | 同会话一致 + 跨会话分布 | ✅ 同会话三次长度 [374,374,374] 且 sha256 相同；16 会话命中 **8** 个变体（N=8） |
+| ④ 关卡 | 未过护栏的内容零入库 | ✅ CLI 退出码 1、**不写清单**；单测覆盖四关各自拒（含注入的真实标识） |
+| ⑤ 秒级关闭 | 不重启适配器即停止注入 | ✅ 换核心后适配器 pid 不变，下一条请求 `inject=disabled` 且响应回到 40 字节原样 |
+| ⑥ 观测 | DAG 有注入跳 | ✅ 「内容注入 (L1)」五段文字齐全；逐请求事件 `inject=applied` + `content_id`（20 条） |
+| ⑦ 门禁 | 绿 | ✅ `make gate` / `make dev` / `make ai-check` 全绿 |
+| `AR-33` 结构检查 | 能拦也能放 | ✅ 故意在 `analysis/intent/` 用两种等价写法 import 模型客户端 → 门禁报 `AR-33`；删掉即过 |
+| 独立评审 | 异议全修 | ✅ 5 条异议（#29–#33）逐条改完并重跑门禁/验收 |
+
+**没做 / 遗留**：① **真实模型后端**未接（阶段 A 是确定性模板生成器：阶段 B 接模型 + 风格画像 + PII 检测，引入前要过许可证台账 `TB-16`）；
+② **诱饵资产到边缘的通路**仍未接（本轮接的是 AI 内容，另一条通路）；③ 识破信号 → 清单 `version` +1 的轮换接线未接；
+④ **核**心侧开关变更需重启核心**（适配器侧不重启即生效）—— 配置只在启动装载；⑤ 清单纯量上限与分片拉取（阶段 B）。
+去向：[ADR-0023](background/decisions/0023-deception-content-injection.md) 未解决 1–6 · `docs/kb/capabilities.md` §1.5/§3。
+
+---
+
 ## 2026-09-20 · 五维能力审计（反代 / 转发 / 监控 / 配置 / AI 注入）+ KB 能力实况
 
 **做了什么**：用户要求 review"设计的功能是否都开发好了"，点名五个维度，并在确认后完善 KB。

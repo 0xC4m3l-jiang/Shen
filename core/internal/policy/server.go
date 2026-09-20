@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -39,6 +40,34 @@ type edgeDoc struct {
 	//   - 非 nil（可以是空数组）→ 显式下发，空数组 = 「没有规则」。
 	// 否则「没配」与「配了空」无法区分，运营就没有关闭注入的手段。
 	InjectRules *[]edgeInjectRule `json:"inject_rules,omitempty"`
+	// InjectEnabled 是 **AI 欺骗内容注入**的下发级开关（`ADR-0023` 决定 4）。
+	// 恒出现（不是指针、无 omitempty）：适配器必须能区分「明确关闭」与「这份载荷没谈这件事」。
+	// 它**不**影响 inject_rules（静态规则有自己的显式关闭手段：空数组）。
+	InjectEnabled bool `json:"inject_enabled"`
+	// ContentManifest 是内容清单的**投影**（含内容体）。nil = 没有内容。
+	ContentManifest *edgeContentManifest `json:"content_manifest,omitempty"`
+}
+
+// edgeContentManifest 是下发给适配器的内容清单（字段与生成侧清单对齐，见 docs/spec/ai-contract.md §3）。
+type edgeContentManifest struct {
+	Version  uint64             `json:"version"`
+	Selector string             `json:"selector"`
+	Variants int                `json:"variants"`
+	Entries  []edgeContentEntry `json:"entries"`
+}
+
+type edgeContentEntry struct {
+	Resource  string            `json:"resource"`
+	ProfileID string            `json:"profile_id"`
+	Bodies    []edgeContentBody `json:"bodies"`
+}
+
+type edgeContentBody struct {
+	VariantID int    `json:"variant_id"`
+	ContentID string `json:"content_id"`
+	Checksum  string `json:"checksum"`
+	Body      string `json:"body"`
+	Marker    string `json:"marker,omitempty"`
 }
 
 // edgeInjectRule 是一条响应改写规则（字段与适配器侧 `edge.proxy.policyInjectRule` 手工对齐）。
@@ -74,6 +103,28 @@ type Server struct {
 	loader *Loader
 	store  store.PolicyStore
 	now    func() time.Time
+	// content 是 AI 内容的投影输入；nil = 本实例未装配内容（inject_enabled=false，无清单）。
+	content *ContentSource
+}
+
+// ContentSource 是策略面做 AI 内容投影所需的全部输入（`ADR-0023`）。
+//
+// 三者必须一起给：开关决定「发不发」，清单决定「发什么」，内容库决定「内容体从哪取」
+// （`store` 是核心唯一的 I/O 出口，`MD-20`）。
+type ContentSource struct {
+	// Enabled = 配置 `ai.enabled`（投影成载荷里的 inject_enabled）。
+	Enabled bool
+	// Manifest 是已装载的清单（Entries 为空 = 没有内容）。
+	Manifest contract.ContentManifest
+	// Store 是内容库（装载期 Put、投影期 Get）。
+	Store store.ContentStore
+}
+
+// WithContent 装配 AI 内容的投影输入。未调用时策略载荷恒为
+// `inject_enabled=false` 且无 `content_manifest`（= 今天的行为，逐字节一致）。
+func (s *Server) WithContent(src ContentSource) *Server {
+	s.content = &src
+	return s
 }
 
 var _ policyv1.DeceptionPolicyServer = (*Server)(nil)
@@ -183,9 +234,73 @@ func (s *Server) edgePayload(ctx context.Context, snap contract.PolicySnapshot) 
 		doc.InjectRules = &out
 	}
 
+	// AI 欺骗内容（`ADR-0023` / `AR-33`）：开关 + 内容清单。
+	//
+	// 内容体**从内容库读**（不是从装载时的结构里直接拿）—— 内容库是内容的唯一存放处，
+	// 本函数只是它的投影；缺内容（读过期了 / 没写进去）就跳过该条并 warn，不编造、不阻断。
+	if src := s.content; src != nil {
+		doc.InjectEnabled = src.Enabled
+		if doc.ContentManifest, err = s.projectContent(ctx, src); err != nil {
+			return nil, err
+		}
+	}
+
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return nil, fmt.Errorf("序列化边缘策略文档失败：%w", err)
 	}
 	return raw, nil
+}
+
+// projectContent 把内容清单投影成边缘文档里的 `content_manifest`。
+//
+// 没有可用条目时返回 nil（= 载荷不带该字段，适配器一律报 `no_content`）—— 空对象与缺字段
+// 在适配器侧语义相同，但缺字段更小（少一段空 JSON）。
+func (s *Server) projectContent(ctx context.Context, src *ContentSource) (*edgeContentManifest, error) {
+	if len(src.Manifest.Entries) == 0 {
+		return nil, nil
+	}
+	out := &edgeContentManifest{
+		Version:  src.Manifest.Version,
+		Selector: src.Manifest.Selector,
+		Variants: src.Manifest.Variants,
+		Entries:  make([]edgeContentEntry, 0, len(src.Manifest.Entries)),
+	}
+	missing := 0
+	for _, entry := range src.Manifest.Entries {
+		bodies := make([]edgeContentBody, 0, len(entry.Bodies))
+		for _, body := range entry.Bodies {
+			key := contract.ContentKey(entry.ProfileID, entry.Resource, body.VariantID, src.Manifest.Version)
+			raw, ok, err := src.Store.Get(ctx, key)
+			if err != nil {
+				return nil, fmt.Errorf("policy: 读内容库失败（%s）：%w", key, err)
+			}
+			if !ok {
+				missing++
+				continue
+			}
+			bodies = append(bodies, edgeContentBody{
+				VariantID: body.VariantID,
+				ContentID: body.ContentID,
+				Checksum:  body.Checksum,
+				Body:      string(raw),
+				Marker:    body.Marker,
+			})
+		}
+		if len(bodies) == 0 {
+			continue
+		}
+		out.Entries = append(out.Entries, edgeContentEntry{
+			Resource:  entry.Resource,
+			ProfileID: entry.ProfileID,
+			Bodies:    bodies,
+		})
+	}
+	if missing > 0 {
+		log.Printf("policy: 内容库缺 %d 条内容，已从下发清单里跳过（不影响业务与判定）", missing)
+	}
+	if len(out.Entries) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }

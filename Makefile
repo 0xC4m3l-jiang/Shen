@@ -19,7 +19,7 @@ PROTOS := $(shell find api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
+        check-config replay smoke dev ai-check commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen analysis \
         docker-build up down docker-ps docker-logs docker-log check-ignore \
         start status app-smoke traffic verify
@@ -266,6 +266,9 @@ smoke: ## 在线冒烟：对已在跑的核心发判定请求（地址取 SHEN_D
 
 dev: ## 一键开发验证：配置干跑 → 起核心 → 在线冒烟 → 规则回放 → 关核心
 	@scripts/dev/smoke.sh
+
+ai-check: ## AI 欺骗内容注入端到端验收（六项：关闭态字节一致 / 打开态注入 / AR-30 / 关卡 / 秒级关闭 / DAG 注入跳）
+	@python3 scripts/dev/ai-inject-check.py
 
 clean: ## 清理构建缓存
 	$(GO) clean ./...

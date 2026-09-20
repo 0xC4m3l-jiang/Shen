@@ -11,6 +11,7 @@
 //	modules.md   §1.1   模块与源码目录的一一映射
 //	modules.md          MD-18 / MD-19（清单与目录一致）/ MD-20（store 是唯一 I/O 出口）
 //	language.md         TB-20 / TB-21（语言层数上限）/ TB-24（禁止 CGO 与本地库）
+//	architecture.md     AR-33（欺骗内容生成必须经 ai-capability 的护栏出口）
 //
 // 清单**从文档解析，不硬编码** —— 文档改则检查跟着改，不会两边漂移。
 // 解析结果不达预期时**直接报错退出**，绝不静默放行：静默通过等于假绿。
@@ -109,6 +110,7 @@ func main() {
 	findings = append(findings, checkModulesAgainstList(pkgs, mods)...)
 	findings = append(findings, checkNoCGO(pkgs, root)...)
 	findings = append(findings, checkLanguages(root)...)
+	findings = append(findings, checkGuardrailIsSoleExit(root)...)
 
 	report(findings)
 }
@@ -689,14 +691,152 @@ func loadPackages() ([]pkg, error) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 检查 8 · AR-33 模型客户端只能被 ai-capability 的出口与接缝 import
+// ─────────────────────────────────────────────────────────────────────────────
+
+// modelClientImport 匹配**import 模型客户端**的语句：
+//
+//	from ..llm.client import X       （包内相对，带点号）
+//	from analysis.llm.client import   （绝对）
+//	from analysis.llm import client   （分两步：先包再成员 —— 同样是拿到客户端）
+//	from ..llm import client
+//	from .client import X            （在 analysis/llm/ 内部）
+//	import analysis.llm.client
+//
+// 只看 import 语句 —— 注释里提到 `llm.client` 不算（文档需要能引用它）。
+var modelClientImport = regexp.MustCompile(
+	`(?m)^\s*(?:` +
+		`from\s+\.*[\w.]*\bllm\.client\s+import` + `|` + // from …llm.client import X
+		`from\s+\.*[\w.]*\bllm\s+import\s+client\b` + `|` + // from …llm import client
+		`from\s+\.client\s+import` + `|` + // 在 llm/ 内部：from .client import X
+		`import\s+\.*[\w.]*\bllm\.client\b` + // import …llm.client
+		`)`,
+)
+
+// guardrailSoleExitPrefixes 是**允许** import 模型客户端的路径前缀：
+//
+//	analysis/aicap/service.py  —— 唯一出口（`AR-33`）
+//	analysis/aicap/model.py    —— 模型接缝（取客户端 + 核对无执行面，`AR-32`）
+//	analysis/llm/              —— 客户端自身所在层
+//	analysis/tests/            —— 测试（不是生成路径）
+var guardrailSoleExitPrefixes = []string{
+	"analysis/aicap/service.py",
+	"analysis/aicap/model.py",
+	"analysis/llm/",
+	"analysis/tests/",
+}
+
+// checkGuardrailIsSoleExit 把 `AR-33` 的「无绕过路径」变成可执行检查：
+// 欺骗内容的生成**必须**走 `ai-capability` 的护栏出口；别处一旦直接 import 模型客户端，
+// 就等于开了一条不过护栏的生成路径（它会绕开 schema / 黑名单 / 长度 / 风格四关）。
+func checkGuardrailIsSoleExit(root string) []finding {
+	dir := filepath.Join(root, "analysis")
+	if !dirExists(dir) {
+		return []finding{{
+			ID:    "AR-33",
+			Human: "找不到 analysis/ 目录 —— 护栏结构检查无法执行（不静默放行）",
+			Where: "analysis/",
+		}}
+	}
+
+	scanned, guarded := 0, 0
+	var out []finding
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			rel, _ := filepath.Rel(root, path)
+			out = append(out, finding{
+				ID:    "AR-33",
+				Human: "遍历 analysis/ 失败，护栏结构检查不完整",
+				Where: fmt.Sprintf("%s：%v", rel, err),
+			})
+			return nil
+		}
+		if d.IsDir() {
+			if name := d.Name(); strings.HasPrefix(name, ".") || name == "__pycache__" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".py" {
+			return nil
+		}
+		scanned++
+		rel, _ := filepath.Rel(root, path)
+		rel = filepath.ToSlash(rel)
+		if isGuardrailExempt(rel) {
+			guarded++
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			out = append(out, finding{
+				ID:    "AR-33",
+				Human: "无法读取源文件，护栏结构检查不完整",
+				Where: fmt.Sprintf("%s：%v", rel, rerr),
+			})
+			return nil
+		}
+		if modelClientImport.Match(b) {
+			out = append(out, finding{
+				ID:    "AR-33",
+				Human: "除 ai-capability 的出口（service.py）与接缝（model.py）外，禁止 import 模型客户端 —— 那不是绕过护栏了吗",
+				Where: rel,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		out = append(out, finding{ID: "AR-33", Human: "遍历 analysis/ 失败", Where: err.Error()})
+	}
+
+	// 解析结果不达预期就直接报错：扫描不到 Python 文件说明路经变了，不能静默通过。
+	if scanned == 0 {
+		out = append(out, finding{
+			ID:    "AR-33",
+			Human: "analysis/ 下一个 .py 文件都没扫到 —— 路径或过滤条件可能坏了，拒绝静默放行",
+			Where: "analysis/",
+		})
+	}
+	if guarded == 0 {
+		out = append(out, finding{
+			ID:    "AR-33",
+			Human: "护栏出口与接缝文件都不存在（analysis/aicap/service.py 是 AR-33 的判据）",
+			Where: "analysis/aicap/",
+		})
+	}
+	return out
+}
+
+// isGuardrailExempt 报告该路径是否被允许 import 模型客户端。
+func isGuardrailExempt(rel string) bool {
+	for _, prefix := range guardrailSoleExitPrefixes {
+		if strings.HasSuffix(prefix, "/") {
+			if strings.HasPrefix(rel, prefix) {
+				return true
+			}
+			continue
+		}
+		if rel == prefix {
+			return true
+		}
+	}
+	return false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 输出
 // ─────────────────────────────────────────────────────────────────────────────
+
+func dirExists(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.IsDir()
+}
 
 func report(findings []finding) {
 	if len(findings) == 0 {
 		fmt.Println("架构检查通过。")
 		fmt.Println("  顶层目录 · 跨平面依赖 · 核心内部可见性 · store 唯一 I/O 出口")
-		fmt.Println("  模块清单一致性 · CGO 与本地库 · 语言层数")
+		fmt.Println("  模块清单一致性 · CGO 与本地库 · 语言层数 · 护栏为唯一出口（AR-33）")
 		return
 	}
 	fmt.Fprintf(os.Stderr, "架构检查发现 %d 个问题：\n\n", len(findings))

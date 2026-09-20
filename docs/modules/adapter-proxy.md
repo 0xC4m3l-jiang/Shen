@@ -34,9 +34,15 @@
 3. **按结果执行** —— `route_origin` 透传到业务 · `route_mirage` 引流到指定后端 · `block` 拦截；
 4. **异步上报遥测**（`api/telemetry/v1`），不阻塞请求。
 
-**另外消费策略面**（接缝 `S4`）：从核心拉取**改道后端表 · 白名单 · 响应改写规则**（`api/policy/v1` 的 `Pull`），
+**另外消费策略面**（接缝 `S4`）：从核心拉取**改道后端表 · 白名单 · 响应改写规则 · AI 内容开关与清单**（`api/policy/v1` 的 `Pull`），
 按「远端覆盖本地、白名单取并集」应用，并把结果回执给核心（`Ack`）。
 拉不到就继续用本地 env —— 策略面**不是**请求路径上的依赖（`NI-1`）。契约见 [`../spec/policy-payload.md`](../spec/policy-payload.md) 与 [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)。
+
+**AI 欺骗内容的注入**（`ADR-0023` / `AR-33`）在改道侧：命中资源（与请求路径**精确相等**）→ 按
+`variant = fnv1a(会话键) mod N` 选变体（确定性，`AR-30`）→ 再验校验和 → 引用 `edge-injection` 改写
+（插在 `marker` 之前）。会话→槽位有**钉定缓存**（TTL = 判定缓存窗）：**冻结的是槽位选择**，不是内容体 —— 清单换代后槽位由 `fnv1a(会话)` 重算得到同值（不漂移），内容体取自新版本。
+开关**取与**：适配器本地 `SHEN_PROXY_INJECT_CONTENT`（默认 `false`）+ 策略载荷 `inject_enabled`。
+本模块**不生成内容、不调模型**（`AR-7` / `AR-32`）—— 它只查表、验证、改写。
 
 **转发与 TLS 终结不由本模块实现**：交给**内嵌 Caddy**（[ADR-0017](../background/decisions/0017-caddy-l1-base.md)）。
 本模块以 Caddy 中间件 `http.handlers.shen_proxy` 存在，只产出「决定」与「后端地址」；
@@ -162,6 +168,8 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | `ST-11` | 未命中缓存才调核心；适配器侧**必须**实现超时降级 |
 | `TB-20` | 本层语言为 Go（`ADR-0008`） |
 | `TB-24` | 禁止 CGO / FFI，跨进程只走 wire format |
+| `AR-30` | 响应路径**禁止**非确定性：变体由会话哈希决定，会话内冻结（钉定） |
+| `AR-33` | 内容**必须**来自过了护栏的 `ai-capability`（本模块只消费，不生成、不调模型） |
 
 ## 5. 状态与生命周期
 
@@ -173,6 +181,8 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | 引流后端表（远端） | 策略面下发，**整块原子替换** | 进程存活期；拉取失败沿用上一次成功版本 | 各副本可能短暂停在**不同策略版本** —— 回执（`Ack`）就是给核心做这层对账用的（`AR-13`） |
 | 白名单（远端） | 策略面下发，与本地**取并集**（护栏只增不减） | 同上 | 同上 |
 | 响应改写规则（远端） | 策略面下发；**字段缺省**时沿用本地 env 规则，**显式空数组**时明确无规则 | 进程存活期；失败沿用上一次成功版本 | 各副本可能短暂停在**不同策略版本** —— 回执（`Ack`）即为此对账（`AR-13`） |
+| AI 内容清单（远端） | 策略面下发（`content_manifest`），**整块取代** | 同上 | 同上 |
+| 会话→变体槽位钉定 | 进程内存，键为会话键（Cookie 原值） | TTL = 判定缓存窗；有容量上限（`MD-10`） | **可丢失** —— 丢了重算得同一槽位（哈希决定），不漂移 |
 | TLS 证书 | 进程内由 Caddy 持有：`manual` 从文件装载 · `acme` 自动签发与续期 | 进程存活期（`acme` 由 Caddy 负责续期） | 各副本各自持有，证书内容一致 |
 | **禁止写盘的进程侧文件** | ❌ **配置自动保存已关闭**（`Admin.Config.Persist=false`）：Caddy 默认会把整份配置写进 `$XDG_DATA_HOME/caddy/autosave.json`，本进程**不得**这么做 | —— | —— |
 | 证书存储目录 | ⚠️ certmagic 仍在 `$XDG_DATA_HOME/caddy/`（默认）写 `instance.uuid` / `last_clean.json` / `locks` | 进程存活期 | 容器需可写目录；只读根文件系统必须把 `XDG_DATA_HOME` 指向可写位置 |
@@ -204,7 +214,10 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | 策略载荷校验和不匹配 / `schema_version` 读不懂 / JSON 非法 | **拒绝应用**并回执 `applied=false` + 原因；继续用当前策略 | ✅ | `ST-8` · `spec/policy-payload.md` |
 | 载荷里个别后端地址非法 | 只丢那一条并记账（整表作废会让所有改道一起失效） | ✅ | 同上 |
 | 注入规则非法（片段为空等） | **整份策略不应用**（宁可继续用旧规则，不可半应用）；回执 `applied=false` + 原因 | ✅ | `spec/policy-payload.md` |
-| 输出不合格（LLM） | 不适用 —— 本模块不做 LLM | —— | —— |
+| 内容清单结构不可索引（selector 不认识 / variants < 1 / 条目全坏） | 当作「没有内容」：上报 `inject=no_content`，**不报错、不阻断** | ✅ | `spec/ai-contract.md` §3 |
+| 内容校验和不符 / 资源未命中 / 变体缺失 / 找不到 `marker` / 非 HTML | 原样返回响应，上报 `inject=no_content` | ✅ | `ADR-0023` · `NI-1` |
+| 内容注入开关关（本地或下发级任一） | 完全不动响应体，上报 `inject=disabled` | ✅ | `ADR-0023` 决定 4 |
+| 输出不合格（LLM） | 不适用 —— 本模块不做 LLM（生成侧在 `ai-capability`，过了护栏才下发） | —— | `AR-33` |
 
 > ⚠️ **「引流后端不可达 → 回落业务」是本模块最关键的一条降级。**
 > 它同时满足 `NI-1`（业务不受影响）与 `INT-8`（不改写业务侧响应）：
@@ -240,7 +253,7 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | --- | --- | --- | --- |
 | 1 | ✅ **已结案（2026-09-19，后被 [ADR-0019](../background/decisions/0019-tls-termination-belongs-to-l0.md) 收窄）** —— **默认交客户 L0 终结 TLS**（`SHEN_PROXY_TLS_MODE=off`）；自终结（`manual`/`acme`）保留为「客户没有 L0」时的备选，**启用即在启动日志警告**（`E2` 实测：本栈与公有站栈的 ServerHello 扩展顺序可区分） | —— | [`ADR-0019`](../background/decisions/0019-tls-termination-belongs-to-l0.md) · §3.1 |
 | 2 | ✅ **已结案（2026-09-19）**：改道后端表**两者都要** —— 本地 env 是兜底，策略面下发是正式通路（远端覆盖本地，[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)）。原问：静态配置还是核心下发 | —— | —— |
-| 10 | **注入片段与诱饵资产不经策略面下发**（核心侧尚无来源与归属） | 处置内容到不了边缘 | [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」 |
+| 10 | **诱饵资产不经策略面下发**（核心侧尚无来源与归属）—— ⚠️ **AI 欺骗内容已单独接通**（阶段 A：`ai-capability` → `content_manifest` → 本模块注入，`ADR-0023`）；本项只剩诱饵资产一条 | 诱饵面内容到不了响应 | [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」 |
 | 11 | **同一 `(IP, 会话, 路径, 60s)` 内共享一个决策**（`decision_id` 不含 UA）—— 实测可复现「探针先到 → 真实用户被改道」 | 误调度率（`guard.false_route_budget`）；改它要动 `ST-10` | [`../kb/known-issues.md`](../kb/known-issues.md) `K-20` |
 | 12 | **`ST-17`（存活/就绪探针）未实现** —— 本进程不暴露任何探针端点，因此 `config/sidecar.example.yaml` 里的 `livenessProbe` / `readinessProbe` 已**删掉**（模板不得声称代码没有的东西） | 交付形态缺少探针语义；k8s 部署只能用 TCP 探活 | 实现时要先定「探针端点是否开在对外监听上」（`OH-2`：它会被任何客户端请求到）—— 属接入物料轮 |
 | 3 | **真实引流依赖 `director`** —— 核心当前是 `control.ShadowDecider`，恒返回 `route_origin`；本模块无法自己造出 `route_mirage` | 端到端引流验证 | 见 [`../modules/control.md`](control.md) 与 §1.1 第 2 行 |
@@ -264,12 +277,15 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/ARCHIVE.md) |
 | 2026-09-19 | **转发边界实测锁定**：协议升级（WebSocket）· 流式不被缓冲 · 2 MiB 响应不注入不截断 · 8 MiB 上传完整送达 · 观测不含 body · h2 下行 + h1.1 上行；新增 6 例集成测试 | [`../plans/2026-09-19-forwarding-boundary-verification.md`](../plans/ARCHIVE.md) |
 | 2026-09-19 | **`NI-12` 的 `V-1…V-4` 自动化**（真 Caddy + 真 gRPC/裸 TCP 故障注入，每条连打 20 次要求 100% 正常）· 新增 `AR-29` 空载下界基准与 `make bench`；`V-5` 归入接入演练 | [`../plans/2026-09-19-ni12-vseries-and-ar29-floor.md`](../plans/ARCHIVE.md) |
+| 2026-09-20 | **接 AI 欺骗内容注入**（`ADR-0023` / `AR-33`）：消费策略载荷的 `inject_enabled` + `content_manifest`；按（资源精确匹配 + 会话哈希）**确定性命中**变体、**会话钉定**（轮换只对新会话生效）、注入前**再验校验和**；新增 `SHEN_PROXY_INJECT_CONTENT`（默认 `false`，与下发级开关**取与**）；逐请求事件新增 `inject` / `content_id`（`docs/spec/events.md` §2.2 + 夹具同步）；顶层测试函数 58 → **75**（`grep -c '^func Test'`） | [`../plans/2026-09-20-ai-capability-guardrail.md`](../plans/2026-09-20-ai-capability-guardrail.md) · [ADR-0023](../background/decisions/0023-deception-content-injection.md) · 用户确认 |
 
 ## 9.1 执行落点与响应观测（供流量调度图）
 
 每次请求结束都会异步上报一条 `request_judged`（见 [`../spec/events.md`](../spec/events.md) §2.2），其中：
 
 - `executed`：**实际落点**，由纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定 —— 穷举测试在 `edge/proxy/wire_test.go`；
+- `inject` / `content_id`：**注入结果**与内容标识（`applied` / `disabled` / `no_content` / `off`）——
+  四个取值各由一例单测锁定（`edge/proxy/content_test.go`）；只有 `applied` + 非空 `content_id` 才在图上多一跳「内容注入」（`ADR-0023`）；
 - 事件信封的 `event_id` 是**逐请求唯一**（`judged:<decision_id>:<序>`），`decision_id` 放在**载荷里**：
   判定缓存命中的多条请求共享同一 `decision_id`，若用它当事件 id 会被遥测幂等键（`AR-11`）折叠成一条 —— 图上就看不到"每条流量"了（实测踩过）；
 - `status` / `bytes` / `duration_ms`：由 `headerSanitizer` 顺带观测（它本就包住整个请求的 `ResponseWriter`，不再加一层包装）；

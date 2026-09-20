@@ -146,6 +146,7 @@
 | **AR-30** | 任何伪造响应**必须**按 `(会话, 资源)` 命中同一内容 —— 重试 / 重放 / 翻页都得到同一答案。**禁止**在响应路径上引入非确定性（随机数、当前时间、LLM 采样）。依据 [ADR-0014](../background/decisions/0014-generative-deceptive-response.md)。 | 重放测试（同会话同资源两次必须逐字节一致） |
 | **AR-31** | 送入 L4 的**攻击者可控内容必须**以结构化数据传入，**禁止**进入提示词的指令区；提示词**必须**显式标注其为**不可信数据**。原始观测**禁止**为「净化」而丢弃（证据链要求）。依据 [ADR-0015](../background/decisions/0015-indirect-prompt-injection.md)。 | 提示词评审 + 注入样本回归（结论不得改变） |
 | **AR-32** | 分析用 LLM **禁止**持有执行能力（不下发指令 / 不生成载荷 / 不调外部系统），只输出**结构化结论**；分析结论**禁止**直接回写响应（只经 `policy` 间接生效）。依据 [ADR-0015](../background/decisions/0015-indirect-prompt-injection.md)。 | 接口清单核对（`SB-1` / `SB-2`） |
+| **AR-33** | **欺骗内容生成必须经 `ai-capability` 的唯一出口**（`generate(TaskSpec) → Envelope`）并**强制过护栏**（前置提示词三段式 + 后置独立校验）；**禁止**任何绕过路径 —— 模型客户端**只能**被该能力自身 import（`service.py` 是出口、`model.py` 是模型接缝；能力之外一律禁止），未登记的任务种类与缺护栏档案的任务**必须**在启动期断言失败。未经护栏校验的内容**禁止**入库、**禁止**下发到边缘。依据 [ADR-0023](../background/decisions/0023-deception-content-injection.md)。 | 门禁结构检查（`make archcheck` 的 `AR-33` 项：`analysis/` 下除 `aicap/service.py` · `aicap/model.py` · `llm/` 自身与测试外，禁止 import 模型客户端）+ 单元测试（未登记 kind / 缺护栏档案必拒） |
 
 ---
 

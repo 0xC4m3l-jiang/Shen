@@ -11,13 +11,16 @@
 > 想先知道「它是什么 / 效果什么样」→ 看根 [`README.md`](../README.md)。
 > 本文件是**开发与设计**的导航：规则在哪、模块文档在哪、每轮的改动怎么复核。
 
-**现状**（2026-09-19）：153 条规则已确认 · 阶段 1（MVP）完成 · **阶段 2a 完成**（判定 → 决策 → 引流闭环）·
-**策略面（`S4`）已落地**（核心 → 适配器下发改道后端表 / 白名单 / 注入规则）· **L4 已接入近线 worker** · **控制台可用**（只读观测）。
-**未接通的**：诱饵资产与预生成响应正文到边缘的通路；蜜罐只做接入架构（内容待专项调研）。
+**现状**（2026-09-20）：159 条规则已确认 · 阶段 1（MVP）完成 · **阶段 2a 完成**（判定 → 决策 → 引流闭环）·
+**策略面（`S4`）已落地**（核心 → 适配器下发改道后端表 / 白名单 / 注入规则 / **AI 欺骗内容清单**）·
+**AI 欺骗内容通路已通（阶段 A：护栏 + 清单 + 注入）** · **L4 已接入近线 worker** · **控制台可用**（只读观测，含逐请求 DAG）。
+**未接通的**：诱饵资产到边缘的通路；蜜罐只做接入架构（内容待专项调研）；真实模型后端（阶段 B）。
 **能力缺口清单**（查询串不参与判定等）见 [`ops/functional-verification.md`](ops/functional-verification.md) §2。
 
 > ✅ **策略面（`api/policy/v1`）已落地（2026-09-19）**：`Pull` 轮询 + `Ack` 回执，下发改道后端表与白名单（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)）。
-> 🟡 **仍未接通的是处置内容**（诱饵资产 / 预生成响应 / 注入片段）—— 需先在核心侧定下它们的来源与归属。
+> ✅ **AI 欺骗内容注入已落地（2026-09-20，阶段 A）**：`ai-capability` 离线生成（强制过护栏）→ 清单 → 核心装载 →
+> 策略面 `content_manifest` → 适配器注入改道侧（[ADR-0023](background/decisions/0023-deception-content-injection.md)）。
+> 🟡 **仍未接通的是诱饵资产**（`decoy`）—— 需先在核心侧定下它的来源与归属。
 > 详见 [`modules/README.md`](modules/README.md) §0.4 与 [`design/structure.md`](design/structure.md) §1.6.4。
 
 **动手前**：读 [`design/`](design/README.md) 八份 → 确认待定项不阻塞你 → 按 [`../AGENTS.md`](../AGENTS.md) §4 的开发循环走。
@@ -49,7 +52,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | 目录 | 是什么 | 状态 |
 | --- | --- | --- |
 | [`design/`](design/README.md) | **技术基线**：已确认、无二义、客观的规则 | ✅ 8 份 / 153 条（+ `D-1…D-8`） |
-| [`modules/`](modules/) | **模块设计**：一模块一文件；清单在 [`design/modules.md`](design/modules.md) §1.1 | ✅ **23 个有效模块**（§1.1 共 24 行）· 全部有九章文档；**§0 总览含结构图 + 关系图 + 运行时调用链**；完成度见 [`progress.md`](progress.md)（本表不重复计数，避免两处漂移） |
+| [`modules/`](modules/) | **模块设计**：一模块一文件；清单在 [`design/modules.md`](design/modules.md) §1.1 | ✅ **24 个有效模块**（§1.1 共 25 行）· 全部有九章文档；**§0 总览含结构图 + 关系图 + 运行时调用链**；完成度见 [`progress.md`](progress.md)（本表不重复计数，避免两处漂移） |
 | [`spec/`](spec/) | **契约与字典**：对外 / 跨模块的确定性契约 | 🟡 [`dependencies.md`](spec/dependencies.md)（生成物）· [`config.md`](spec/config.md) · [`policy-payload.md`](spec/policy-payload.md)（边缘策略载荷）✅ 已建；`logs` / `metrics` 待写 |
 
 **仅供参考，不具约束力**：

@@ -213,3 +213,49 @@ func TestFailOpenDoesNotInheritStaleDecision(t *testing.T) {
 		}
 	}
 }
+
+// TestInjectionHopAppearsOnlyWhenApplied 守住新增的「内容注入」跳（ADR-0023 / AR-33）：
+// 只有**真的改写了**才画这一跳；没注入时如实留在 inject 字段里，不编出一跳。
+func TestInjectionHopAppearsOnlyWhenApplied(t *testing.T) {
+	withContent := BuildRequests(Input{Judged: []JudgedEvent{{
+		DecisionID: "d1", At: at(1), Method: "GET", Path: "/api/users",
+		Action: ActionMirage, Executed: "mirage", Backend: "mirage-1",
+		Inject: "applied", ContentID: "c-1a2b3c4d5e6f7081",
+	}}}, 0.9)
+	if len(withContent) != 1 {
+		t.Fatalf("应有一条链路：%+v", withContent)
+	}
+	rg := withContent[0]
+	if rg.Inject != "applied" || rg.ContentID != "c-1a2b3c4d5e6f7081" {
+		t.Fatalf("注入结果应透传到图：inject=%q content_id=%q", rg.Inject, rg.ContentID)
+	}
+	var hop *ChainNode
+	for i := range rg.Chain {
+		if rg.Chain[i].ID == "inject" {
+			hop = &rg.Chain[i]
+		}
+	}
+	if hop == nil {
+		t.Fatalf("inject=applied 时应有注入跳：%+v", rg.Chain)
+	}
+	// 跳的三段文字必须齐全（scripts/traffic 的 --check-graph 按这四个字段核）。
+	for name, value := range map[string]string{
+		"label": hop.Label, "value": hop.Value, "request": hop.Request,
+		"response": hop.Response, "why": hop.Why,
+	} {
+		if value == "" {
+			t.Errorf("注入跳缺 %s（图上会显示半截）", name)
+		}
+	}
+
+	// 没注入（例如开关关闭、资源没命中）⇒ 不得出现注入跳。
+	noContent := BuildRequests(Input{Judged: []JudgedEvent{{
+		DecisionID: "d2", At: at(1), Method: "GET", Path: "/api/users",
+		Action: ActionMirage, Executed: "mirage", Backend: "mirage-1", Inject: "no_content",
+	}}}, 0.9)
+	for _, node := range noContent[0].Chain {
+		if node.ID == "inject" {
+			t.Fatalf("未注入时不得有注入跳：%+v", noContent[0].Chain)
+		}
+	}
+}

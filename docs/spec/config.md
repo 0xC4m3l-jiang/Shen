@@ -56,6 +56,7 @@
 | `decoys` | ✅ **已消费（核心内）** | `cmd/core` 装配时经 `loader.Decoys()` 写入 `store` → `decoy` 诱饵面 + `MD-25` 前缀集；⚠️ **边缘还取不到**（策略面 `S4` 未实现）—— 见 §2.8 |
 | `honeypots` | ✅ **已消费（核心内）** | `cmd/core` 装配时经 `loader.Honeypots()` → `honeypot` 类型注册与后端池；⚠️ 同上，边缘不可达 —— 见 §2.9 |
 | `injects` | ✅ **已消费并下发** | `policy` 装载（`loader.Injects()`）→ 策略面 `Pull` 下发（`inject_rules`）→ 适配器应用到改道侧响应；**未写该段**则不下发（适配器用本地 env）—— 见 §2.12 |
+| `ai` | ✅ **部分已消费并下发** | `policy` 装载与校验；`ai.enabled` → 策略载荷 `inject_enabled`，`ai.manifest` → 装载内容清单 → 投影 `content_manifest` → 适配器注入到改道侧。`kinds` / `model` / `content.rotate_cooldown` 阶段 A **只解析与校验**（阶段 B 的生成与轮换消费）—— 见 §2.13 |
 | `fingerprints` | ⏳ 未接入 | `judge`（指纹签名库，阶段 2b）—— 见 §2.10 |
 | `attribution` | ⏳ 未接入 | `session`（归因令牌，阶段 2b）—— 见 §2.11 |
 | `core` · `session` | ⏳ 只解析与校验 | 启动参数（本期端口仍取 `SHEN_LISTEN`，cookie 名仍为 `sid`） |
@@ -76,6 +77,7 @@
 | `policy` | object | ✅ | 见 §2.7 |
 | `rules` | array | ✅ | 键**必须**存在；可为 `[]`；元素见 §2.4 |
 | `whitelist` | object | ✅ | 见 §2.5（**本期只解析与校验，不消费**） |
+| `ai` | object | ⚪ **可选** | AI 能力服务开关与内容清单；**整段不写 = 全关**（`enabled=false`），行为与今天逐字节一致 —— 见 §2.13 |
 
 顶层**禁止**出现上述之外的键。
 
@@ -229,6 +231,23 @@
 > 消费者链路：`policy` 装载 → 策略面 `Pull` 下发 → 适配器应用 → `edge-injection` 执行；
 > 载荷字段定义见 [`policy-payload.md`](policy-payload.md)。
 > 与 `decoys` 的区别：诱饵资产定义「投放什么钩子」，本段定义「往改道侧响应里插什么」。
+
+### 2.13 `ai`（AI 能力服务与欺骗内容）
+
+| 键 | 类型 | 必填 | 约束 |
+| --- | --- | --- | --- |
+| `ai.enabled` | bool | ⚪ 可选（默认 `false`） | 能力级总开关。**必须**为 `false` 时保持「不生成、不新增内容、不下发内容」（存量内容仍在库）；它**只**影响内容注入，不影响判定与改道（`ADR-0023` 决定 4） |
+| `ai.kinds` | string[] | ⚪ 可选（默认 `["content"]`） | 启用的任务种类（kind）。每项**必须**非空且**必须**互不相同；未登记于任务注册表的 `kind` 由生成侧拒绝（`AR-33`），核心只校验形状 |
+| `ai.model` | string | ⚪ 可选（默认 `""`） | 模型后端标识。**空串是阶段 A 的合法取值**（确定性模板生成器不调模型）；阶段 B 起，声明 `requires_model` 的任务在空值时**必须**显式失败（禁止用模板冒充模型输出，`AR-15`） |
+| `ai.manifest` | string | ⚪ 可选（默认 `""`） | 内容清单文件路径（[`ai-contract.md`](ai-contract.md) §3）。空串 = 无清单。非空时**必须**能被读取、解析、校验；**任一失败即启动失败**（与配置文件同样的严格度） |
+| `ai.content.variants` | integer | ⚪ 可选（默认 `8`） | 变体数 N。**必须** ≥ 1；**必须**与清单文件的 `variants` 一致，不一致 ⇒ **拒绝装载**（启动失败） |
+| `ai.content.rotate_cooldown` | duration | ⚪ 可选（默认 `"30m"`） | 轮换冷却。**必须** > 0；可被 `time.ParseDuration` 解析。阶段 A **只解析与校验**（轮换接线在阶段 B） |
+
+> **默认全关**是刻意的：不写 `ai` 段 ⇒ `inject_enabled=false` ⇒ 适配器不注入、上报 `inject=disabled`，
+> 其余行为与今天逐字节一致（验收判据 ①）。
+> 消费链路：`policy` 装载 → `ai.manifest` 载入 `store.ContentStore` → 投影进策略载荷（`inject_enabled` + `content_manifest`）
+> → 适配器按 `(resource, variant)` 命中并注入改道侧。
+> 非法清单的**每一类失败**都有单测守着（见 `core/internal/policy/ai_test.go`）。
 
 ---
 

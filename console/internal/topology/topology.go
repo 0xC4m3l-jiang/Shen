@@ -60,6 +60,10 @@ type JudgedEvent struct {
 	Bytes         int       `json:"bytes"`
 	DurationMs    float64   `json:"duration_ms"`
 	DecisionError string    `json:"decision_error"`
+	// Inject / ContentID 是 AI 欺骗内容的注入结果（`ADR-0023` / `AR-33`；契约 docs/spec/events.md §2.2）：
+	// `inject` ∈ applied / disabled / no_content / off；`content_id` 为空串 = 未注入。
+	Inject    string `json:"inject"`
+	ContentID string `json:"content_id"`
 }
 
 // DecisionEvent 是核心记录的一次判定（decision）。
@@ -375,26 +379,29 @@ type ChainNode struct {
 
 // RequestGraph 是**单条请求**的链路（页面一行一个 DAG）。
 type RequestGraph struct {
-	DecisionID string      `json:"decision_id"`
-	At         time.Time   `json:"at"`
-	Method     string      `json:"method"`
-	Path       string      `json:"path"`
-	UA         string      `json:"ua"`
-	SourceIP   string      `json:"source_ip"`
-	Action     string      `json:"action"`
-	Score      float64     `json:"score"`
-	Signals    []string    `json:"signals"`
-	Severity   string      `json:"severity"`
-	Executed   string      `json:"executed"`
-	Backend    string      `json:"backend"`
-	Status     int         `json:"status"`
-	Bytes      int         `json:"bytes"`
-	DurationMs float64     `json:"duration_ms"`
-	RealAlert  bool        `json:"real_alert"`
-	HighRisk   bool        `json:"high_risk"`
-	L4         int         `json:"l4_conclusions"`
-	Unjudged   bool        `json:"unjudged"` // 白名单 / 缓存 / 判定失败：没有核心判定
-	Chain      []ChainNode `json:"chain"`
+	DecisionID string    `json:"decision_id"`
+	At         time.Time `json:"at"`
+	Method     string    `json:"method"`
+	Path       string    `json:"path"`
+	UA         string    `json:"ua"`
+	SourceIP   string    `json:"source_ip"`
+	Action     string    `json:"action"`
+	Score      float64   `json:"score"`
+	Signals    []string  `json:"signals"`
+	Severity   string    `json:"severity"`
+	Executed   string    `json:"executed"`
+	Backend    string    `json:"backend"`
+	Status     int       `json:"status"`
+	Bytes      int       `json:"bytes"`
+	DurationMs float64   `json:"duration_ms"`
+	// Inject / ContentID 是这条请求的注入结果（图上据此多一跳「内容注入」）。
+	Inject    string      `json:"inject"`
+	ContentID string      `json:"content_id"`
+	RealAlert bool        `json:"real_alert"`
+	HighRisk  bool        `json:"high_risk"`
+	L4        int         `json:"l4_conclusions"`
+	Unjudged  bool        `json:"unjudged"` // 白名单 / 缓存 / 判定失败：没有核心判定
+	Chain     []ChainNode `json:"chain"`
 }
 
 // BuildRequests 把事件摊平成**逐请求链路**，最新的在前。
@@ -425,6 +432,9 @@ func BuildRequests(in Input, alertScore float64) []RequestGraph {
 			DecisionID: j.DecisionID, At: j.At, Method: j.Method, Path: j.Path, UA: j.UA,
 			Executed: j.Executed, Backend: j.Backend, Status: j.Status, Bytes: j.Bytes,
 			DurationMs: j.DurationMs, L4: l4[j.DecisionID],
+			// 注入结果是**请求级**事实（与是否有配对判定无关）：即使没配上判定（判失败/白名单），
+			// 本轮到底改写了多少也已经确定。
+			Inject: j.Inject, ContentID: j.ContentID,
 		}
 		if paired {
 			rg.Action, rg.Score, rg.Signals = dec.Action, dec.Score, dec.Signals
@@ -506,6 +516,22 @@ func BuildRequests(in Input, alertScore float64) []RequestGraph {
 				Why: fmt.Sprintf("决策为改道 ⇒ 转发到幻境后端 %q（改道后端表由策略面下发，ADR-0018）；"+
 					"注入只发生在改道侧（INT-8：业务侧响应零改写）。", j.Backend),
 			})
+			// 注入跳：只有**真的改写了**才画（inject=applied + 非空 content_id）。
+			// 没注入的情形（disabled / no_content）已经在 executed 与 inject 字段里如实记录，
+			// 不另开一跳 —— 图上的每一跳都应当是「这一步真的做了事」。
+			if j.Inject == "applied" && j.ContentID != "" {
+				rg.Chain = append(rg.Chain, ChainNode{
+					ID:       "inject",
+					Label:    "内容注入 (L1)",
+					Kind:     "inject",
+					Value:    j.ContentID,
+					Request:  fmt.Sprintf("幻境响应的 HTML（插入点标记前）：资源 %s", j.Path),
+					Response: fmt.Sprintf("已插入内容 %s（改道侧响应体已改写）", j.ContentID),
+					Why: "内容由 ai-capability 离线生成并**强制过护栏**（AR-33：结构 / 黑名单 / 长度 / 风格）→" +
+						"经策略面下发的 content_manifest → 适配器按（资源 + 会话哈希）**确定性命中**变体 → 注入改道侧；" +
+						"业务侧响应字节不变（INT-8），热路径不调模型（AR-30）。",
+				})
+			}
 		case "origin_fallback":
 			rg.Chain = append(rg.Chain,
 				ChainNode{

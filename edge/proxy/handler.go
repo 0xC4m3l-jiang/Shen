@@ -92,6 +92,12 @@ type Handler struct {
 	// Inject 是注入片段（已按 `;;` 拆分）。空 = 不注入。
 	Inject []string `json:"inject,omitempty"`
 
+	// InjectContent 是 **AI 欺骗内容的本地兜底开关**（`SHEN_PROXY_INJECT_CONTENT`，默认 false）。
+	//
+	// 它与策略载荷的 `inject_enabled` **取与**（`ADR-0023` 决定 4）：两者都为真才注入内容。
+	// 默认 false 是刻意的：即使策略面说"开"，边缘也需要一次本地显式同意。
+	InjectContent bool `json:"inject_content,omitempty"`
+
 	// PolicyID 是本端期望的策略集标识（空 = 用核心当前的策略集）。
 	PolicyID string `json:"policy_id,omitempty"`
 
@@ -123,6 +129,9 @@ type Handler struct {
 	buildRemote func(name, address string) (caddyhttp.MiddlewareHandler, error)
 
 	cache *decisionCache
+
+	// pins 是会话→变体槽位的钉定缓存（AI 内容注入用；轮换只对新会话生效，`ADR-0023`）。
+	pins *variantPins
 
 	// eventSeq 让逐请求事件的 id 唯一（同一 decision_id 的多条请求不再互相覆盖）。
 	eventSeq atomic.Uint64
@@ -197,6 +206,8 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		cacheCap = defaultCacheMaxEntries
 	}
 	h.cache = newDecisionCache(time.Duration(h.CacheTTL), cacheCap, now)
+	// 会话钉定的 TTL 与判定缓存同窗：两者都是「可丢失的缓存」，过期重算得到同一结果（确定性）。
+	h.pins = newVariantPins(time.Duration(h.CacheTTL), cacheCap, now)
 
 	// 后端表：origin + 各引流后端，全部是 Caddy reverse_proxy。
 	originRP, err := h.buildBackend(ctx, h.Upstream, false, 0)
@@ -318,6 +329,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// decision_id 在**最前面**就派生好：白名单命中也要上报逐判定事件（图上要能看见这条分支），
 	// 而事件 id 就是 decision_id（幂等键，AR-11）。
 	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
+
+	// 注入结果的槽挂在请求上下文上：改写发生在 transport 里（改道侧），
+	// 而上报发生在这里 —— 中间隔着 Caddy 的转发链，上下文是唯一不被它包一层的传递面。
+	outcome := &injectOutcome{}
+	r = r.WithContext(withInjectOutcome(r.Context(), outcome))
 
 	// ① 白名单先于改道判定（INT-25）—— 命中则不调核心，直接透传。
 	// 本地白名单（env）与远端白名单（策略面）取**并集**：护栏只增不减（见 applyEdgePolicy）。
@@ -519,6 +535,8 @@ type routeInfo struct {
 	bytes      int     // 响应体字节数（在 reportRoute 里补齐）
 	durationMs float64 // 从进入中间件到响应结束（在 reportRoute 里补齐）
 	cause      error   // 判定失败原因（非 nil 时必记 warn 日志）
+	inject     string  // 注入结果（见 Inject* 常量；空 = 未涉及）
+	contentID  string  // 实际注入的内容标识（空 = 未注入）
 }
 
 // reportRoute 收尾：补全响应观测 → 记日志（失败必记；逐请求按开关）→ 异步上报逐判定事件。
@@ -526,6 +544,22 @@ func (h *Handler) reportRoute(r *http.Request, id string, act judgev1.Action, in
 	info.status = sw.statusCode()
 	info.bytes = sw.bytesWritten()
 	info.durationMs = float64(time.Since(started).Microseconds()) / 1000.0
+	// 注入结果由改道侧的 transport 写进请求上下文（此处读取）。
+	if info.inject == "" {
+		info.inject, info.contentID = injectResultOf(r)
+	}
+
+	// 逐请求事件里的两个新键（`docs/spec/events.md` §2.2）：注入结果与内容标识。
+	// 它们与 `executed` **相互独立**：executed 说"去了哪"，inject 说"我们改写了多少"。
+	if info.inject == "" {
+		if info.executed == executedMirage {
+			// 走了改道侧但没有任何注入记录（例：响应根本不是可改写的 HTTP 响应）
+			// ⇒ 如实报「没有可用内容」，而不是让运营以为注入"应该发生但没发生"。
+			info.inject = InjectNoContent
+		} else {
+			info.inject = InjectOff
+		}
+	}
 
 	if info.cause != nil {
 		// 判定失败是「引擎没能判定」的唯一线索，**不受 SHEN_PROXY_LOG_REQUESTS 控制**（K-24 踩过）。
@@ -547,6 +581,12 @@ func (h *Handler) reportRoute(r *http.Request, id string, act judgev1.Action, in
 // 字段表是**跨语言契约**（docs/spec/events.md §2.2）：夹具
 // api/telemetry/v1/testdata/request_judged_event.json 与契约测试都读它，改键必须同步三处。
 func (h *Handler) judgedEventPayload(id string, r *http.Request, act judgev1.Action, info routeInfo) map[string]any {
+	// 注入结果**必须是四个登记值之一**：调用方没设时按「未涉及」上报 ——
+	// 空串会让契约的读取方（控制台、脚本）多出一个未登记取值。
+	inject, contentID := info.inject, info.contentID
+	if inject == "" {
+		inject, contentID = InjectOff, ""
+	}
 	return map[string]any{
 		// decision_id 放在**载荷里**（事件 id 改为逐请求唯一，见 enqueueEvent）：控制台靠它 join 核心判定。
 		"decision_id": id,
@@ -563,6 +603,9 @@ func (h *Handler) judgedEventPayload(id string, r *http.Request, act judgev1.Act
 		"status":      info.status,
 		"bytes":       info.bytes,
 		"duration_ms": info.durationMs,
+		// AI 欺骗内容的注入结果（`ADR-0023`）：
+		"inject":     inject,
+		"content_id": contentID,
 	}
 }
 
@@ -662,11 +705,12 @@ func (h *Handler) buildBackend(ctx caddy.Context, target string, isMirage bool, 
 		}
 		tr.ResponseHeaderTimeout = caddy.Duration(to)
 
-		// 本地有注入规则，或策略面**可能**下发规则 → 都要挂注入 transport；
-		// 具体用哪一份注入器由 `currentInjector()` 按请求决定（支持远端热变更）。
-		if h.injector != nil || h.PolicyInterval > 0 {
-			rt = &injectingTransport{handler: h, base: tr}
-		}
+		// 注入 transport **无条件**挂在改道侧：
+		//   · 静态规则（本地 env / 策略面 `inject_rules`）与
+		//   · AI 欺骗内容（策略面 `content_manifest`，`ADR-0023`）
+		// 都经它执行；它同时负责上报注入结果（off / disabled / no_content / applied）。
+		// 两种规则都没有时它仍会被调用，但会立即原样返回（不读 body、不改写）。
+		rt = &injectingTransport{handler: h, base: tr}
 	}
 
 	rp := &reverseproxy.Handler{
@@ -704,10 +748,17 @@ func upstreamAddr(raw string) (dial string, tlsUpstream bool, err error) {
 
 // ── 注入 transport ──────────────────────────────────────────────────────────
 
-// injectingTransport 包一层 RoundTripper，在**引流后端**的 HTML 响应上注入诱饵。
+// injectingTransport 包一层 RoundTripper，在**引流后端**的 HTML 响应上注入诱饵与 AI 欺骗内容。
 //
 // INT-8：只改引流侧 —— 本 transport 只挂在 mirage 的 reverse_proxy 上，业务侧不经过它。
 // 任何异常（非 HTML、读失败、超限）都**原样透传**：改写不是业务链路上的失败点。
+//
+// 两条注入源（各自独立，可同时存在）：
+//
+//	① **静态规则**（本地 env / 策略面 `inject_rules`）—— 由 `currentInjector()` 给；
+//	② **AI 欺骗内容**（策略面 `content_manifest`）—— 需开关成立 + 命中资源 + 校验和相符。
+//
+// 无论哪种，最终都走 `edge/injection` 的同一份改写语义（`ST-5`）。
 type injectingTransport struct {
 	// handler 而非注入器本身：注入规则可经**策略面**在运行期变（`applyEdgePolicy`），
 	// 而 transport 是建后端的时刻就挂上的 —— 持注入器会把规则钉死在当时那一份。
@@ -720,13 +771,31 @@ func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if err != nil {
 		return resp, err
 	}
-	// 每请求取一次当前注入器：本地 env 或策略面下发的（后者可热变更）。
-	inj := t.handler.currentInjector()
-	if resp == nil || inj == nil {
+	if resp == nil {
 		return resp, nil
 	}
+
+	// 注入结果的槽（没有槽时静默丢弃 —— 比如单测里直接调 transport）。
+	outcome, _ := req.Context().Value(injectOutcomeKey{}).(*injectOutcome)
+
+	// 每请求取一次当前状态：本地 env 或策略面下发的（后者可热变更）。
+	inj := t.handler.currentInjector()
+	contentReady, idx := t.handler.contentInjectionReady()
+	if !contentReady && outcome != nil {
+		// 到了改道侧但内容注入被关 ⇒ 如实上报「开关关闭」（不是"没内容"）。
+		outcome.set(InjectDisabled, "")
+	}
+	if inj == nil && !contentReady {
+		// 什么都不用做：不读 body、不改写、不谎报。
+		return resp, nil
+	}
+
 	ct, ok := injectable(resp)
 	if !ok {
+		if contentReady && outcome != nil {
+			// 开关开着但响应不可改写（非 HTML / 已压缩 / 超限）⇒ 没有可用内容。
+			outcome.set(InjectNoContent, "")
+		}
 		return resp, nil
 	}
 
@@ -744,10 +813,24 @@ func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	}
 	_ = resp.Body.Close()
 
-	out, changed := inj.Inject(ct, body)
-	if !changed {
-		out = body
+	out := body
+	if inj != nil {
+		if next, changed := inj.Inject(ct, out); changed {
+			out = next
+		}
 	}
+	if contentReady {
+		next, contentID, changed := t.handler.injectContent(req, idx, ct, out)
+		if changed {
+			out = next
+			if outcome != nil {
+				outcome.set(InjectApplied, contentID)
+			}
+		} else if outcome != nil {
+			outcome.set(InjectNoContent, "")
+		}
+	}
+
 	resp.Body = io.NopCloser(bytes.NewReader(out))
 	resp.ContentLength = int64(len(out))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(out)))

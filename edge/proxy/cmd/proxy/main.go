@@ -109,6 +109,9 @@ func run() error {
 		CacheMaxEntries: cacheMax,
 		CoreAddr:        coreAddr,
 		Inject:          splitInject(os.Getenv("SHEN_PROXY_INJECT")),
+		// AI 欺骗内容注入的**本地兜底开关**（ADR-0023 决定 4）：默认 false，
+		// 与策略载荷的 inject_enabled **取与** —— 即使策略面说"开"，边缘也要一次本地同意。
+		InjectContent: envBool("SHEN_PROXY_INJECT_CONTENT", false),
 		// 策略面（S4）：定期拉取，远端覆盖本地、本地兜底（ADR-0018）。
 		PolicyID:       strings.TrimSpace(os.Getenv("SHEN_PROXY_POLICY_ID")),
 		AdapterID:      env("SHEN_PROXY_ADAPTER_ID", "proxy@"+listen),

@@ -28,6 +28,9 @@
 - **携带灰度比例**：把 `gray_pct` 放进快照，供 `director` 消费（本模块**不**计算灰度）。
 - **装载响应改写规则**：`injects` 段（数据，`ST-24`）→ 投影进载荷的 `inject_rules`；
   **未配置该段**与**配置为空数组**都必须可区分（前者不下发该字段，后者显式下发空数组 —— 运营籍此关掉注入）。
+- **装载 AI 内容**（`ADR-0023` / `AR-33`）：`ai:` 段校验 → 清单文件（`ai.manifest`）逐条验校验和 / 单条上限 →
+  写入 `store.ContentStore`（键 = 一致性键）→ 投影成载荷的 `inject_enabled` + `content_manifest`
+  （**内容体从内容库读**，不另存一份）。清单文件的**结构性问题必须启动失败**；单条坏只丢那一条 + warn。
 - **下发**（接缝 `S4` 的另一半）：把当前策略**投影**成边缘文档（[`../spec/policy-payload.md`](../spec/policy-payload.md)）
   响应适配器的 `Pull`，并记录它们的 `Ack` 回执 —— 版本号 + 校验和 + 回执三件事一起构成 `ST-8` / `AR-13` 的落地。
 
@@ -41,7 +44,6 @@
 - **不写业务存储** —— 只经 `store.PolicyStore` 落版本台账；**禁止**直连 PostgreSQL / Redis / ClickHouse（`MD-20`）。
 
 ## 2. 输入 / 输出契约
-
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
 | 输入 | 配置文件（YAML） | [`../spec/config.md`](../spec/config.md)（接缝 **S4**） |
@@ -108,6 +110,10 @@
 | 运行期 `Rules()` 出错 | 返回错误 → `judge` 上抛 → `control` 返回 gRPC 错误 → 适配器 fail-open | ✅ | `NI-4` / `NI-5` |
 | 引擎进程整体故障 | 业务请求 100% 正常（镜像形态不在路径上；2a 形态适配器 fail-open） | ✅ | `NI-1` |
 | 资源耗尽 | 快照是启动时一次性分配，运行期只读；受 cgroup 上限约束 | ✅ | `NI-7` |
+| `ai.manifest` 指向的文件缺失 / 不可读 | **必须**启动失败（与配置文件同样的严格度） | ✅ | `spec/ai-contract.md` §3 |
+| 清单格式版 / selector 不认识 · `variants` 与配置不一致 · 资源重复 · variant 越界或重复 · 内容体为空 | **必须**启动失败（领域禁猜） | ✅ | 同上 |
+| 清单单条超限 / 校验和不符 | **只丢那一条** + warn（宁可漏注入，不可注入错内容） | ✅ | 同上 |
+| 内容库读不到（投影期） | 跳过那一条并 warn；**一条都没有则不投影** `content_manifest`（适配器报 `no_content`） | ✅ | `ADR-0023` |
 
 ## 7. 测试
 
@@ -140,7 +146,7 @@
 | 3 | 人工编写的配置文件与 PostgreSQL 策略台账的最终关系（谁写台账、文件是否仍为源） | 真实存储选型 | 同上 §6.3 |
 | 4 | JSON Schema 与 Go 校验器的漂移防护（可用 schema 库或代码生成升级） | 长期一致性 | 同上 §6.4 |
 | 5 | ✅ **已消费（2026-09-19）**：`whitelist` 经 `director`（核心内判定前置）与策略面（下发到适配器，`INT-25`）两处生效 | —— | —— |
-| 7 | 🟡 **部分落地（2026-09-19）**：**响应改写规则**已接通（`injects` → `inject_rules` → 适配器 → `edge-injection`）；**仍未接通**的是**诱饵资产**与**预生成响应正文** —— 核心侧尚无它们「谁产出、存在哪」的定义 | 阶段 2b 的内容类能力（假路径自答 / 预生成正文）到不了边缘 | [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」 |
+| 7 | 🟡 **部分落地**：**响应改写规则**已接通（`injects` → `inject_rules` → 适配器 → `edge-injection`）；**AI 欺骗内容**也已接通（阶段 A，`ADR-0023`：`ai:` → 清单 → `content_manifest` → 适配器）；**仍未接通**的是**诱饵资产** —— 尚无它们「谁产出、存在哪」的定义 | 诱饵面内容到不了边缘 | [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」 |
 | 6 | `rules[].match` 的 `headers` 寻址缺口（`Observation.Headers` 已采集但 `Field()` 取不到） | 一批 Agent 信号不可用 | 同上 §6.6 |
 
 ## 9. 变更记录
@@ -149,3 +155,4 @@
 | --- | --- | --- |
 | 2026-09-18 | 首版：配置装载 · 严格校验 · 不可变快照 · 版本台账 · `judge.RuleSource` 供给 | [`../plans/2026-09-18-policy-2a.md`](../plans/ARCHIVE.md)（9 项决策，用户已确认） |
 | 2026-09-19 | **下发面落地**：`Server`（`Pull` 投影 / `Watch` 未实现 / `Ack` 落账）+ `PolicyStore` 扩 `RecordAck` / `Acks`；载荷契约新增 [`../spec/policy-payload.md`](../spec/policy-payload.md)；`PolicyAck` 扩 `adapter_id` / `reason`；测试 12 → 17 | [`../plans/2026-09-19-policy-plane.md`](../plans/ARCHIVE.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |
+| 2026-09-20 | **装载与投影 AI 欺骗内容**：`ai:` 段校验（默认全关）· 清单文件装载（逐条验校验和 / 单条 64 KiB 上限 / 文件 1 MiB 上限 / `variants` 与配置一致）· `store.ContentStore` 落库（首个真实消费方）· 载荷新增 `inject_enabled` + `content_manifest`（内容体从库读）；顶层测试函数 22 → **36**（`grep -c '^func Test'`） | [`../plans/2026-09-20-ai-capability-guardrail.md`](../plans/2026-09-20-ai-capability-guardrail.md) · [ADR-0023](../background/decisions/0023-deception-content-injection.md) · 用户确认 |

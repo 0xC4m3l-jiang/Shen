@@ -83,6 +83,7 @@
 | 18 | `chain` | [`analysis/chain/`](../../analysis/chain) | 攻击链还原 + 识破信号 + **证据引用校验**（`AR-12`） | `reconstruct()` · `EvidenceIndex` | 同上；引用不存在则整链作废 |
 | 19 | `strategy` | [`analysis/strategy/`](../../analysis/strategy) | 策略**数据**生成（灰度 ≤20% · 阈值下界）+ 诱饵轮换决策 | `generate()` · `decide()` | 结论经 `policy` 间接生效（禁止直接影响响应，`AR-32`） |
 | 20 | `llm-components` | [`analysis/llm/`](../../analysis/llm) | 契约校验（`AR-15`）· 信封（`AR-16`）· 三段式解析（`AR-17`）· 长度纪律（`AR-18`/`AR-23`）· 双阶段收尾（`AR-19`…`AR-21`）· 黑名单（`AR-22`）· 提示词资源化（`AR-24`）· 注入防护（`AR-31`/`AR-32`） | `validate` · `Envelope` · `extract_json` · `truncate_list` · `Blacklist` · `run_two_phase` · `assert_startup` · `assert_no_execution_surface` | 被上三个模块共用 |
+| 25 | `ai-capability` | [`analysis/aicap/`](../../analysis/aicap) | **可开关的生成出口**：任务注册表（缺护栏档案即启动失败）· 前置提示词三段式（`AR-31`/`AR-24`）· 后置四关校验（`AR-15`/`AR-22`/`AR-23`/风格）· 内容对象与清单（`AR-30` 确定性） | `generate(TaskSpec) → Envelope` · `python -m analysis.aicap` | 清单文件 → 核心 [`policy`](../../core/internal/policy) 装载 → 策略载荷 → [适配器](../../edge/proxy) 注入（`AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)） |
 | — | **worker** | [`analysis/worker.py`](../../analysis/worker.py) | 近线链路：读遥测 → 态势去重（`AR-14`）→ 意图/链/策略 → 结论**作为事件**上报 | `run_once()` · `python -m analysis.worker` | 读 `ListEvents`、写 `Report`（[`analysis/telemetry.py`](../../analysis/telemetry.py)） |
 | — | 工具链 | [`analysis/tools/genproto.py`](../../analysis/tools/genproto.py) · [`analysis/proto/`](../../analysis/proto) | 生成 gRPC 桩并让其成为 `analysis.proto.*` 普通包 | `make pygen` | 契约仍来自 [`api/`](../../api) |
 
@@ -140,7 +141,9 @@
 | --- | --- | --- |
 | 核心配置（规则 · 阈值 · 白名单 · 诱饵 · 蜜罐 · 注入） | [`deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml) → 运行时经 `SHEN_CONFIG` | `core/cmd/core` |
 | 事件载荷契约（`decision` / `analysis`） | [`../spec/events.md`](../spec/events.md) + 夹具 [`api/telemetry/v1/testdata/decision_event.json`](../../api/telemetry/v1/testdata/decision_event.json) | 核心写 · 控制台与 L4 读 |
-| 策略载荷契约（后端表 / 白名单 / 注入规则） | [`../spec/policy-payload.md`](../spec/policy-payload.md) | `policy` 写 · 适配器读 |
+| 策略载荷契约（后端表 / 白名单 / 注入规则 / AI 内容清单） | [`../spec/policy-payload.md`](../spec/policy-payload.md) | `policy` 写 · 适配器读 |
+| AI 能力契约（`TaskSpec` / `Envelope` / 护栏 / 内容对象 / 清单文件） | [`../spec/ai-contract.md`](../spec/ai-contract.md) | `ai-capability` 写 · `policy` 装载与投影 · 适配器消费 |
+| 内容清单文件（生成期产物） | `ai.manifest` 指向的文件（`python -m analysis.aicap --out …`） | `core/cmd/core` 启动装载 → `store.ContentStore` |
 | 话术与提示词（随版本分发，`AR-24`） | [`analysis/llm/resources/prompts/`](../../analysis/llm/resources/prompts) · [`analysis/llm/resources/blacklist.yaml`](../../analysis/llm/resources/blacklist.yaml) | `llm-components` |
 | 适配器环境变量 | [`deploy/docker/README.md`](../../deploy/docker/README.md) · [`edge/proxy/config/front-proxy.example.env`](../../edge/proxy/config/front-proxy.example.env) | 各适配器进程 |
 | 代理侧默认配置模板 | [`edge/proxy/config/sidecar.example.yaml`](../../edge/proxy/config/sidecar.example.yaml) | 形态 ④ 部署时 |

@@ -18,7 +18,9 @@
 ### 做什么
 
 - 核心**唯一**的 I/O 出口：所有对 Redis / ClickHouse / PostgreSQL 的访问都经本包。
-- 按实体拆成五个小接口，让每个核心模块只依赖它用得着的那一个。
+- 按实体拆成小接口，让每个核心模块只依赖它用得着的那一个。
+  （`ContentStore` 是其中**唯一有明确生命周期约定**的一个：键 = 一致性键，内容由离线生成、热路径只读；
+  自 2026-09-20 起有真实消费方 —— `policy` 装载期 `Put` / 投影期 `Get`，见 [ADR-0023](../background/decisions/0023-deception-content-injection.md)）
 
 ### 明确不做什么
 
@@ -29,7 +31,7 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 / 输出 | `SessionStore` / `IsolationStore` / `DecisionStore` / `EventStore` / `PolicyStore` | `core/internal/store/iface.go` |
+| 输入 / 输出 | `SessionStore` / `IsolationStore` / `DecisionStore` / `EventStore` / `PolicyStore` / `DecoyStore` / `ContentStore` | `core/internal/store/iface.go` |
 | 阶段 1 实现 | `Memory` 系列（每个实体一个类型） | `core/internal/store/memory.go` |
 
 > 为什么按实体拆：Go 不支持方法重载，一个结构体无法同时实现两个都有 `Get`/`Put` 的接口。

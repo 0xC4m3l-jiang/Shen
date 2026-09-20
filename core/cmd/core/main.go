@@ -179,7 +179,13 @@ func run() error {
 		control.NewTelemetryServiceWith(collector, control.WithEventLister(eventLister{events: stores.Event})))
 	// 策略面（S4）：把当前策略版本投影后下发给适配器，并接收它们的回执（AR-13 / ST-8）。
 	// 服务端落在 policy 模块（它持有快照与校验和）—— 不新增模块，见 ADR-0018。
-	policyv1.RegisterDeceptionPolicyServer(srv, policy.NewServer(loader, stores.Policy))
+	policyServer := policy.NewServer(loader, stores.Policy)
+	if content, cerr := loadAIContent(ctx, loader, stores.Content); cerr != nil {
+		return cerr
+	} else if content != nil {
+		policyServer.WithContent(*content)
+	}
+	policyv1.RegisterDeceptionPolicyServer(srv, policyServer)
 
 	// 优雅退出：收到信号后停止接收新请求，给在途请求留出时间。
 	errCh := make(chan error, 1)
@@ -433,6 +439,47 @@ func assertPlaintextListenIsLocal(addr string) error {
 			"跨节点需要 mTLS（未实现，见 docs/design/structure.md §4）", addr)
 	}
 	return nil
+}
+
+// loadAIContent 装载 AI 欺骗内容（`ADR-0023` / `AR-33`）：配置 → 清单文件 → 内容库。
+//
+// 返回值：
+//   - nil,nil：本实例未启用 AI（`ai.enabled=false`）—— **默认态**，策略载荷恒为 inject_enabled=false；
+//   - &src,nil：已装配（开关打开；无清单时只有开关，适配器会报 no_content）；
+//   - nil,err：装载类失败（文件不可读 / 版本读不懂 / variants 不一致 / 校验和坏到零条可用）
+//     —— **必须**让进程启动失败：宁可起不来，不可带着一份看不懂的内容跑。
+func loadAIContent(
+	ctx context.Context,
+	loader *policy.Loader,
+	cs store.ContentStore,
+) (*policy.ContentSource, error) {
+	cfg, err := loader.AI(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	src := &policy.ContentSource{Enabled: true, Store: cs}
+	if cfg.ManifestPath == "" {
+		log.Printf("AI 内容注入已启用，但未配置 ai.manifest：改道侧不会注入内容（inject=no_content）")
+		return src, nil
+	}
+	manifest, dropped, err := policy.LoadContentManifest(cfg.ManifestPath, cfg.Content.Variants)
+	if err != nil {
+		return nil, err
+	}
+	for _, reason := range dropped {
+		log.Printf("WARN 内容清单丢了一条：%s", reason)
+	}
+	n, err := policy.SeedContentStore(ctx, cs, manifest)
+	if err != nil {
+		return nil, err
+	}
+	src.Manifest = manifest
+	log.Printf("AI 内容已装载：%s（内容版本 v%d · 变体 %d · 资源 %d · 内容 %d 条）",
+		cfg.ManifestPath, manifest.Version, manifest.Variants, len(manifest.Entries), n)
+	return src, nil
 }
 
 // printPolicy 打印策略摘要。

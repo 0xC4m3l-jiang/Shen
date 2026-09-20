@@ -48,6 +48,11 @@ type edgePolicy struct {
 	//   - nil（字段缺省）→ 继续用本地 env 的规则；
 	//   - 非 nil（可以是空数组）→ 用远端的：空数组 = 明确「没有规则」，运营能据此主动关掉注入。
 	InjectRules *[]policyInjectRule `json:"inject_rules"`
+	// InjectEnabled 是 **AI 欺骗内容注入**的下发级开关（`ADR-0023` 决定 4）。
+	// 恒出现（不是指针）：适配器必须能区分「明确关闭」与「这份载荷没谈这件事」。
+	InjectEnabled bool `json:"inject_enabled"`
+	// ContentManifest 是内容清单（含内容体）。nil = 没有内容 ⇒ 一律报 `no_content`。
+	ContentManifest *contentManifest `json:"content_manifest"`
 }
 
 // policyInjectRule 是一条响应改写规则（与核心侧手工对齐，见 docs/spec/policy-payload.md）。
@@ -81,6 +86,10 @@ type remoteState struct {
 	injectRulesProvided bool
 	// injector 是远端规则构造出的注入器；远端规则为空时为 nil（= 不注入）。
 	injector Injector
+	// injectEnabled 是远端下发的 AI 内容注入开关（`inject_enabled`）。
+	injectEnabled bool
+	// content 是已索引的远端内容清单；无可用内容时为 nil（= 报 `no_content`）。
+	content *contentIndex
 }
 
 // remotePolicy 返回当前生效的远端策略；未应用过时为 nil。
@@ -161,6 +170,8 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 		cidrs:               cidrs,
 		injectRulesProvided: doc.InjectRules != nil,
 		injector:            inj,
+		injectEnabled:       doc.InjectEnabled,
+		content:             newContentIndex(doc.ContentManifest),
 	})
 	if len(dropped) > 0 {
 		log.Printf("proxy: 策略 v%d 中有 %d 个后端地址不可用，已跳过：%s",

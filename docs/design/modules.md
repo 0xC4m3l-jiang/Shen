@@ -5,11 +5,14 @@
 > **来源**：外部设计稿 [`../background/research/deception-engine-design.md`](../background/research/deception-engine-design.md) §4.6 / §8.2；
 > 模块边界规则 M-1…M-4 承接本次重构前的 [`../README.md`](../README.md)。
 > **已确认**：用户于 2026-09-17 确认 **MD-1…MD-17 全部通过**；
-> 同日**模块清单轮追加确认 §1.1（当时 21 个模块）与 MD-18…MD-22**（此后新增 `control`、`decoy`、`honeypot`，现为 **23 个有效模块**，见下表）；
+> 同日**模块清单轮追加确认 §1.1（当时 21 个模块）与 MD-18…MD-22**（此后新增 `control`、`decoy`、`honeypot`、`ai-capability`，现为 **24 个有效模块**，见下表）；
 > ✅ 用户于同日确认**新增 `control` 为第 22 个模块**（原为 `architecture.md` §10.2 缺口 12）。
 > ✅ 用户于同日确认：**阶段 2 拆为 `2a` / `2b`**、**③④ 合并为 `adapter-proxy`**（第 12 行保留编号登记为已合并）、
 > **L1 语言由 Lua 改为 Go**（[ADR-0008](../background/decisions/0008-edge-language-go.md)）。
 > ✅ 用户于同日确认 **`MD-23` / `MD-24`** 与改写后的 **`MD-12`（决策取值只在 director 定义一次） / `MD-13`（severity 与决策取值并列输出）**。
+> ✅ 用户于 2026-09-20 确认**新增 `ai-capability` 为第 25 个模块**（L4 · Python · `analysis/aicap/`）与
+> [`architecture.md`](architecture.md) 的 **`AR-33`**（欺骗内容生成必须经护栏出口）—— 依据
+> [ADR-0023](../background/decisions/0023-deception-content-injection.md)。
 > ⚠️ MD-8 的强制手段是 CI 测试，**不是编译器** —— 可被绕过的风险登记在实现期处理。
 
 ---
@@ -19,7 +22,7 @@
 > **本节是模块的唯一权威清单。** 一个模块 = **一个源码目录** + **一份模块文档** + **一个独立可运行的测试套件**。
 > 本节替代了原先的「组件清单」—— 原表混用运行单元与源码单元，与 `MD-1`（一个模块只属于一层） / `MD-2`（一模块一份文档，必须用固定模板） / `ST-1`（代码必须按 §1.1 的顶层目录组织） 无法对齐。
 
-### 1.1 源码模块（22 行，其中第 12 行已合并）
+### 1.1 源码模块（25 行，其中第 12 行已合并）
 
 #### 阶段图例
 
@@ -62,6 +65,7 @@
 | 18 | `chain` | L4 | Python | `analysis/chain/` | `docs/modules/chain.md` | 攻击链还原（引用须校验证据存在，`AR-12`） | 3 |
 | 19 | `strategy` | L4 | Python | `analysis/strategy/` | `docs/modules/strategy.md` | 策略生成 | 3 |
 | 20 | `llm-components` | L4 | Python | `analysis/llm/` | `docs/modules/llm-components.md` | 契约校验、容错解析、双阶段收尾、内容黑名单（`AR-15`…`AR-27`） | 3 |
+| 25 | `ai-capability` | L4 | Python | `analysis/aicap/` | `docs/modules/ai-capability.md` | **AI 能力服务**：可开关的共享**生成出口**（唯一入口 `generate(TaskSpec) → Envelope`），**内部强制走护栏**（前置提示词 + 后置独立校验）；阶段 A 产出欺骗内容并经策略面下发到改道侧。依据 [ADR-0023](../background/decisions/0023-deception-content-injection.md) / `AR-33` | 3 |
 | 21 | `console` | 控制台 | TypeScript | `console/` | `docs/modules/console.md` | 策略编排、蜜饵资产管理、人工干预、审计查询 | 2b |
 
 ### 1.2 工具（不是模块）
@@ -200,7 +204,11 @@ severity  : none                                     ← 多重手（旁路，�
 ## 6. 模块文档的去向
 
 **已创建模块文档**：阶段 1 的 7 个模块（`judge` `session` `telemetry` `store` `control` `adapter-mirror`，加 `_template.md` 与索引）。
-权威清单见 **§1.1**（22 行，其中第 12 行已合并 ⇒ **21 个有效模块**），按 `MD-2` 与 `MD-17` **一模块一文件**创建到 [`../modules/`](../modules/)。
+权威清单见 **§1.1**（25 行，其中第 12 行已合并 ⇒ **24 个有效模块**），按 `MD-2` 与 `MD-17` **一模块一文件**创建到 [`../modules/`](../modules/)。
+
+> **关于第 25 行的位置**：`ai-capability` 是 L4 模块，紧跟在同层第 20 行 `llm-components` 之后。
+> 它与 `llm-components` 的分工：**`llm-components` 是纪律层**（契约 / 容错 / 长度 / 黑名单，被各处引用），
+> **`ai-capability` 是服务层**（唯一出口 + 强制护栏 + 任务注册表）。两者不同层职责，**禁止**互相替代。
 
 > **关于第 22 行的位置**：`control` 是核心模块，本应排在核心组内；但编号**必须稳定**
 > （同 `D-6`（规则 ID 不得重新编号、不得复用）的精神：编号是引用句柄，`MD-18` 靠它对接目录）。

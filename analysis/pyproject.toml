@@ -25,6 +25,10 @@ packages = [
   "analysis.intent",
   "analysis.chain",
   "analysis.strategy",
+  # AI 能力服务（模块 25）：唯一出口 + 强制护栏（AR-33 / ADR-0023）
+  "analysis.aicap",
+  "analysis.aicap.tasks",
+  "analysis.aicap.guardrail",
   # 生成物（make pygen）：作为普通包，按 analysis.proto.telemetry.v1.* 导入
   "analysis.proto",
   "analysis.proto.telemetry",
@@ -34,6 +38,7 @@ package-dir = { "analysis" = "." }
 
 [tool.setuptools.package-data]
 "analysis.llm" = ["resources/*.yaml", "resources/prompts/*.md"]
+"analysis.aicap" = ["resources/prompts/*.md"]
 
 [tool.ruff]
 line-length = 100

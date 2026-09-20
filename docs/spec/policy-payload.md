@@ -40,11 +40,22 @@
   "whitelist": { "source_cidrs": ["10.0.0.0/8", "192.168.0.0/16"] },
   "inject_rules": [
     { "kind": "developer_api", "snippet": "<!-- ... -->", "marker": "</body>" }
-  ]
+  ],
+  "inject_enabled": false,
+  "content_manifest": {
+    "version": 1,
+    "selector": "session",
+    "variants": 8,
+    "entries": [
+      { "resource": "/api/users", "profile_id": "site-a",
+        "bodies": [ { "variant_id": 0, "content_id": "c-1a2b3c4d5e6f7081",
+                      "checksum": "9f3c...", "body": "<html>...</html>", "marker": "</body>" } ] }
+    ]
+  }
 }
 ```
 
-> `inject_rules` 是**可选**字段，且「不出现」与「空数组」语义不同 —— 见下表。
+> `inject_rules` 与 `content_manifest` 都是**可选**字段，且「不出现」与「空」语义不同 —— 见下表。
 
 | 字段 | 类型 | 必填 | 含义与约束 |
 | --- | --- | --- | --- |
@@ -60,10 +71,28 @@
 | `inject_rules[].kind` | string | ⚪ 可选 | 分类：`developer_api` / `instruction_file` / `hidden_link` / `dataset`（或空串 = 未分类）。**只用于组织与审计，不改变注入行为** —— 因此新增分类不需要改任何执行代码 |
 | `inject_rules[].snippet` | string | ✅（该条存在时） | 注入片段，**非空**（空片段非法，整份载荷拒绝） |
 | `inject_rules[].marker` | string | ⚪ 可选 | 插入位置标记；空 = 执行方用 `</body>`。找不到标记的规则被**跳过**（不阻断响应） |
+| `inject_enabled` | bool | ✅ | **AI 欺骗内容注入的下发级开关**。`false` ⇒ 适配器**不注入内容**（上报 `inject=disabled`），判定与幻境转发照常；它**不**影响 `inject_rules`（静态规则有自己的显式关闭手段：空数组）。来源：核心配置 `ai.enabled`（默认 `false`） |
+| `content_manifest` | object | ⚪ **可选** | AI 欺骗内容清单（**投影**自 [`ai-contract.md`](ai-contract.md) §3 的清单文件，**不含** `manifest_version` / `generated_at` / `generator`）。**不出现** = 没有内容（适配器报 `inject=no_content`）；**出现但 `entries: []`** = 同样没有内容（两者语义相同，都不算错） |
+| `content_manifest.version` | uint64 | ✅（该对象存在时） | **内容**版本；轮换时递增。参与适配器的会话钉定（`(variant_id, version)`） |
+| `content_manifest.selector` | string | ✅ | 变体选择器；当前唯一合法值 `session`（适配器读到别的值**必须**不注入并记 `no_content`） |
+| `content_manifest.variants` | int | ✅ | N ≥ 1；变体总数。适配器取 `variant_id = fnv1a(会话键) mod N` |
+| `content_manifest.entries[]` | array | ✅（可为 `[]`） | 按**资源**分组的条目；`resource` 是请求路径的**精确值** |
+| `content_manifest.entries[].resource` | string | ✅ | 非空；同一份清单内不重复（核心已在装载期保证） |
+| `content_manifest.entries[].profile_id` | string | ✅ | 画像标识（审计用） |
+| `content_manifest.entries[].bodies[]` | array | ✅ | 该资源的各变体内容体；`variant_id` **必须**落在 `[0, variants)` |
+| `content_manifest.entries[].bodies[].variant_id` | int | ✅ | 变体槽位；同一资源内不重复 |
+| `content_manifest.entries[].bodies[].content_id` | string | ✅ | 内容标识（进逐请求事件，用于定位「这一条上的是哪份内容」） |
+| `content_manifest.entries[].bodies[].checksum` | string | ✅ | `sha256(body)` 的小写十六进制；适配器注入**前**逐条验证，不符则该条不可用（报 `no_content`） |
+| `content_manifest.entries[].bodies[].body` | string | ✅ | 内容体（非空）。单条上限 64 KiB（核心在装载期已限制） |
+| `content_manifest.entries[].bodies[].marker` | string | ⚪ 可选 | 插入位置标记；空 = 执行方用 `</body>` |
 
 **禁止**出现的字段：`gray_pct`（灰度在核心内按请求收敛，`INT-12` / `ADR-0018` §决定 9）、
 规则与阈值（只在核心用）、诱饵资产内容（阶段 2b 未接通路，见 ADR-0018「未解决」）。
 适配器**必须**忽略不认识的字段（向前兼容），但**必须**拒绝读不懂的 `schema_version`。
+
+> `content_manifest` 是 `ai-contract.md` 的**投影**（同一份内容在两个地方出现：清单文件与载荷）。
+> 改动它**必须**同时改：生成侧产出 · 核心侧投影 · 适配器消费 · 本文。两边字段名不一致时，
+> 适配器**必须**按「内容不可用」处理（报 `no_content`，不报错、不阻断）。
 
 ## 3. 合并语义（适配器侧）
 
@@ -72,6 +101,8 @@
 | 后端表 | **按名覆盖**：远端同名项覆盖本地；本地独有的项**保留** | 策略面是 `ST-24` 的正式通路；本地项是拉不到时的兜底（`NI-1`） |
 | 白名单 | **并集**（只增不减） | 白名单是防误伤的护栏：缩小它会把内部 IP / 运维探针送进判定（`INT-25`） |
 | 注入规则 | **字段不出现** → 保留本地 env 规则；**出现**（含空数组）→ 整份取代远端 | 内容类配置允许被替换；同时给运营一个「显式关掉注入」的手段（空数组） |
+| AI 内容注入的开关 | `inject_enabled` 与适配器的本地兜底开关（`SHEN_PROXY_INJECT_CONTENT`）取**与**：两者都为真才注入 | 下发级开关让运营能**不改适配器配置**就停掉内容注入（`ADR-0023` 决定 4）；本地兜底保证策略面拉不到时也能急停 |
+| 内容清单 | **整块取代**（不做合并）：远端清单是当前唯一事实 | 内容与版本必须自洽（版本 + 校验和）；合并两份清单无法定义"哪份的变体生效" |
 
 失败语义（**任一都不影响请求路径**，`NI-1`）：拉取失败 → 沿用当前策略；校验和不匹配 → 拒绝应用并回执；
 `schema_version` 读不懂 → 拒绝应用并回执；坏后端地址 → 只丢那一条。
@@ -81,4 +112,5 @@
 1. **确定性**：同内容必须产出同一串字节（字段序固定 + 数组按名排序），否则适配器每次轮询都会以为策略变了；
 2. **校验和覆盖下发字节**：`checksum` 不是配置文件校验和（那是核心台账用的另一个值）；
 3. **回执幂等**：同一 `(policy_id, version, adapter_id)` 重复上报只保留最新一条 —— 适配器重启会重报；
-4. **失败不改写生效策略**：任何校验失败都不得留下「半应用」状态（远端状态是**整块原子替换**的）。
+4. **失败不改写生效策略**：任何校验失败都不得留下「半应用」状态（远端状态是**整块原子替换**的）；
+5. **内容体只在改道侧生效**：`content_manifest` 的存在**禁止**影响 `route_origin` 分支的任何字节（`INT-8` / `NI-1`）。

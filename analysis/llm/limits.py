@@ -21,8 +21,9 @@ PURPOSE_LIMITS: dict[str, int] = {
     "session_response": 2_000,  # 面向攻击者的会话响应：最短，避免长篇破绽
     "conclusion": 8_000,  # 面向存储的结论
     "intermediate": 20_000,  # 面向分析的中间产物：最长
+    "deception_content": 65_536,  # 欺骗内容体（`ai-capability`）：按单条 64 KiB 的清单上限
 }
-"""分用途长度上限，三个用途**各自独立**（`AR-23`）。"""
+"""分用途长度上限，四个用途**各自独立**（`AR-23`）。"""
 
 
 @dataclass(frozen=True)
