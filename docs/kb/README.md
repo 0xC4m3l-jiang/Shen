@@ -19,7 +19,7 @@
 | [`faq.md`](faq.md) | 高频问题：为什么这么设计 · 东西在哪 · 怎么改 · 常见"看起来像 bug"的现象 | 现行 |
 | [`known-issues.md`](known-issues.md) | 踩过的坑：症状 → 原因 → 结论。**开头有现行/历史分类** | 现行 + 历史 |
 | [`dev-workflow.md`](dev-workflow.md) | 开发链路：一轮时序 · 门禁 · 追溯 · 环境与产物落在哪 · 技能路由 | 现行 |
-| [`removed-skills.md`](removed-skills.md) | 已移除的知识库技能：为什么删 · 怎么恢复 | 历史留痕 |
+| （历史）已移除的技能 → 见 [`known-issues.md`](known-issues.md) 的 `H-1` | —— |
 
 ## 与相邻目录的区别（别把内容放错地方）
 

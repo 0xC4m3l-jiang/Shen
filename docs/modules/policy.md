@@ -13,7 +13,7 @@
 > 权威清单见 [`../design/modules.md`](../design/modules.md) §1.1（第 6 行）。
 > 本节之后固定九章，不适用时写「不适用」并说明原因。
 >
-> 本轮范围与已确认的决定见 [`../plans/2026-09-18-policy-2a.md`](../plans/2026-09-18-policy-2a.md)；
+> 本轮范围与已确认的决定见 [`../plans/2026-09-18-policy-2a.md`](../plans/ARCHIVE.md)；
 > 配置文档契约见 [`../spec/config.md`](../spec/config.md)。
 
 ## 1. 职责
@@ -126,7 +126,7 @@
 | 单元 · 下发 | `Pull` 的投影（schema 版本 / 三段数据 / 校验和覆盖 payload / 确定性）· 未知 `policy_id` → `NotFound` · `Watch` → `Unimplemented` | `server_test.go` |
 | 单元 · 回执 | `Ack` 落账 · 同适配器同版本幂等（覆盖不新增）· 缺 `adapter_id` → `InvalidArgument` · `applied=false` 必须带原因 | 同上 |
 | 单元 · 响应改写规则 | `injects` 校验（空片段 / 未登记分类 → 报错）· 「未配置」与「空数组」可区分 · 载荷带 `inject_rules` 且**保持配置顺序** · 未配置时**省略**该字段 | 同上（`TestInjectsSectionValidation` · `TestInjectsProvidedFlag` · `TestPullCarriesInjectRules` · `TestPullOmitsInjectRulesWhenUnconfigured` · `TestPullEmitsExplicitEmptyInjectRules`） |
-| 集成 | 端到端「配置 → 下发给适配器 → 适配器应用 → 真实改道」已实跑（见 [`../plans/2026-09-19-policy-plane.md`](../plans/2026-09-19-policy-plane.md) §6）；装载→判定的端到端由 `make dev` 与装配层测试覆盖 | —— |
+| 集成 | 端到端「配置 → 下发给适配器 → 适配器应用 → 真实改道」已实跑（见 [`../plans/2026-09-19-policy-plane.md`](../plans/ARCHIVE.md) §6）；装载→判定的端到端由 `make dev` 与装配层测试覆盖 | —— |
 | 故障注入 | 无 —— 失败注入点是「配置非法」，已由单元测试穷尽 | —— |
 | 属性测试 | 不适用 —— 校验器是有限枚举判定，表驱动用例已穷尽 | —— |
 | 分支穷尽性 | **不适用** —— 本模块不实现判定规则（`MD-8` 的对象是判定器 `judge`） | —— |
@@ -147,5 +147,5 @@
 
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
-| 2026-09-18 | 首版：配置装载 · 严格校验 · 不可变快照 · 版本台账 · `judge.RuleSource` 供给 | [`../plans/2026-09-18-policy-2a.md`](../plans/2026-09-18-policy-2a.md)（9 项决策，用户已确认） |
-| 2026-09-19 | **下发面落地**：`Server`（`Pull` 投影 / `Watch` 未实现 / `Ack` 落账）+ `PolicyStore` 扩 `RecordAck` / `Acks`；载荷契约新增 [`../spec/policy-payload.md`](../spec/policy-payload.md)；`PolicyAck` 扩 `adapter_id` / `reason`；测试 12 → 17 | [`../plans/2026-09-19-policy-plane.md`](../plans/2026-09-19-policy-plane.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |
+| 2026-09-18 | 首版：配置装载 · 严格校验 · 不可变快照 · 版本台账 · `judge.RuleSource` 供给 | [`../plans/2026-09-18-policy-2a.md`](../plans/ARCHIVE.md)（9 项决策，用户已确认） |
+| 2026-09-19 | **下发面落地**：`Server`（`Pull` 投影 / `Watch` 未实现 / `Ack` 落账）+ `PolicyStore` 扩 `RecordAck` / `Acks`；载荷契约新增 [`../spec/policy-payload.md`](../spec/policy-payload.md)；`PolicyAck` 扩 `adapter_id` / `reason`；测试 12 → 17 | [`../plans/2026-09-19-policy-plane.md`](../plans/ARCHIVE.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |

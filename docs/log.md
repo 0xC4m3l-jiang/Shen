@@ -9,6 +9,37 @@
 
 ---
 
+## 2026-09-20 · 已实现计划归档删除（53 份）+ kb 历史文档合并
+
+**做了什么**：用户要"检查 plans 里的功能设计是否已实现，已实现的把 plan 删掉"，并整理其他文档（含 kb）。
+① **先定判定方法**（不靠计划自称的状态）：**带目录前缀的仓库路径是否全部存在** + **是否有对应日志条目与门禁记录** + 实现位置能否在 modules/spec/代码里查到。
+初版审计用"计划状态行"判定（53/53 都写已验证）→ 判为不可靠；换用上面两条可核证据后：41 份直接判定，12 份逐条人工确认（都是**正文里的反例路径**如 core/internal/xxx/、已改名文件（docs/modules/map.md → _map.md）、已删除文件（manual-test.md 已并入 ops）、或设计里明确"待建"的 docs/analytics/）。
+② **归档并删除 53 份计划**：新增 docs/plans/ARCHIVE.md（一行一份：日期 · 原文件 · 主题 · 状态 · 追溯入口 + 判定依据 + **原文取回方式** git show），随后 git rm 53 份；目录 55 → 3（README · 模板 · 归档表）。
+③ **kb 合并**：`removed-skills.md`（历史：第三方技能为什么移除、怎么恢复）并入 `known-issues.md` 的 `H-1`，删除原文件；引用者（kb/README · dev-workflow · AGENTS.md）改指 `known-issues.md` 的 H-1；kb 6 → 5 份。
+④ **索引改准**：docs/plans/README 写明目录策略（已实现即归档删除）；docs/README 的 plans 行（现行 0 份 / 归档 53 份）与 kb 行（5 份）同步。
+
+**改了哪些文件**：docs/plans/ARCHIVE.md（新增）· 删除 53 份历史计划 · docs/plans/2026-09-20-plans-archive-and-kb-merge.md（本轮变更包）· docs/plans/README.md · docs/kb/known-issues.md · 删除 docs/kb/removed-skills.md · docs/kb/README.md · docs/kb/dev-workflow.md · docs/README.md · AGENTS.md
+
+**对应文档**：docs/plans/2026-09-20-plans-archive-and-kb-merge.md（含判定方法与审视 3 条）· docs/plans/ARCHIVE.md
+
+**验证**：`make gate` 通过。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 实现判定 | 可核证据、不靠自称 | ✅ 带前缀路径 + 日志条目 + 实现位置三查；12 份逐条人工确认 |
+| 归档留痕 | 不丢追溯 | ✅ ARCHIVE.md 53 行 + git show 取回方式 |
+| 目录规模 | 明显减少 | ✅ plans 55 → 3；kb 6 → 5 |
+| 引用 | 不悬空 | ✅ 引用改指 known-issues H-1；make trace 通过 |
+| 门禁 | 绿 | ✅ |
+
+**补记（同轮修复）**：删除计划后，模块文档与一份 ADR 的「变更记录」里原指向具体计划的链接变成悬空（门禁 TC-3 抓到 5 个文件）——
+统一改指 docs/plans/ARCHIVE.md（归档表里保留了每份计划的日期/主题/状态与 git 取回方式），追溯不断。
+
+**没做 / 遗留**：① docs/background/（33 份：ADR + notes + research）未动 —— ADR 与材料各有独立价值、且被多处引用；② docs/analytics/ 仍未建（设计里明确待建）。
+
+---
+
 ## 2026-09-20 · 全链路逻辑梳理（蜜罐以外）+ docs 整合
 
 **做了什么**：用户要"把蜜罐以外的所有逻辑梳理出来、连技术点与实现参考补进 docs，并整合 docs 减少不必要的信息与文件"。落地：

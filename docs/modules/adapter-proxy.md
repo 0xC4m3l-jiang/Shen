@@ -259,11 +259,11 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | 2026-09-18 | **接诱饵注入**：`Injector` 接口（由本模块定义，避免适配器互依 MD-4）+ `SHEN_PROXY_INJECT`；只改引流侧 HTML（INT-8），大响应不缓冲 | 本轮开发 |
 | 2026-09-19 | **换底座**：转发与 TLS 终结改为内嵌 **Caddy**（`http.handlers.shen_proxy`）；模块身份与对外接口不变（`JudgeClient` / `TelemetryClient` / `Injector`）；新增 `SHEN_PROXY_TLS_MODE=off\|manual\|acme`；未决项 1（TLS 归属）结案；测试 19 → **30**；新增依赖已进许可台账 | [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) · 用户确认 |
 | 2026-09-19 | **TLS 终结默认改交客户 L0**（`E2` 实测：本栈与公有站栈的 ServerHello 扩展顺序可区分）；自终结保留 + **启动告警**（`SelfTerminationWarning`，含测试）；未决项 1 表述按 `ADR-0019` 收窄 | [`ADR-0019`](../background/decisions/0019-tls-termination-belongs-to-l0.md) · 用户确认 |
-| 2026-09-19 | **接策略面**（`S4`）：`Pull` 拉取改道后端表与白名单（远端覆盖本地 · 白名单并集）· `Ack` 回执（`AR-13`）· 新增 `SHEN_PROXY_POLICY_INTERVAL` / `SHEN_PROXY_POLICY_ID` / `SHEN_PROXY_ADAPTER_ID`；测试 **30 → 37** | [`../plans/2026-09-19-policy-plane.md`](../plans/2026-09-19-policy-plane.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |
-| 2026-09-19 | **策略面下发响应改写规则**：载荷新增可选 `inject_rules`（缺省 = 用本地 env；显式空数组 = 关掉注入）；注入器改为**按请求读当前规则**（支持远端热变更）；测试 **37 → 39** | [`../plans/2026-09-19-content-path-injects.md`](../plans/2026-09-19-content-path-injects.md) · 用户确认（9 项推荐） |
-| 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/2026-09-19-forwarding-deception-hardening.md) |
-| 2026-09-19 | **转发边界实测锁定**：协议升级（WebSocket）· 流式不被缓冲 · 2 MiB 响应不注入不截断 · 8 MiB 上传完整送达 · 观测不含 body · h2 下行 + h1.1 上行；新增 6 例集成测试 | [`../plans/2026-09-19-forwarding-boundary-verification.md`](../plans/2026-09-19-forwarding-boundary-verification.md) |
-| 2026-09-19 | **`NI-12` 的 `V-1…V-4` 自动化**（真 Caddy + 真 gRPC/裸 TCP 故障注入，每条连打 20 次要求 100% 正常）· 新增 `AR-29` 空载下界基准与 `make bench`；`V-5` 归入接入演练 | [`../plans/2026-09-19-ni12-vseries-and-ar29-floor.md`](../plans/2026-09-19-ni12-vseries-and-ar29-floor.md) |
+| 2026-09-19 | **接策略面**（`S4`）：`Pull` 拉取改道后端表与白名单（远端覆盖本地 · 白名单并集）· `Ack` 回执（`AR-13`）· 新增 `SHEN_PROXY_POLICY_INTERVAL` / `SHEN_PROXY_POLICY_ID` / `SHEN_PROXY_ADAPTER_ID`；测试 **30 → 37** | [`../plans/2026-09-19-policy-plane.md`](../plans/ARCHIVE.md) · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md) · 用户确认（9 项推荐） |
+| 2026-09-19 | **策略面下发响应改写规则**：载荷新增可选 `inject_rules`（缺省 = 用本地 env；显式空数组 = 关掉注入）；注入器改为**按请求读当前规则**（支持远端热变更）；测试 **37 → 39** | [`../plans/2026-09-19-content-path-injects.md`](../plans/ARCHIVE.md) · 用户确认（9 项推荐） |
+| 2026-09-19 | **可见面卫生（`OH-2` 一致性修复）**：实测发现转发会把 `Via: 1.1 Caddy` 透给对手、错误响应带 `Server: Caddy` —— 新增 `headerSanitizer`（中间件层）+ `errors` 路由（错误路径），并加 5 例单测与 1 例端到端 | [`../plans/2026-09-19-forwarding-deception-hardening.md`](../plans/ARCHIVE.md) |
+| 2026-09-19 | **转发边界实测锁定**：协议升级（WebSocket）· 流式不被缓冲 · 2 MiB 响应不注入不截断 · 8 MiB 上传完整送达 · 观测不含 body · h2 下行 + h1.1 上行；新增 6 例集成测试 | [`../plans/2026-09-19-forwarding-boundary-verification.md`](../plans/ARCHIVE.md) |
+| 2026-09-19 | **`NI-12` 的 `V-1…V-4` 自动化**（真 Caddy + 真 gRPC/裸 TCP 故障注入，每条连打 20 次要求 100% 正常）· 新增 `AR-29` 空载下界基准与 `make bench`；`V-5` 归入接入演练 | [`../plans/2026-09-19-ni12-vseries-and-ar29-floor.md`](../plans/ARCHIVE.md) |
 
 ## 9.1 执行落点与响应观测（供流量调度图）
 

@@ -97,4 +97,4 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：协议仿真 + 交互捕获；定位为**可选自研** | [ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md) |
-| 2026-09-19 | **框架落地**：`Protocol` / `Session` / `Registry` 契约 + `Runner`（并发上限 `MD-16` · 对称回收 `MD-15`）+ `Banner` 最小真实适配器；7 例单测；协议栈留作核心逻辑接缝 | [`../plans/2026-09-19-deception-l2-l3-frameworks.md`](../plans/2026-09-19-deception-l2-l3-frameworks.md) |
+| 2026-09-19 | **框架落地**：`Protocol` / `Session` / `Registry` 契约 + `Runner`（并发上限 `MD-16` · 对称回收 `MD-15`）+ `Banner` 最小真实适配器；7 例单测；协议栈留作核心逻辑接缝 | [`../plans/2026-09-19-deception-l2-l3-frameworks.md`](../plans/ARCHIVE.md) |

@@ -4,7 +4,7 @@
 - 日期：2026-09-18
 - 影响范围：`docs/spec/config.md` §2.7 的 `policy.version`；
   `core/internal/policy/`（`Loader` 与 `Publish`）；
-  [`../plans/2026-09-18-policy-2a.md`](../plans/2026-09-18-policy-2a.md)（本轮访谈第 ⑥ 项）
+  [`../plans/2026-09-18-policy-2a.md`](../../plans/ARCHIVE.md)（本轮访谈第 ⑥ 项）
 - 决策者：用户
 - 依据：`AR-13`（策略下发**必须**版本化、可灰度、可回滚、各层**必须**回执以便版本对账）·
   `ST-8`（策略面**必须**携带版本号与校验和，并支持回滚）
@@ -73,7 +73,7 @@
 | --- | --- |
 | ✅ 正面 | 版本号可编排、可对账；回滚语义与 `store` 既有实现一致；遗忘递增被启动失败挡住 |
 | ⚠️ 负面 | 人工必须维护递增整数；同一份内容重复发布会产生不同版本（可接受：发布动作本身要留痕） |
-| 🔧 需同步 | `docs/spec/config.md` §2.7 · `docs/modules/policy.md` §1 / §6 · [`../plans/2026-09-18-policy-2a.md`](../plans/2026-09-18-policy-2a.md) §3 |
+| 🔧 需同步 | `docs/spec/config.md` §2.7 · `docs/modules/policy.md` §1 / §6 · [`../plans/2026-09-18-policy-2a.md`](../../plans/ARCHIVE.md) §3 |
 
 ## 失效条件
 

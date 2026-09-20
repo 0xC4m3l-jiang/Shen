@@ -112,7 +112,7 @@
 | [`threat-model`](.pi/skills/threat-model/SKILL.md) | 改安全相关路径 / 信任边界 / 对手可见面 | 资产 · 对手分档 · 失效路径 · 识破路径表 |
 
 > 全局另有 `dev-loop`（通用流程）与 `audit`（审视）—— 见 `~/.pi/agent/skills/`。
-> 项目 `.pi/skills/` 里**只有纯 Markdown 技能，无可执行代码**（第三方 `skill-creator` 已移除，见 [`docs/kb/removed-skills.md`](docs/kb/removed-skills.md)）。
+> 项目 `.pi/skills/` 里**只有纯 Markdown 技能，无可执行代码**（第三方 `skill-creator` 已移除，见 [`docs/kb/known-issues.md`](docs/kb/known-issues.md) 的 `H-1`）。
 > 技能**只在 cwd 位于 `Shen/` 或其子目录时生效**（见 §6）；从父目录启动 pi 时，本文与项目技能都不加载。
 > `make trace` 会核对：本文点名的每个技能文件**必须**存在且头部有 `name` / `description`（`DEV-3`）。
 
