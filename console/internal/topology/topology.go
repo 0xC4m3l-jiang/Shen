@@ -14,6 +14,7 @@ package topology
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -344,4 +345,173 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// ── 逐请求链路（每个请求一条独立 DAG；不与其他请求聚合）─────────────────────────
+//
+// 与 Build（聚合拓扑）的区别：Build 回答"整体流量怎么分布"，BuildRequests 回答
+// "**这一条**请求实际怎么走的"——每一跳都带该请求自己的值（分值/信号/落点/状态/字节/耗时）。
+
+// ChainNode 是某条请求链路上的一跳。
+type ChainNode struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Kind  string `json:"kind"`            // client|adapter|branch|judge|decision|origin|mirage|block|analysis
+	Value string `json:"value,omitempty"` // 这一跳上该请求的具体值
+	Alert bool   `json:"alert,omitempty"` // 真实告警所在的一跳
+	Warn  bool   `json:"warn,omitempty"`  // 高风险（仅显示）或回落/失败
+}
+
+// RequestGraph 是**单条请求**的链路（页面一行一个 DAG）。
+type RequestGraph struct {
+	DecisionID string      `json:"decision_id"`
+	At         time.Time   `json:"at"`
+	Method     string      `json:"method"`
+	Path       string      `json:"path"`
+	UA         string      `json:"ua"`
+	SourceIP   string      `json:"source_ip"`
+	Action     string      `json:"action"`
+	Score      float64     `json:"score"`
+	Signals    []string    `json:"signals"`
+	Severity   string      `json:"severity"`
+	Executed   string      `json:"executed"`
+	Backend    string      `json:"backend"`
+	Status     int         `json:"status"`
+	Bytes      int         `json:"bytes"`
+	DurationMs float64     `json:"duration_ms"`
+	RealAlert  bool        `json:"real_alert"`
+	HighRisk   bool        `json:"high_risk"`
+	L4         int         `json:"l4_conclusions"`
+	Unjudged   bool        `json:"unjudged"` // 白名单 / 缓存 / 判定失败：没有核心判定
+	Chain      []ChainNode `json:"chain"`
+}
+
+// BuildRequests 把事件摊平成**逐请求链路**，最新的在前。
+func BuildRequests(in Input, alertScore float64) []RequestGraph {
+	decisions := map[string]DecisionEvent{}
+	for _, d := range in.Decisions {
+		decisions[d.DecisionID] = d
+	}
+	l4 := map[string]int{}
+	for _, a := range in.Analysis {
+		if !a.Accepted {
+			continue
+		}
+		for _, ev := range a.EvidenceIDs {
+			l4[ev]++
+		}
+	}
+
+	out := make([]RequestGraph, 0, len(in.Judged))
+	for _, j := range in.Judged {
+		dec, paired := decisions[j.DecisionID]
+		rg := RequestGraph{
+			DecisionID: j.DecisionID, At: j.At, Method: j.Method, Path: j.Path, UA: j.UA,
+			Executed: j.Executed, Backend: j.Backend, Status: j.Status, Bytes: j.Bytes,
+			DurationMs: j.DurationMs, L4: l4[j.DecisionID],
+		}
+		if paired {
+			rg.Action, rg.Score, rg.Signals = dec.Action, dec.Score, dec.Signals
+			rg.Severity, rg.SourceIP = dec.Severity, dec.SourceIP
+			if dec.Action == ActionBlock || (dec.Severity != "" && dec.Severity != "none") {
+				rg.RealAlert = true
+			}
+			rg.HighRisk = dec.Score >= alertScore
+		}
+		rg.Unjudged = j.Executed == "whitelist" || j.Executed == "cache" || j.Executed == "failopen"
+
+		// 链路：客户端 → 适配器 → （分支 or 核心判定）→ 意图 → 实际落点（→ L4）
+		rg.Chain = append(rg.Chain,
+			ChainNode{ID: "client", Label: "客户端", Kind: "client", Value: firstNonEmpty(rg.SourceIP, "来源未采集")},
+			ChainNode{ID: "adapter", Label: "适配器 (L1)", Kind: "adapter", Value: j.Method + " " + j.Path},
+		)
+		switch j.Executed {
+		case "whitelist":
+			rg.Chain = append(rg.Chain, ChainNode{ID: "branch:whitelist", Label: "白名单命中", Kind: "branch", Value: "跳过判定（INT-25）"})
+		case "cache":
+			rg.Chain = append(rg.Chain, ChainNode{ID: "branch:cache", Label: "判定缓存命中", Kind: "branch", Value: "复用同窗判定（ST-10）"})
+		case "failopen":
+			rg.Chain = append(rg.Chain, ChainNode{ID: "branch:failopen", Label: "判定失败", Kind: "branch",
+				Value: firstNonEmpty(j.DecisionError, "核心不可达/超时"), Alert: true})
+		default:
+			rg.Chain = append(rg.Chain, ChainNode{ID: "judge", Label: "核心判定", Kind: "judge",
+				Value: judgeValue(rg), Warn: rg.HighRisk})
+		}
+		if paired && !rg.Unjudged {
+			rg.Chain = append(rg.Chain, ChainNode{ID: "decision", Label: "决策", Kind: "decision", Value: actionLabel(dec.Action)})
+		}
+		switch j.Executed {
+		case "mirage":
+			rg.Chain = append(rg.Chain, ChainNode{ID: "mirage", Label: "幻境后端", Kind: "mirage", Value: firstNonEmpty(j.Backend, "未命名")})
+		case "origin_fallback":
+			rg.Chain = append(rg.Chain,
+				ChainNode{ID: "branch:fallback", Label: "幻境不可用", Kind: "branch", Value: "回落业务（NI-5）", Warn: true},
+				ChainNode{ID: "origin", Label: "业务源站", Kind: "origin", Value: routeValue(rg)},
+			)
+		case "block":
+			rg.Chain = append(rg.Chain, ChainNode{ID: "block", Label: "拦截", Kind: "block", Value: "403", Alert: true})
+		default:
+			rg.Chain = append(rg.Chain, ChainNode{ID: "origin", Label: "业务源站", Kind: "origin", Value: routeValue(rg)})
+		}
+		if rg.L4 > 0 {
+			rg.Chain = append(rg.Chain, ChainNode{ID: "analysis", Label: "L4 分析", Kind: "analysis",
+				Value: fmt.Sprintf("%d 条结论引用", rg.L4)})
+		}
+		out = append(out, rg)
+	}
+	// 最新在前：页面每 5 秒刷新时，新流量出现在最上面（"动态"）。
+	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	return out
+}
+
+func judgeValue(rg RequestGraph) string {
+	parts := []string{fmt.Sprintf("分值 %.2f", rg.Score)}
+	if len(rg.Signals) > 0 {
+		parts = append(parts, "信号 "+joinSignals(rg.Signals))
+	}
+	return joinNonEmpty(parts, " · ")
+}
+
+func routeValue(rg RequestGraph) string {
+	if rg.Status == 0 && rg.Bytes == 0 && rg.DurationMs == 0 {
+		return "返回信息未采集"
+	}
+	return fmt.Sprintf("%d · %d 字节 · %.1fms", rg.Status, rg.Bytes, rg.DurationMs)
+}
+
+func joinSignals(signals []string) string {
+	var b strings.Builder
+	for i, sig := range signals {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(sig)
+	}
+	return b.String()
+}
+
+func joinNonEmpty(parts []string, sep string) string {
+	var b strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(part)
+	}
+	return b.String()
+}
+
+// actionLabel 把核心的三值决策转成人话（与页面其余部分一致）。
+func actionLabel(action string) string {
+	switch action {
+	case ActionMirage:
+		return "改道（route_mirage）"
+	case ActionBlock:
+		return "拦截（block）"
+	default:
+		return "放行（route_origin）"
+	}
 }

@@ -132,6 +132,7 @@ func main() {
 	mux.HandleFunc("/api/analysis", s.handleAnalysis)
 	mux.HandleFunc("/api/topology", s.handleTopology)
 	mux.HandleFunc("/api/trace", s.handleTrace)
+	mux.HandleFunc("/api/graphs", s.handleGraphs)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		// 存活探针只反映**本进程**存活；核心是否可达由页面上的错误提示体现（ST-17 的语义区分）。
 		w.WriteHeader(http.StatusOK)
@@ -255,6 +256,40 @@ func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, topology.Build(in, alertScore()))
+}
+
+// handleGraphs 返回**逐请求链路**：每个请求一条独立 DAG（不聚合），最新的在前。
+// 页面每 5 秒重新取一次，因此新流量会动态出现在最上面。
+func (s *server) handleGraphs(w http.ResponseWriter, r *http.Request) {
+	events, err := s.fetch(r)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	in := topology.Input{}
+	for _, ev := range events {
+		switch ev.Type {
+		case decisionEventType:
+			var d topology.DecisionEvent
+			if json.Unmarshal(ev.Raw, &d) == nil && d.DecisionID != "" {
+				in.Decisions = append(in.Decisions, d)
+			}
+		case judgedEventType:
+			var j topology.JudgedEvent
+			if json.Unmarshal(ev.Raw, &j) == nil {
+				j.DecisionID = ev.EventID
+				j.At = ev.CreatedAt
+				in.Judged = append(in.Judged, j)
+			}
+		case analysisEventType:
+			var a topology.AnalysisEvent
+			if json.Unmarshal(ev.Raw, &a) == nil {
+				a.At = ev.CreatedAt
+				in.Analysis = append(in.Analysis, a)
+			}
+		}
+	}
+	writeJSON(w, topology.BuildRequests(in, alertScore()))
 }
 
 // traceView 是单条请求的完整链路（页面的详情面板用它）。

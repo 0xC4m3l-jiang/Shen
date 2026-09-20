@@ -9,6 +9,34 @@
 
 ---
 
+## 2026-09-20 · DAG 改为逐请求链路（动态 · 不聚合）
+
+**做了什么**：用户指出"DAG 图要动态、**每个流量单独**的，而不是存（聚合）在一起"，于是把上一轮的聚合拓扑改为**逐请求链路**：
+① **新增模型与接口**：`topology.RequestGraph` / `ChainNode` / `BuildRequests`（按 `decision_id` 把核心判定与适配器执行 join 后，**每个请求产出一条链路**，最新在前）；控制台新增只读接口 GET /api/graphs?limit=N。
+② **链路上每跳都写该请求自己的值**：`客户端[来源 IP]` → `适配器[方法 路径]` → （`白名单命中` / `判定缓存命中` / `判定失败[原因]` / `核心判定[分值 · 命中信号]`）→ 决策[放行/改道/拦截] → **实际落点**（`业务源站[状态 · 字节 · 耗时]` / `幻境后端[后端名]` / `拦截[403]`，回落时多一跳 `幻境不可用 → 回落业务（NI-5）`），有 L4 结论时再加一跳。
+③ **动态**：页面每 5 秒刷新、后端倒序返回 ⇒ 新流量出现在最上面（不引 SSE/WebSocket）。
+④ **页面**：区块改为逐请求卡片列表（每张卡片一张横向链路小图），加筛选（全部 / 只看告警 / 只看高风险 / 只看幻境与回落 / 只看源站），点卡片看四段详情；渲染仍全程 `textContent`（路径与 UA 是攻击者可控字符串，非注释 `innerHTML` 使用为 0）。
+⑤ **聚合视图**：接口 GET /api/topology 保留（程序化统计仍可用），页面不再用它。
+⑥ 顺手把 `joinSignals`/`joinNonEmpty` 改用 `strings.Builder`（静态检查提示）。
+
+**改了哪些文件**：`console/internal/topology/topology.go` · `console/cmd/console/main.go` · `console/web/index.html` · `docs/integrate/observability.md` · `docs/modules/console.md`
+
+**对应文档**：[`docs/plans/2026-09-20-per-request-dag.md`](docs/plans/2026-09-20-per-request-dag.md)（含追溯矩阵与审视 3 条）· [`docs/integrate/observability.md`](docs/integrate/observability.md) §5
+
+**验证**：`make gate` 通过；/api/graphs 对 Docker 栈**实跑**返回逐请求链路。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 逐请求链路 | 每请求一条、最新在前 | ✅ 2 条（`/` 与 `/.git/config`） |
+| 链路取值 | 每跳带该请求的值 | ✅ `核心判定[分值 0.90 · 信号 ua-headless,path-probe] → 决策[放行（route_origin）] → 业务源站[200 · 39 字节 · 2.8ms]` |
+| 渲染纪律 | 无 innerHTML 拼接 | ✅ 非注释使用 0 处 |
+| 门禁 | 绿 | ✅ |
+
+**没做 / 遗留**：① **`BuildRequests` 尚无单测**（`Build` 有 4 个用例）—— 需补探针链路 / 回落链路 / 未判定链路三个用例；② 上一轮的 `--check-graph` 一致性断言仍未实现；③ 未在真实改道（非影子 + 登记可用幻境后端）下验证过 `mirage` 那张图；④ 页面一屏最多 50 张卡片。
+
+---
+
 ## 2026-09-20 · 流量调度 DAG 图（意图 vs 实际落点）+ 告警入图
 
 **做了什么**：用户要看清"流量进来后实际走到哪"——是后段业务服务，还是进了我们设的幻境/蜜罐，并要求图上带请求与返回信息、告警也在图里。落地：
