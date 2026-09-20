@@ -9,6 +9,33 @@
 
 ---
 
+## 2026-09-20 · 五维能力审计（反代 / 转发 / 监控 / 配置 / AI 注入）+ KB 能力实况
+
+**做了什么**：用户要求 review"设计的功能是否都开发好了"，点名五个维度，并在确认后完善 KB。
+① **逐项审计**（代码 / 测试 / 活体三类证据，不靠印象）：反向代理 ✅（edge/proxy 14 文件 · **58 个测试** · 内嵌 Caddy 模块 · 边界用例：WebSocket 101 / SSE 不缓冲 / 2 MiB 响应不注入 / 8 MiB 上传不丢字节）；流量转发 ✅（原样透传 INT-8 · 改道转发且注入只在改道侧 · 回落 NI-5 · 拦截 403 默认关）；流量监控 ✅（控制台 8 个只读接口 · 逐判定日志 · 逐请求 DAG 每步三段 · 两段式告警 · 指标规格 · 接入自检五项）；配置 ✅（示例 153 行 + 规格 429 行 + 漂移守卫单测 + 策略载荷规格 + env 表 + compose + 验证配方）。
+② **一处诚实的"部分实现"**：**注入 AI 欺骗信息** —— 注入*机制*完整（edge/injection + 策略面 inject_rules）、诱饵资产定义与多态、响应一致性 AR-30、LLM 契约层（AR-15…AR-24 · AR-31/AR-32）都在；**但没有真实模型后端**（UnconfiguredClient 显式失败），且 **L4 结论未接到 policy/注入** ⇒ 目前注入的是**静态片段**，不是 AI 现场生成的内容。关闭路径两步：部署侧注入真实 AnalysisClient；把 L4 结论经 policy 接成 inject_rules。
+③ **KB 完善**：新增 docs/kb/capabilities.md（五维实况：状态 · 代码 · 技术点 · 怎么验；其余能力速查 9 项；**已知缺口 8 条**含 AI 注入的两步关闭路径）；kb/README 与 quick-tour 索引同步。
+④ 修掉我插入的两处表格列数不匹配（kb/README、quick-tour）。
+
+**改了哪些文件**：docs/kb/capabilities.md（新增）· docs/kb/README.md · docs/kb/quick-tour.md · 本变更包
+
+**对应文档**：docs/plans/2026-09-20-capability-audit-and-kb.md（含审计方法与审视 4 条）· docs/kb/capabilities.md
+
+**验证**：`make gate` 通过。
+
+**证据**：
+| 维度 | 证据 |
+| --- | --- |
+| 反向代理 | edge/proxy 测试函数 58 · Caddy 模块 http.handlers.shen_proxy |
+| 流量转发 | executed 七值全部实测（origin·cache·failopen·origin_fallback·mirage·whitelist·block） |
+| 流量监控 | 控制台 8 个只读接口 · DAG 逐请求链路每步三段 |
+| 配置 | 示例配置 153 行 · 配置规格 429 行 · TestExampleConfigLoads 漂移守卫 |
+| AI 注入 | ⚠️ 部分：机制在（injection + inject_rules）· 内容不在（UnconfiguredClient） |
+
+**没做 / 遗留**：① AI 生成内容未接入（无模型后端）· L4 结论未接 policy/注入 —— 两步关闭路径已写入 KB；② 诱饵资产 / 预生成正文 → 边缘的通路仍未接通；③ 其余缺口（查询串不参与判定 · 编码绕过 · 前缀精度 · severity 档位 · 真实存储）见 capabilities.md §3。
+
+---
+
 ## 2026-09-20 · 已实现计划归档删除（53 份）+ kb 历史文档合并
 
 **做了什么**：用户要"检查 plans 里的功能设计是否已实现，已实现的把 plan 删掉"，并整理其他文档（含 kb）。

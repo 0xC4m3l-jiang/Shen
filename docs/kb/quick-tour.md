@@ -57,6 +57,7 @@
 | 意图识别 / 攻击链 / 策略生成 | `intent` · `chain` · `strategy` | [`analysis/intent/`](../../analysis/intent) 等 | [`../modules/intent.md`](../modules/intent.md) 等 |
 | LLM 契约 / 超时 / 黑名单 | `llm-components` | [`analysis/llm/`](../../analysis/llm) | [`../modules/llm-components.md`](../modules/llm-components.md) |
 | 让 L4 跑起来（近线） | worker | [`analysis/worker.py`](../../analysis/worker.py) | [`ADR-0022`](../background/decisions/0022-l4-near-line-worker.md) |
+| 想确认**某能力到底实现了没、怎么验** | — | [`capabilities.md`](capabilities.md) | — |
 | 看**流量调度图（意图 vs 实际落点）** | `console` | [`console/`](../../console) | [`../integrate/observability.md`](../integrate/observability.md) |
 | 发伪造流量做验证 | — | [`scripts/traffic/`](../../scripts/traffic) | [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md) |
 | 看日志字段 / 定位一条请求 | — | 核心与适配器 | [`../spec/logs.md`](../spec/logs.md) |
