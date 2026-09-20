@@ -316,6 +316,45 @@ def judge(
     return result
 
 
+EXECUTED_VALUES = {
+    "origin",
+    "cache",
+    "failopen",
+    "origin_fallback",
+    "mirage",
+    "block",
+    "whitelist",
+}
+"""`executed` 的合法取值（权威表见 docs/spec/events.md §2.2）。多一个少一个都说明契约漂了。"""
+
+
+def check_graph(console: str) -> dict[str, Any]:
+    """核对逐请求链路（DAG）：每条请求一条链路，且每一步的「请求/响应/为什么」都在。
+
+    这条断言守住用户在意的两件事：**每条流量单独成图**（而不是被折叠/聚合）、**每步文字完整**。
+    """
+    chains = fetch_json("/api/graphs?limit=200", console)
+    if chains is None:
+        chains = []
+    if not isinstance(chains, list):
+        raise ConsoleError(f"/api/graphs 期望列表，实际 {type(chains).__name__}")
+    problems: list[str] = []
+    for ch in chains:
+        did = str(ch.get("decision_id") or "?")
+        executed = str(ch.get("executed") or "")
+        if executed not in EXECUTED_VALUES:
+            problems.append(f"{did}: executed={executed!r} 不在合法取值内")
+        hops = ch.get("chain") or []
+        if len(hops) < 3:
+            problems.append(f"{did}: 链路只有 {len(hops)} 跳（至少应有 客户端 → 适配器 → … ）")
+        for hop in hops:
+            keys = ("label", "value", "request", "response", "why")
+            missing = [k for k in keys if not hop.get(k)]
+            if missing:
+                problems.append(f"{did}: 第 {hop.get('label', '?')} 跳缺 {missing}")
+    return {"chains": len(chains), "problems": problems}
+
+
 def check_l4(console: str) -> dict[str, Any]:
     """核对 L4 结论：存在性 + `AR-12`（结论引用的证据必须真实存在于遥测里）。
 
@@ -343,7 +382,11 @@ def check_l4(console: str) -> dict[str, Any]:
     }
 
 
-def render(results: list[dict[str, Any]], l4: dict[str, Any] | None) -> None:
+def render(
+    results: list[dict[str, Any]],
+    l4: dict[str, Any] | None,
+    graph: dict[str, Any] | None = None,
+) -> None:
     width = max((len(row["id"]) for row in results), default=12)
     group_width = max((len(row["group"]) for row in results), default=6)
     print(
@@ -399,6 +442,15 @@ def render(results: list[dict[str, Any]], l4: dict[str, Any] | None) -> None:
             print(f"      实测：{shown}")
             print(f"      怎么关：{gap.get('close', '')}")
 
+    if graph is not None:
+        print("\n── 逐请求链路核对（DAG）──")
+        if graph["chains"] == 0:
+            print("  · 还没有链路（先造点流量）")
+        else:
+            print(f"  · 链路 {graph['chains']} 条；落点取值与每步三段均已核对")
+            for issue in graph["problems"]:
+                print(f"  ✗ {issue}")
+
     if l4 is not None:
         print("\n── L4 结论核对（AR-12：引用必须真实存在）──")
         if l4["conclusions"] == 0:
@@ -453,6 +505,11 @@ def main(argv: list[str] | None = None) -> int:
         "--check-l4",
         action="store_true",
         help="跑完顺带核对 L4 结论与证据引用（AR-12）",
+    )
+    parser.add_argument(
+        "--check-graph",
+        action="store_true",
+        help="跑完核对逐请求链路（DAG）：落点取值合法 + 每步三段齐全（请求/响应/为什么）",
     )
     parser.add_argument("--json", action="store_true", help="输出 JSON（自动化用）")
     parser.add_argument(
@@ -533,6 +590,22 @@ def main(argv: list[str] | None = None) -> int:
             if args.delay:
                 time.sleep(args.delay)
 
+    graph: dict[str, Any] | None = None
+    if args.check_graph:
+        try:
+            graph = check_graph(args.console)
+        except (ConsoleError, ValueError) as exc:
+            print(f"链路核对失败：{exc}", file=sys.stderr)
+            return 1
+
+    graph: dict[str, Any] | None = None
+    if args.check_graph:
+        try:
+            graph = check_graph(args.console)
+        except (ConsoleError, ValueError) as exc:
+            print(f"链路核对失败：{exc}", file=sys.stderr)
+            return 1
+
     l4: dict[str, Any] | None = None
     if args.check_l4:
         try:
@@ -582,6 +655,7 @@ def main(argv: list[str] | None = None) -> int:
             "console": args.console,
             "results": results,
             "l4": l4,
+            "graph": graph,
             "summary": {
                 "asserted": len(asserted),
                 "failed": len([row for row in asserted if row["failures"]]),
@@ -594,12 +668,13 @@ def main(argv: list[str] | None = None) -> int:
         }
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        render(results, l4)
+        render(results, l4, graph)
 
     failed = any(row["failures"] for row in results)
     hygiene = any(row["findings"] or row["st7_findings"] for row in results)
     dangling = bool(l4 and l4["dangling_evidence"])
-    return 1 if (failed or hygiene or dangling) else 0
+    graph_bad = bool(graph and graph["problems"])
+    return 1 if (failed or hygiene or dangling or graph_bad) else 0
 
 
 if __name__ == "__main__":

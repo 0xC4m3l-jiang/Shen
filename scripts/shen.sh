@@ -159,7 +159,7 @@ cmd_verify() {
 	echo
 	echo "== 2/3 伪造流量 + 判定核对（--check-l4）=="
 	python3 "${ROOT}/scripts/traffic/send.py" \
-		--entry "${ENTRY}" --console "${CONSOLE}" --check-l4 --explain --report "${report}" "$@"
+		--entry "${ENTRY}" --console "${CONSOLE}" --check-l4 --check-graph --explain --report "${report}" "$@"
 	rc=$?
 	echo
 	echo "== 3/3 报告与定位线索 =="
