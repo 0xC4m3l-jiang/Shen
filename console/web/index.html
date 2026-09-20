@@ -175,16 +175,46 @@ function textIn(svg, x, y, value, color, size) {
   svg.appendChild(t);
 }
 
+// wrapCell 按**字符预算**折行：最多 maxLines 行，超出加省略号。
+//
+// 为什么不用 SVG 自动换行：SVG 没有文本换行，单行超长文本会直接溢出方框（也压到相邻跳）。
+// 这里的做法是"折行 + 省略号 + 悬停看原文 + 点开看全文（步骤面板）"，三者一起保证信息不丢。
+function wrapCell(value, perLine, maxLines) {
+  const chars = Array.from(String(value === undefined || value === null || value === "" ? "—" : value));
+  const lines = [];
+  for (let i = 0; i < chars.length && lines.length < maxLines; i += perLine) {
+    lines.push(chars.slice(i, i + perLine).join(""));
+  }
+  if (chars.length > perLine * maxLines) {
+    const last = Array.from(lines[maxLines - 1]);
+    lines[maxLines - 1] = last.slice(0, Math.max(0, perLine - 1)).join("") + "…";
+  }
+  return lines;
+}
+
 // chainSvg 把一条请求的链路画成横向小图（每跳一个方框 + 该请求的值）。
+//
+// 布局要点（都是为了"文字完整、不溢出"）：
+//   · **固定像素宽度**（不再 width="100%"）：否则链路越长整图越缩，字号随之变小、读不清；
+//     容器改为横向可滚动（见 renderRequestDags 里的 overflowX）。
+//   · 每跳的值最多两行、按字符预算折行，超出加省略号；完整原文放 <title>（悬停可见）与步骤面板。
+//   · 方框高度按实际行数算，避免文字被裁。
 function chainSvg(rg) {
   const NS = "http://www.w3.org/2000/svg";
-  const nodeW = 196, nodeH = 48, gap = 30;
+  const nodeW = 212, gap = 26, lineH = 13, padTop = 12;
+  const perLine = 26;      // ≈ 212px 宽、11px 字号下的保守字符预算（中英混排）
+  const valueLines = 3;    // 值最多三行（够放折叠后的全部信息；后端已把冗长错误压成短标签）
+  const nodeH = padTop + 14 + valueLines * lineH + 6;
   const n = rg.chain.length;
-  const width = 20 + n * nodeW + (n - 1) * gap, height = nodeH + 28;
+  const width = 20 + n * nodeW + (n - 1) * gap;
+  const height = nodeH + 24;
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.setAttribute("width", "100%"); svg.setAttribute("height", String(height));
+  svg.setAttribute("width", String(width));   // 固定像素：不缩放，字号恒定
+  svg.setAttribute("height", String(height));
   svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `请求链路：${rg.method} ${rg.path}`);
+
   rg.chain.forEach((node, i) => {
     const x = 10 + i * (nodeW + gap), y = 8;
     const rect = document.createElementNS(NS, "rect");
@@ -194,12 +224,19 @@ function chainSvg(rg) {
     rect.setAttribute("fill", node.alert ? "#ffe8e8" : (node.warn ? "#fff6e0" : "#f4f6f8"));
     rect.setAttribute("stroke", node.alert ? "#d33" : (node.warn ? "#e6a700" : "#c8ced6"));
     rect.style.cursor = "pointer";
-    // 点这一跳 → 看它的「请求 / 响应 / 为什么执行」；stopPropagation 避免同时触发整卡详情
+    // 悬停显示完整原文（折行只影响显示，不影响信息）
+    const tip = document.createElementNS(NS, "title");
+    tip.textContent = `${node.label}\n${node.value || "—"}\n（点开看：请求 / 响应 / 为什么执行）`;
+    rect.appendChild(tip);
     rect.onclick = (ev) => { ev.stopPropagation(); showStep(rg, node, i); };
     svg.appendChild(rect);
-    textIn(svg, x + nodeW / 2, y + 19, node.label, node.alert ? "#a11" : "#333", 12);
-    textIn(svg, x + nodeW / 2, y + 37, node.value || "—", "#666", 10);
-    for (const t of svg.querySelectorAll("text")) t.style.pointerEvents = "none"; // 点击由方框接
+
+    const lines = wrapCell(node.value, perLine, valueLines);
+    textIn(svg, x + nodeW / 2, y + padTop + 4, wrapCell(node.label, perLine + 6, 1)[0],
+      node.alert ? "#a11" : "#333", 12);
+    lines.forEach((line, li) => {
+      textIn(svg, x + nodeW / 2, y + padTop + 18 + li * lineH, line, "#666", 11);
+    });
     if (i < n - 1) {
       const line = document.createElementNS(NS, "line");
       line.setAttribute("x1", String(x + nodeW)); line.setAttribute("y1", String(y + nodeH / 2));
@@ -257,7 +294,10 @@ function renderRequestDags() {
     const badge = rg.real_alert ? "  🔴 真实告警" : (rg.high_risk ? "  🟠 高风险（仅显示）" : "");
     head.textContent = `${fmtTime(rg.at)}　${rg.method} ${rg.path}${badge}`;
     card.appendChild(head);
-    card.appendChild(chainSvg(rg));
+    const graph = document.createElement("div");
+    graph.style.overflowX = "auto";   // 长链路横向滚动，而不是把字缩小
+    graph.appendChild(chainSvg(rg));
+    card.appendChild(graph);
     card.onclick = () => showTrace(rg.decision_id);
     host.appendChild(card);
   }

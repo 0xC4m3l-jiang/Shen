@@ -473,9 +473,9 @@ func BuildRequests(in Input, alertScore float64) []RequestGraph {
 		case "failopen":
 			rg.Chain = append(rg.Chain, ChainNode{
 				ID: "branch:failopen", Label: "判定失败", Kind: "branch",
-				Value: firstNonEmpty(j.DecisionError, "核心不可达/超时"), Alert: true,
+				Value: shortReason(j.DecisionError), Alert: true,
 				Request:  obs,
-				Response: "没有判定结果 ⇒ 按放行处理",
+				Response: fmt.Sprintf("没有判定结果 ⇒ 按放行处理（原因原文：%s）", firstNonEmpty(j.DecisionError, "未采集")),
 				Why: "调核心失败（不可达 / 超时，判定预算 3ms，AR-29）⇒ 按 NI-3 / NI-4 **放行到真实业务**：" +
 					"业务优先于观测（NI-1）；代价是这条请求没有判定记录（K-24 讲的就是这个）。",
 			})
@@ -592,6 +592,32 @@ func joinNonEmpty(parts []string, sep string) string {
 		b.WriteString(part)
 	}
 	return b.String()
+}
+
+// shortReason 把冗长的失败原因压成**方框里放得下的短标签**。
+//
+// 图上的方框宽度固定，直接塞 gRPC 原文会溢出（或被迫截断而丢掉关键信息）；
+// 完整原文仍保留在该跳的「请求 / 响应 / 为什么」与悬停提示里，信息不丢。
+func shortReason(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "核心不可达/超时"
+	}
+	switch {
+	case strings.Contains(raw, "DeadlineExceeded"):
+		return "判定超时（DeadlineExceeded）"
+	case strings.Contains(raw, "Unavailable"):
+		return "核心不可达（Unavailable）"
+	case strings.Contains(raw, "Canceled"):
+		return "判定被取消（Canceled）"
+	default:
+		// 未知原因：保留可读前缀，避免整段铺满方框。
+		r := []rune(raw)
+		if len(r) > 18 {
+			return string(r[:18]) + "…"
+		}
+		return raw
+	}
 }
 
 // adapterSource 说明这次判定是从哪来的（页面上"为什么没调核心"一眼可见）。
