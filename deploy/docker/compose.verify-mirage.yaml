@@ -20,3 +20,5 @@ services:
       # 本地兜底的后端表（ADR-0018：远端策略优先、本地配置兜底）。真实部署把地址换成蜜罐。
       # 指向演示站端口只是为了"转发成功"，验证 DAG 上的「幻境后端」分支。
       SHEN_PROXY_MIRAGE: "mirage=http://127.0.0.1:19080"
+      # 白名单（INT-25）：验证「白名单命中 ⇒ 跳过判定」这条落点。容器网络里来源是网关地址。
+      SHEN_PROXY_WHITELIST: "${SHEN_VERIFY_WHITELIST:-127.0.0.0/8}"

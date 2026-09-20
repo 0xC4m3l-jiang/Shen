@@ -96,9 +96,18 @@ docker compose -f deploy/docker/compose.yaml down && \
 
 **实测结论（本机）**：`executed=mirage`（**真正进入幻境后端**）与 `origin_fallback`（`NI-5` 回落，图上多一跳"幻境不可用"）**都已端到端验证**：
 
-```
+```text
 客户端[172.21.0.1] → 适配器 (L1)[GET /.git/config] → 核心判定[分值 0.90 · 信号 ua-headless,path-probe]
   → 决策[改道（route_mirage）] → 幻境后端[mirage]
+```
+
+验证**白名单命中**（跳过判定）时，再放开适配器白名单（容器网络里来源是网关网段）：
+
+```sh
+SHEN_VERIFY_WHITELIST=172.21.0.0/16 \
+  docker compose -f deploy/docker/compose.yaml \
+  -f deploy/docker/compose.verify-mirage.yaml up -d --build --force-recreate
+# 期望链路：客户端 → 适配器 → 白名单命中[跳过判定（INT-25）] → 业务源站（没有判定事件）
 ```
 
 ⚠️ **整栈一起起**：`core` 是网络命名空间的持有者。若某次 `up --build` 只重建了**有变化**的服务（例如 core 换了新镜像），

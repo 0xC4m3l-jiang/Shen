@@ -32,6 +32,15 @@
 | 页面 | 新逻辑已生效、无 innerHTML 拼接 | ✅ wrapCell / overflowX 存在、非注释 innerHTML 0 |
 | 门禁 | 绿 | ✅ |
 
+**补记（继续验证）**：`executed=whitelist`（白名单命中、跳过判定）也已**端到端验证**：
+
+```text
+客户端[来源未采集] → 适配器 (L1)[GET /.git/config] → 白名单命中[跳过判定（INT-25）] → 业务源站[200 · 39 字节 · 2.6ms]
+```
+
+至此 **7 个落点里 6 个已实测**（origin · cache · failopen · origin_fallback · mirage · whitelist），仅 `block` 为单测
+（它需要显式启用拦截开关）。验证配方已补进观测文档（`SHEN_VERIFY_WHITELIST=172.21.0.0/16` 放开白名单网段）。
+
 **没做 / 遗留**：① 字符预算按中英混排保守值估算，emoji 等极宽字符未精确测量（需要时用 getComputedTextLength 精确折行）；② 真机视觉检查仍未做（我无截图能力），请人工打开页面确认窄屏表现。
 
 ---
