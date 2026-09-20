@@ -29,7 +29,7 @@ def main() -> None:
     try:
         server = HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler)
     except OSError as err:  # 端口被占 / 无权限：给出人话，别丢栈
-        raise SystemExit(f"business.py: 无法监听 127.0.0.1:{sys.argv[1]}：{err}") from err
+        raise SystemExit(f"business.py: 无法监听端口 {sys.argv[1]}：{err}") from err
     server.serve_forever()
 
 

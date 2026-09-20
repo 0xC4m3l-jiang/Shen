@@ -3,6 +3,7 @@
   "backend": "mirage",
   "bytes": 8123,
   "decision_error": "",
+  "decision_id": "d-9f3c1a2b",
   "duration_ms": 4.2,
   "executed": "origin_fallback",
   "method": "GET",

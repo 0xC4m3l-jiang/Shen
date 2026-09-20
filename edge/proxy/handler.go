@@ -124,6 +124,9 @@ type Handler struct {
 
 	cache *decisionCache
 
+	// eventSeq 让逐请求事件的 id 唯一（同一 decision_id 的多条请求不再互相覆盖）。
+	eventSeq atomic.Uint64
+
 	events  chan *telemetryv1.TelemetryEvent
 	dropped atomic.Uint64
 
@@ -543,13 +546,15 @@ func (h *Handler) reportRoute(r *http.Request, id string, act judgev1.Action, in
 //
 // 字段表是**跨语言契约**（docs/spec/events.md §2.2）：夹具
 // api/telemetry/v1/testdata/request_judged_event.json 与契约测试都读它，改键必须同步三处。
-func (h *Handler) judgedEventPayload(r *http.Request, act judgev1.Action, info routeInfo) map[string]any {
+func (h *Handler) judgedEventPayload(id string, r *http.Request, act judgev1.Action, info routeInfo) map[string]any {
 	return map[string]any{
-		"method": r.Method,
-		"path":   r.URL.Path,
-		"ua":     r.UserAgent(),
-		"action": act.String(),
-		"shadow": h.Shadow,
+		// decision_id 放在**载荷里**（事件 id 改为逐请求唯一，见 enqueueEvent）：控制台靠它 join 核心判定。
+		"decision_id": id,
+		"method":      r.Method,
+		"path":        r.URL.Path,
+		"ua":          r.UserAgent(),
+		"action":      act.String(),
+		"shadow":      h.Shadow,
 		// 判定失败的原因要留下 —— 否则运营看到的是「全是放行」而不知道核心挂了。
 		"decision_error": errString(info.cause),
 		// 以下为「实际落点 + 返回信息」（图与验证页靠它们）：
@@ -565,12 +570,15 @@ func (h *Handler) enqueueEvent(r *http.Request, id string, act judgev1.Action, i
 	if h.report == nil {
 		return
 	}
-	payload, err := json.Marshal(h.judgedEventPayload(r, act, info))
+	payload, err := json.Marshal(h.judgedEventPayload(id, r, act, info))
 	if err != nil {
 		payload = nil
 	}
+	// 事件 id **逐请求唯一**（而不是等于 decision_id）：判定缓存命中的请求会共享同一个 decision_id，
+	// 若用 decision_id 当事件 id，它们会被遥测的幂等键（AR-11）折叠成一条 —— 图上就看不到"每条流量"了。
+	seq := h.eventSeq.Add(1)
 	ev := &telemetryv1.TelemetryEvent{
-		EventId:   id,
+		EventId:   fmt.Sprintf("judged:%s:%d", id, seq),
 		EventType: "request_judged",
 		Payload:   payload,
 		CreatedAt: timestamppb.New(h.now()),

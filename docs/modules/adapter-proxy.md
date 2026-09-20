@@ -270,5 +270,7 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 每次请求结束都会异步上报一条 `request_judged`（见 [`../spec/events.md`](../spec/events.md) §2.2），其中：
 
 - `executed`：**实际落点**，由纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定 —— 穷举测试在 `edge/proxy/wire_test.go`；
+- 事件信封的 `event_id` 是**逐请求唯一**（`judged:<decision_id>:<序>`），`decision_id` 放在**载荷里**：
+  判定缓存命中的多条请求共享同一 `decision_id`，若用它当事件 id 会被遥测幂等键（`AR-11`）折叠成一条 —— 图上就看不到"每条流量"了（实测踩过）；
 - `status` / `bytes` / `duration_ms`：由 `headerSanitizer` 顺带观测（它本就包住整个请求的 `ResponseWriter`，不再加一层包装）；
 - 影子模式下 `action` 可能显示 `route_mirage`（意图）而 `executed=origin`（实际）—— 这正是页面上要区分两者、避免误判"已经改道了"的原因（`INT-11`）。

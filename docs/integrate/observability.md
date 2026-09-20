@@ -74,3 +74,22 @@ JSON 接口（页面的数据源，也方便脚本化）：
 - **点卡片空白处** → 整条请求的四段详情（请求 / 判定 / 执行与返回 / 告警），`未采集` 表示该字段当前没有数据；
 - **筛选**：全部 / 只看告警 / 只看高风险 / 只看幻境与回落 / 只看源站。
 - （程序化用途仍可用 `GET /api/topology` 取聚合视图；页面不再用它。）
+
+## 6. 验证「改道 / 回落」两条分支（需要非影子模式）
+
+默认演示栈是影子模式（`INT-11`），所以图上只会出现 `放行` 与 `业务源站`。要看 `改道 → 幻境后端` 与 `幻境不可用 → 回落业务（NI-5）`：
+
+```sh
+# 验证用配置：灰度 100%（否则改道会被灰度降级为放行）+ 登记一个幻境后端
+docker compose -f deploy/docker/compose.yaml \
+  -f deploy/docker/compose.verify-mirage.yaml up -d --build
+curl -s -A "HeadlessChrome/120" http://127.0.0.1:18080/.git/config   # 0.90 ≥ 阈值 0.70 ⇒ 改道
+curl -s http://127.0.0.1:19444/api/graphs?limit=5                    # 看 executed / 链路跳数
+docker compose -f deploy/docker/compose.yaml down && \
+  docker compose -f deploy/docker/compose.yaml up -d                 # 验完恢复默认（影子）栈
+```
+
+⚠️ 该覆盖文件会让引擎**真的执行改道**（非影子），只在本机验证环境用；真实部署把后端地址换成蜜罐。
+
+**实测结论（本机）**：核心侧的改道意图（`route_mirage` + 后端名）与 `origin_fallback`（`NI-5` 回落，图上多一跳"幻境不可用"）**已端到端验证**；
+`executed=mirage`（真正进入幻境后端）**未观测到** —— 本机没有可达的蜜罐后端（借用的演示站端口在该网络命名空间里无人监听，代理日志为 `dial tcp … connection refused`）。

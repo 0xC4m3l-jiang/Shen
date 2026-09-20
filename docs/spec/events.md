@@ -61,6 +61,7 @@
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
+| `decision_id` | string | **判定 id**（与核心 `decision` 事件同键）—— 控制台用它 join；事件信封的 `event_id` 则是**逐请求唯一**（`judged:<decision_id>:<序>`），避免同判定下的多条请求被幂等键折叠 |
 | `method` / `path` / `ua` | string | 请求身份（攻击者可控，仅内部可见） |
 | `action` | string | **核心判成什么**（`ACTION_ORIGIN` / `ACTION_MIRAGE` / `ACTION_BLOCK`）—— 意图 |
 | `shadow` | bool | 是否影子模式（`INT-11`） |

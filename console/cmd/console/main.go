@@ -222,38 +222,62 @@ func (s *server) handleAnalysis(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// fetchObservations 取构建链路/图所需的**三类事件**。
+//
+// 为什么按类型分别取：一次请求产生两条事件（适配器的 request_judged 与核心的 decision），
+// 若按总条数取（limit），同一批事件可能只有一半落在窗口里 ⇒ 图上"意图"（核心判定）会整列缺失。
+func (s *server) fetchObservations(r *http.Request) (topology.Input, error) {
+	in := topology.Input{}
+	judged, err := s.fetchType(r, judgedEventType)
+	if err != nil {
+		return in, err
+	}
+	for _, ev := range judged {
+		var j topology.JudgedEvent
+		if json.Unmarshal(ev.Raw, &j) != nil {
+			continue
+		}
+		if j.DecisionID == "" {
+			j.DecisionID = ev.EventID // 旧数据的兼容路径（事件 id 曾是 decision_id）
+		}
+		j.At = ev.CreatedAt
+		in.Judged = append(in.Judged, j)
+	}
+
+	decisions, err := s.fetchType(r, decisionEventType)
+	if err != nil {
+		return in, err
+	}
+	for _, ev := range decisions {
+		var d topology.DecisionEvent
+		if json.Unmarshal(ev.Raw, &d) == nil && d.DecisionID != "" {
+			in.Decisions = append(in.Decisions, d)
+		}
+	}
+
+	analysis, err := s.fetchType(r, analysisEventType)
+	if err != nil {
+		return in, err
+	}
+	for _, ev := range analysis {
+		var a topology.AnalysisEvent
+		if json.Unmarshal(ev.Raw, &a) == nil {
+			a.At = ev.CreatedAt
+			in.Analysis = append(in.Analysis, a)
+		}
+	}
+	return in, nil
+}
+
 // handleTopology 把观测面事件聚合成**流量调度图**（只读；AR-10：控制面不参与判定）。
 //
 // 数据来源：核心的 decision 事件（意图：分值/信号/决策）+ 适配器的 request_judged 事件
 // （实际落点与返回信息）+ L4 的 analysis 事件（注解）。三者以 decision_id 关联。
 func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
-	events, err := s.fetch(r)
+	in, err := s.fetchObservations(r)
 	if err != nil {
 		writeErr(w, err)
 		return
-	}
-	in := topology.Input{}
-	for _, ev := range events {
-		switch ev.Type {
-		case decisionEventType:
-			var d topology.DecisionEvent
-			if json.Unmarshal(ev.Raw, &d) == nil && d.DecisionID != "" {
-				in.Decisions = append(in.Decisions, d)
-			}
-		case judgedEventType:
-			var j topology.JudgedEvent
-			if json.Unmarshal(ev.Raw, &j) == nil {
-				j.DecisionID = ev.EventID // 事件 id 就是 decision_id（AR-11 的幂等键）
-				j.At = ev.CreatedAt
-				in.Judged = append(in.Judged, j)
-			}
-		case analysisEventType:
-			var a topology.AnalysisEvent
-			if json.Unmarshal(ev.Raw, &a) == nil {
-				a.At = ev.CreatedAt
-				in.Analysis = append(in.Analysis, a)
-			}
-		}
 	}
 	writeJSON(w, topology.Build(in, alertScore()))
 }
@@ -261,33 +285,10 @@ func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
 // handleGraphs 返回**逐请求链路**：每个请求一条独立 DAG（不聚合），最新的在前。
 // 页面每 5 秒重新取一次，因此新流量会动态出现在最上面。
 func (s *server) handleGraphs(w http.ResponseWriter, r *http.Request) {
-	events, err := s.fetch(r)
+	in, err := s.fetchObservations(r)
 	if err != nil {
 		writeErr(w, err)
 		return
-	}
-	in := topology.Input{}
-	for _, ev := range events {
-		switch ev.Type {
-		case decisionEventType:
-			var d topology.DecisionEvent
-			if json.Unmarshal(ev.Raw, &d) == nil && d.DecisionID != "" {
-				in.Decisions = append(in.Decisions, d)
-			}
-		case judgedEventType:
-			var j topology.JudgedEvent
-			if json.Unmarshal(ev.Raw, &j) == nil {
-				j.DecisionID = ev.EventID
-				j.At = ev.CreatedAt
-				in.Judged = append(in.Judged, j)
-			}
-		case analysisEventType:
-			var a topology.AnalysisEvent
-			if json.Unmarshal(ev.Raw, &a) == nil {
-				a.At = ev.CreatedAt
-				in.Analysis = append(in.Analysis, a)
-			}
-		}
 	}
 	writeJSON(w, topology.BuildRequests(in, alertScore()))
 }

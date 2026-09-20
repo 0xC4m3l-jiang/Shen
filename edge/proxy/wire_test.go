@@ -27,7 +27,7 @@ func TestRequestJudgedWireContract(t *testing.T) {
 	h := &Handler{Shadow: false}
 	req := httptest.NewRequest("GET", "http://shop.example.com/.git/config", nil)
 	req.Header.Set("User-Agent", "HeadlessChrome/120")
-	got := h.judgedEventPayload(req, judgev1.Action_ACTION_MIRAGE, routeInfo{
+	got := h.judgedEventPayload("d-9f3c1a2b", req, judgev1.Action_ACTION_MIRAGE, routeInfo{
 		executed:   executedFallback,
 		backend:    "mirage",
 		status:     200,

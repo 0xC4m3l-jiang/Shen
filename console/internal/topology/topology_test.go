@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -108,3 +109,83 @@ func hasEdge(g Graph, from, to string) bool {
 }
 
 func nodeFallbackForTest() string { return "branch:fallback" }
+
+// TestJudgedEventUnmarshalKeepsDecisionID 守住"图能拿到判定 id"这条链路。
+//
+// 事故背景：JudgedEvent.DecisionID 曾是 `json:"-"`（id 取自事件信封），后来适配器把
+// decision_id 放进载荷、事件 id 改为逐请求唯一 —— 标签没同步，于是**图上所有"意图"整列缺失**
+// （join 落空、分值恒 0），而接口本身不报错。这个用例就是那条防线的锚点。
+func TestJudgedEventUnmarshalKeepsDecisionID(t *testing.T) {
+	payload := []byte(`{"decision_id":"d-9f3c1a2b","method":"GET","path":"/.git/config","executed":"mirage","status":200}`)
+	var j JudgedEvent
+	if err := json.Unmarshal(payload, &j); err != nil {
+		t.Fatalf("反序列化失败：%v", err)
+	}
+	if j.DecisionID != "d-9f3c1a2b" {
+		t.Fatalf("decision_id 丢了（标签可能还是 json:\"-\"）：%q", j.DecisionID)
+	}
+	if j.Executed != "mirage" || j.Path != "/.git/config" {
+		t.Fatalf("其余字段也不对：%+v", j)
+	}
+	// 并且 join 必须真的成功：有配对判定时，图上的分值/信号/意图都要出现。
+	g := BuildRequests(Input{
+		Judged:    []JudgedEvent{j},
+		Decisions: []DecisionEvent{{DecisionID: "d-9f3c1a2b", Action: ActionMirage, Score: 0.9, Signals: []string{"ua-headless"}}},
+	}, 0.9)
+	if len(g) != 1 || g[0].Action != ActionMirage || g[0].Score != 0.9 {
+		t.Fatalf("join 失败：%+v", g)
+	}
+}
+
+// TestDecisionPayloadUsesDesignTerms 用**真实载荷形状**（snake_case + 设计术语 action）验证图：
+// 决策标签要说"改道"，block 要计真实告警，影子模式判断要正确。
+//
+// 事故背景：常量曾用枚举名（ACTION_MIRAGE），而载荷是 route_mirage ⇒ 标签恒"放行"、告警恒 0。
+func TestDecisionPayloadUsesDesignTerms(t *testing.T) {
+	judged := []byte(`{"decision_id":"d1","method":"GET","path":"/.git/config","executed":"origin","shadow":true}`)
+	decision := []byte(`{"decision_id":"d1","action":"route_mirage","severity":"none","score":0.9,"signals":["ua-headless"],"method":"GET","path":"/.git/config","source_ip":"203.0.113.9"}`)
+	var j JudgedEvent
+	var d DecisionEvent
+	if err := json.Unmarshal(judged, &j); err != nil {
+		t.Fatalf("judged: %v", err)
+	}
+	if err := json.Unmarshal(decision, &d); err != nil {
+		t.Fatalf("decision: %v", err)
+	}
+	g := BuildRequests(Input{Judged: []JudgedEvent{j}, Decisions: []DecisionEvent{d}}, 0.9)
+	if len(g) != 1 {
+		t.Fatalf("应有一条链路：%+v", g)
+	}
+	rg := g[0]
+	if rg.Action != ActionMirage {
+		t.Fatalf("意图应为 %s，实际 %q", ActionMirage, rg.Action)
+	}
+	found := false
+	for _, n := range rg.Chain {
+		if n.ID == "decision" {
+			found = true
+			if n.Value != "改道（route_mirage）" {
+				t.Fatalf("决策节点应显示改道，实际 %q", n.Value)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("链路里应有决策节点")
+	}
+	if rg.RealAlert {
+		t.Fatal("severity=none 且非 block ⇒ 不应计真实告警")
+	}
+	if !rg.HighRisk {
+		t.Fatal("score=0.9 ≥ 阈值 ⇒ 应计高风险（仅显示）")
+	}
+
+	// block ⇒ 真实告警
+	var blocked DecisionEvent
+	if err := json.Unmarshal([]byte(`{"decision_id":"d2","action":"block","severity":"none","score":0.99}`), &blocked); err != nil {
+		t.Fatalf("blocked: %v", err)
+	}
+	g2 := BuildRequests(Input{Judged: []JudgedEvent{{DecisionID: "d2", Executed: "block"}}, Decisions: []DecisionEvent{blocked}}, 0.9)
+	if len(g2) != 1 || !g2[0].RealAlert {
+		t.Fatalf("action=block 应计真实告警：%+v", g2)
+	}
+}

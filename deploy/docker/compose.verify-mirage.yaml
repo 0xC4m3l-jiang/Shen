@@ -1,0 +1,22 @@
+# 验证覆盖文件：用于**真实验证改道（幻境）与回落分支**，让 DAG 上出现"幻境后端"与"幻境不可用→回落"两种节点。
+#
+# 用法（不要与默认栈同时起）：
+#   docker compose -f deploy/docker/compose.yaml \
+#     -f deploy/docker/compose.verify-mirage.yaml up -d --build
+#   curl -s -A "HeadlessChrome/120" \
+#     http://127.0.0.1:18080/.git/config      # 分值 0.90 ≥ 阈值 0.70 ⇒ 改道
+#   curl -s http://127.0.0.1:19444/api/graphs?limit=10
+#     # 应看到 executed=mirage
+#
+# ⚠️ 这会让引擎**真的执行改道**（非影子模式）——只在本机验证环境使用。
+services:
+  core:
+    volumes:
+      - ../config/config.verify-mirage.yaml:/etc/shen/config.yaml:ro
+  proxy:
+    environment:
+      SHEN_PROXY_SHADOW: "false"      # 关闭影子：把判定真正执行出去（INT-11 只在首次上线要求影子）
+      SHEN_PROXY_POLICY_INTERVAL: 5s  # 加快策略拉取，便于验证后端表下发
+      # 本地兜底的后端表（ADR-0018：远端策略优先、本地配置兜底）。真实部署把地址换成蜜罐。
+      # 指向演示站端口只是为了"转发成功"，验证 DAG 上的「幻境后端」分支。
+      SHEN_PROXY_MIRAGE: "mirage=http://127.0.0.1:19080"

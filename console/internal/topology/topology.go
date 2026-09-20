@@ -31,17 +31,23 @@ const (
 	NodeL4        = "analysis"
 )
 
-// 事件里的 action 取值（核心侧枚举的字符串形式）。
+// 事件里的 action 取值 —— 注意是**设计术语**（terminology.md §4），不是 protobuf 枚举名。
+//
+// 事故背景：这里曾写成 "ACTION_MIRAGE"/"ACTION_BLOCK"（枚举名），而核心的 decision 载荷用的是
+// route_mirage/block ⇒ 决策标签恒显示"放行"、告警永远数不到、影子判断也失效。
+// 契约见 docs/spec/events.md §2（decision 载荷的 action 字段）。
 const (
-	ActionMirage = "ACTION_MIRAGE"
-	ActionBlock  = "ACTION_BLOCK"
+	ActionOrigin = "route_origin"
+	ActionMirage = "route_mirage"
+	ActionBlock  = "block"
 )
 
 // JudgedEvent 是适配器上报的一次请求执行结果（request_judged）。
 // 注意 JSON 标签与契约严格对齐（docs/spec/events.md §2.2）：键名漂移图就会画错。
-// DecisionID 与 At 不在载荷里（前者是事件信封的 event_id，后者是 created_at），由调用方填。
+// DecisionID **在载荷里**（适配器事件信封的 event_id 已改为逐请求唯一，见 docs/spec/events.md §2.2）；
+// At 仍来自信封的 created_at，由调用方填。标签必须与载荷键一致，否则图上"意图"整列会缺失。
 type JudgedEvent struct {
-	DecisionID    string    `json:"-"`
+	DecisionID    string    `json:"decision_id"`
 	At            time.Time `json:"-"`
 	Method        string    `json:"method"`
 	Path          string    `json:"path"`
@@ -617,7 +623,7 @@ func originWhy(rg RequestGraph) string {
 
 // executedOriginBecauseShadow 判断"落在源站"是否因为影子模式（意图不是放行时才有意义）。
 func (rg RequestGraph) executedOriginBecauseShadow() bool {
-	return rg.Action != "" && rg.Action != "ACTION_ORIGIN"
+	return rg.Action != "" && rg.Action != ActionOrigin
 }
 
 // actionLabel 把核心的三值决策转成人话（与页面其余部分一致）。

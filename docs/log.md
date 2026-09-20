@@ -9,6 +9,41 @@
 
 ---
 
+## 2026-09-20 · DAG 图示收口（逐请求唯一事件 · 真实落点可观测 · 判定标签修正）
+
+**做了什么**：把 DAG 图示"完成"到可用，并在实跑中修掉**四个真缺陷**（都属"自洽但错"类，只有真实验证才暴露）：
+① **同判定下的多条请求被折叠**：适配器事件的幂等键原为 decision_id，判定缓存命中的请求共享同一 id ⇒ 遥测侧（AR-11）把三条请求合成一条，与"每条流量单独成图"直接冲突。改为事件 id **逐请求唯一**（judged:decision_id:序），decision_id 放进载荷供 join；实测同路径三条 → **三条独立链路**。
+② **意图整列缺失（join 落空）**：控制台按总条数取事件，而一次请求产生两份事件（适配器的 request_judged + 核心的 decision），同一窗口放不下 ⇒ 图上"核心判定"分值恒 0、意图空白。改为**按类型分别取数再合并**（fetchObservations）。
+③ **判定 id 被 JSON 标签丢弃**：`JudgedEvent.DecisionID` 仍是 `json:"-"`（早期设计：id 取自事件信封）⇒ 载荷里的 decision_id 被忽略、join 必然失败。我上一版补丁"报告成功"其实没匹配上 —— **新加的单测当场抓到**（`decision_id 丢了`）。
+④ **常量用枚举名、载荷用设计术语**：常量写成 `ACTION_MIRAGE`，而核心 decision 载荷的 action 是 `route_mirage`/`block`（设计术语）⇒ 决策节点恒显示"放行"、真实告警恒 0、影子判断失效。改为设计术语，并新增**真实载荷**用例（旧测试自己也用枚举名构造输入，所以自洽但错）。
+⑤ **验证配方入库**：新增 `deploy/config/config.verify-mirage.yaml` 与 `deploy/docker/compose.verify-mirage.yaml`（非影子 + 灰度 100% + 幻境后端表），用于复验改道/回落分支；文件头有醒目警告（会真的执行改道）。
+⑥ **实测结论**（验证配置下）：核心侧改道意图 `route_mirage` + 后端名、以及 `origin_fallback`（NI-5 回落，链路多一跳"幻境不可用"，代理日志 `dial tcp 127.0.0.1:19080: connection refused`）**均端到端验证**；`origin` / `cache` / `failopen` 也已实测。**`executed=mirage` 与 `whitelist` 未观测到**（本机没有可达的蜜罐后端；whitelist 仅单测），已在文档与变更包中如实标注。
+⑦ 验完已**恢复默认（影子）栈**，避免危险配置留在运行环境。
+
+**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/wire_test.go` · `api/telemetry/v1/testdata/request_judged_event.json` ·
+`console/internal/topology/topology.go` · `console/internal/topology/topology_test.go` · `console/cmd/console/main.go` ·
+`deploy/config/config.verify-mirage.yaml`（新增）· `deploy/docker/compose.verify-mirage.yaml`（新增）·
+`docs/spec/events.md` · `docs/modules/adapter-proxy.md` · `docs/integrate/observability.md` · `docs/ops/functional-verification.md`
+
+**对应文档**：`docs/plans/2026-09-20-dag-completion.md`（含追溯矩阵与审视 6 条）· `docs/integrate/observability.md` §5/§6
+
+**验证**：`make gate` 通过；逐请求接口与控制台链路对 Docker 栈实跑；单测 6 例（含真实载荷与 join）。
+
+**证据**：
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 同路径 3 条请求 | 3 条独立链路 | ✅ 3 条（含 2 条 executed=cache） |
+| 核心侧改道意图 | intent=route_mirage + 后端名 | ✅ |
+| 幻境不可用回落 | executed=origin_fallback + 链路含"幻境不可用" | ✅（代理 502 dial refused） |
+| 判定失败放行 | executed=failopen + 原因 | ✅ |
+| 决策标签 | 显示改道/放行（不再恒放行） | ✅ 决策[改道（route_mirage）] |
+| 真进入幻境后端 | executed=mirage | ⚠️ 未观测到（本机无可用后端，如实登记） |
+| 门禁 | 绿 | ✅ |
+
+**没做 / 遗留**：① `executed=mirage` 与 `whitelist` 未实测（需一个真实可达的蜜罐后端）；② `--check-graph` 一致性断言仍未实现；③ 验证配置含 `shadow: false`（危险设置，仅验证用，已加警告）；④ 事件 id 形态变化对旧数据靠控制台兼容路径兜住。
+
+---
+
 ## 2026-09-20 · DAG 逐步可点：每一步看「请求 / 响应 / 为什么执行」
 
 **做了什么**：用户要"DAG 图每一步都能点开，看该步对应的请求信息、返回是什么、以及为什么会执行到这一步，方便整理哪儿要优化"。落地：
