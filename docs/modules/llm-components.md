@@ -7,7 +7,7 @@
 | 实现语言 | `Python`（依据 [`../design/language.md`](../design/language.md) §1 与 `TB-2`） |
 | 负责人 | — |
 | 状态 | ✅ **已实现（框架 + 确定性部分）**（阶段 3，Python）：契约（`AR-15`/`AR-16`/`AR-17`）· 长度（`AR-18`/`AR-23`）· 超时（`AR-19`…`AR-21`）· 内容（`AR-22`/`AR-24`）· 注入防护（`AR-31`/`AR-32`） |
-| 最后更新 | 2026-09-19 |
+| 最后更新 | 2026-09-20 |
 
 ---
 
@@ -19,8 +19,6 @@
   列表硬截断（`AR-18`）；
 - **超时纪律**：双阶段收尾（`AR-19` / `AR-20` / `AR-21`）；
 - **内容纪律**：生成内容黑名单（`AR-22`）、分用途长度上限（`AR-23`）、话术与提示词资源化（`AR-24`）；
-  已登记用途：`session_response` 2000 · `conclusion` 8000 · `intermediate` 20000 · `deception_content` 65536
-  （后者供 `ai-capability` 的欺骗内容使用，见 [ADR-0023](../background/decisions/0023-deception-content-injection.md)）；
   已登记用途：`session_response` 2000 · `conclusion` 8000 · `intermediate` 20000 · `deception_content` 65536
   （后者供 `ai-capability` 的欺骗内容使用，见 [ADR-0023](../background/decisions/0023-deception-content-injection.md)）；
 - **间接注入防护**（[ADR-0015](../background/decisions/0015-indirect-prompt-injection.md)）：
@@ -59,6 +57,20 @@
 | **任何执行能力**（命令执行 / 网络外呼 / 载荷生成） | `SB-1` / `SB-2` / `AR-32` |
 | `judge` / `director` 的判定与决策逻辑 | `AR-2` / `MD-12`；依赖方向单向 |
 | 判定缓存 / 响应路径 | 分析结论**禁止**直接回写响应（`AR-32`） |
+
+**复用候选（尚未引入 —— 不是已批准的依赖）**：本模块的 6 项手写能力已逐项对过开源实现，
+详见 [`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md) §3.1。
+判据与边界在 [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md)：
+**只看默认行为是否 fail-closed，不看功能表**。据此：
+
+| 能力 | 候选 | 为什么现在**不**引 |
+| --- | --- | --- |
+| `AR-17` 三段式 JSON 容错提取（`llm/extract.py`） | `json_repair`（MIT，5.1k★） | 它有 `strict=True`（遇结构问题抛错，与 `AR-15`/`AR-21` 同向）⇒ **唯一「默认行为就能对齐」的候选**；但要先做行为对齐测试（markdown 围栏样本），见 ADR-0024 失效条件 1 |
+| `AR-15` 契约校验（`llm/contract.py`） | `pydantic` / `jsonschema` / `msgspec` | `pydantic` 默认 lax 模式**强制转换**（`'123'` → `123`），与 `AR-15`「禁止修正、禁止默认值」正面冲突 |
+| `AR-22` 黑名单三类（`llm/blacklist.py`） | Presidio（MIT）· detect-secrets（Apache-2.0） | 二者都只是**识别器**（要额外模型与依赖面）；`AR-22` 的处置语义仍须在本模块做 ⇒ 阶段 B 再引 |
+| `AR-24` 提示词资源化（`llm/prompts.py`） | `jinja2`（BSD-3） | 模板里可写表达式与过滤器，与 `AR-31`（指令区 / 数据区严格分离）的精神相反 |
+| `AR-19`…`AR-21` 双阶段收尾（`llm/twophase.py`） | `tenacity`（Apache-2.0） | 它解决的是**重试**；本项目要的是「超时后**复用同一会话**收尾，两阶段皆失败则整体作废」—— 语义相反 |
+| `AR-31` / `AR-32` 注入防护（`untrusted.py` / `client.py`） | **无对口实现** | 见过的「提示注入检测器」都在做**分类**（像不像攻击），而 `AR-31` 要的是**结构断言**（数据有没有只在数据区）；本项的价值是「**不用**执行能力」，不是「用了谁」 |
 
 > 规则 `TB-24`：跨语言**禁止** FFI / CGO / 共享内存；**必须**经 wire format（gRPC / Protobuf）通信。
 
@@ -119,6 +131,8 @@
 | 2 | 注入样本测试集的构建 | 回归保障 | 同上 |
 | 3 | `strategy` 生成策略时的注入面 | 策略链路安全 | [`strategy.md`](strategy.md)（已实现：只出数据、经 `policy` 下发） |
 | 4 | 预生成内容的触发时机与规模 | LLM 成本 | [ADR-0014](../background/decisions/0014-generative-deceptive-response.md) |
+| 5 | 6 项手写能力能否换成开源实现（`json_repair` 等） | 本模块的自研维护成本 | 调研已做：[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md)；判据与失效条件在 [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md)。**落地要等行为对齐测试**（本轮不改代码） |
+| 6 | `AR-22` 泄露类拟改用 Presidio 的识别器（本模块只保留处置语义） | 泄露类覆盖度 | 同上 §3.2；阶段 B，需先量离线模型体积 |
 
 ## 9. 变更记录
 
@@ -126,3 +140,4 @@
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：LLM 契约纪律 + 间接注入防护 + 内容预生成 | [ADR-0015](../background/decisions/0015-indirect-prompt-injection.md) · [`../design/architecture.md`](../design/architecture.md) §5（`AR-15`…`AR-27`） |
 | 2026-09-20 | 新增长度用途 `deception_content`（65536），供 `ai-capability` 的欺骗内容使用；本层增加第二个消费者（仍**只能**经 `ai-capability` 的护栏出口，`AR-33`） | [`../plans/2026-09-20-ai-capability-guardrail.md`](../plans/2026-09-20-ai-capability-guardrail.md) · [ADR-0023](../background/decisions/0023-deception-content-injection.md) |
+| 2026-09-20 | §3 增「复用候选」表（逐项写明为什么不引）· §8 增未决项 5/6 · 删 §1 中重复的一段「已登记用途」（同一段写了两次） | [`../plans/2026-09-20-ai-oss-reuse.md`](../plans/2026-09-20-ai-oss-reuse.md) · [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) |

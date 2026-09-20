@@ -9,6 +9,71 @@
 
 ---
 
+## 2026-09-20 · AI 能力层的开源复用审查 + Python 依赖许可审计面（`TB-16` 的实现缺口）
+
+**做了什么**：把阶段 A 的 AI 代码（`analysis/llm` 9 模块 + `analysis/aicap` 9 模块，除 `PyYAML` 外零第三方依赖）
+逐项对到开源实现上：**15 个候选**的许可逐字核验（仓库 `LICENSE` 正文，不是二手文章），
+得出**6 处功能重叠 · 12 处开源侧无对等物 · 2 个候选已归档**（`llm-guard` 与 `PyRIT` —— 均禁止引入，仓库地址见调研材料 §1）。
+给出**可判的复用判据**：只看**默认行为是否 fail-closed**，不看功能表 —— 据此 `pydantic` 默认强制转换、
+`guardrails-ai` 默认 `fix`、`json_repair` 默认 repair 三者都与 `AR-15` 相反，
+只有 `json_repair(strict=True)` 是「默认行为就能对齐」的候选。判据与失效条件写成 [ADR-0024](background/decisions/0024-ai-oss-reuse-boundary.md)。
+
+同时发现并补上**一个更严重的缺口**：`make licensecheck` 原来只审 Go 模块（`go list -deps` 反推），
+`analysis/requirements.txt` 的运行期依赖**没有审计面** —— 而 `TB-16` 要求「依赖必须经许可与漏洞审计」，
+ADR-0023 的未解决 1/2（模型后端、PII 检测）正卡在「先过许可证台账」上。现在它审**两类**：
+Python 侧依赖集合取锁文件的**运行期传递闭包**（实测比直接依赖多一条：`grpcio` → `typing-extensions`）、
+许可声明取已安装发行版的 `*.dist-info/METADATA`（离线）、**锁文件与环境版本不一致即失败**。
+顺带清掉 `llm-components.md` §1 的两行重复段（同一段写了两遍）。
+**`analysis/` 的代码零改动** —— 复用是阶段 B 的动作（ADR-0024 决定 3）。
+
+**改了哪些文件**：新增 `docs/background/research/ai-oss-reuse.md` · `docs/background/decisions/0024-ai-oss-reuse-boundary.md` ·
+`docs/plans/2026-09-20-ai-oss-reuse.md` · `scripts/licensecheck/python.go`；
+修改 `scripts/licensecheck/main.go` · `scripts/licensecheck/README.md` · `docs/spec/dependencies.md`（重新生成）·
+`docs/modules/llm-components.md` · `docs/modules/ai-capability.md` · `docs/kb/known-issues.md`（`K-25` / `K-26`）·
+`docs/background/research/README.md` · `docs/background/decisions/README.md` · `.gitignore`（`/.vscode/` —— 个人编辑器配置，经用户确认后忽略）。
+
+**对应文档**：`docs/plans/2026-09-20-ai-oss-reuse.md`（含追溯矩阵与审视 8 条）·
+`docs/background/research/ai-oss-reuse.md` · `docs/background/decisions/0024-ai-oss-reuse-boundary.md` ·
+`docs/spec/dependencies.md`（生成物）· `scripts/licensecheck/README.md`。
+
+**验证**：`make gate` 通过 · `make dev` 通过。`make trace` 在本轮抓到了**两处我自己写出来的**文档缺陷，已改：
+① 引用了**一条不存在的规则 ID**（预占编号）→ 改为「编号由用户定」；
+② 变更日志里两个**含斜杠**的仓库名被当成**相对路径**校验（`DEV-2`）→ 改用完整 URL。
+`make licensecheck`：Go 模块 **158** 个 · Python 运行期依赖 **4** 个，许可全部允许。
+**构造性反证 7 例**（AGPL 必须被拦 · 表达式 `AND` 取最严 · 缺发行版 / 版本不一致 / 传递依赖缺席 必须失败 ·
+认不出的标识符必须报「需人工判定」· 锁文件非 `==` 行必须报错）全部按预期失败（退出码非零）。
+
+**证据**：
+
+```console
+$ make licensecheck
+依赖许可审计：Go 模块 158 个（参与构建）· Python 运行期依赖 4 个（含传递闭包）
+
+Python 运行期依赖（4）
+  ✓ PyYAML                    MIT           允许
+  ✓ grpcio                    Apache-2.0    允许
+  ✓ protobuf                  BSD-3-Clause  允许
+  ✓ typing_extensions         PSF-2.0       允许
+
+许可审计通过：没有传染性或限制性许可。
+
+$ make dev
+✅ 通过：配置校验 · 非法配置被拒 · 启动 · 判定面 · 冒烟 · 规则回放 · L4 近线分析
+```
+
+**真实撞到的一次漂移**（新检查当天就报了）：`protobuf` 锁在 `7.36.2`、环境里还是 `7.35.1` ⇒
+门禁红并指向 `make pyenv`；同步后转绿。规则写进 `K-26`。
+
+**没做 / 遗留**：① 三项 `✅ 可复用` **未实测**（只核了许可与文档）—— 落地前要做行为对齐测试，
+其中 `json_repair(strict=True)` 能不能覆盖 markdown 围栏（`AR-17` 的第 ② 段）是未决项；
+② `Faker` vs `Mimesis` 未做基准；③ 开发期依赖（`ruff`/`pytest`/`grpcio-tools`）有意不进台账（同 Go 侧口径），
+但**没有检查强制**它；④ 消费者侧（`intent`/`chain`/`strategy`/`worker`）与跨语言侧未审，另开一份材料；
+⑤ `scripts/licensecheck/` 仍无 Go 单测（回归保护靠门禁每次实跑 + 本轮的反证，夹具未入仓）；
+⑥ 复用判据尚未升格为 `design/` 规则（本轮**不**预占规则编号）。
+去向：`docs/plans/2026-09-20-ai-oss-reuse.md` §7 与 [ADR-0024](background/decisions/0024-ai-oss-reuse-boundary.md)。
+
+---
+
 ## 2026-09-20 · archcheck 对非 Go 模块改用「目录 + 文件」判定（提示去噪）
 
 **做了什么**：`make archcheck` 的「清单里有、代码尚未实现的模块目录」提示先前把 **9 个**模块全列进去了 ——

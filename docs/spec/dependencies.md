@@ -4,6 +4,8 @@
 > 依据 `TB-16`（依赖必须经许可与漏洞审计）。审计逻辑见 [`../../scripts/licensecheck/`](../../scripts/licensecheck/)；
 > 门禁项见 `make gate`。
 
+## 1. Go 模块（参与构建）
+
 | 模块 | 版本 | 许可 | 判定 | 说明 |
 | --- | --- | --- | --- | --- |
 | `cel.dev/expr` | v0.25.2 | Apache-2.0 | 允许 | 宽松，需保留声明 |
@@ -167,6 +169,20 @@
 
 **判定口径**：只审**真正参与构建**的模块（`go list -deps` 反推），
 完整模块图里的间接依赖不进二进制，不需要审。
+
+## 2. Python 运行期依赖（L4 分析层）
+
+| 发行版 | 版本 | 许可 | 判定 | 说明 |
+| --- | --- | --- | --- | --- |
+| `PyYAML` | 6.0.3 | MIT | 允许 | 宽松，需保留声明（取自 Classifier） |
+| `grpcio` | 1.84.0 | Apache-2.0 | 允许 | 宽松，需保留声明（取自 License-Expression） |
+| `protobuf` | 7.36.2 | BSD-3-Clause | 允许 | 宽松，禁止用作者名背书（取自 License） |
+| `typing_extensions` | 4.16.0 | PSF-2.0 | 允许 | 宽松（取自 License-Expression） |
+
+**判定口径**：从 `analysis/requirements.txt` 出发的**运行期传递闭包**；
+开发期依赖（`analysis/requirements-dev.txt`）不进交付物，与 Go 侧同口径不审。
+许可声明取自已安装发行版的 `*.dist-info/METADATA`（`License-Expression` > `Classifier` > `License`）；
+锁文件与环境的版本不一致即失败 —— 不允许拿 A 版本的元数据审定 B 版本的许可。
 
 认不出的许可一律报「需人工判定」并让门禁失败 —— 许可识别错的代价是法律风险，
 比构建失败严重得多，因此宁可多报一次。

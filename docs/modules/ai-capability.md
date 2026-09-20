@@ -67,6 +67,14 @@
 > `MD-4` 依赖方向单向；`MD-6` 的「核心模块禁止外呼」不适用本模块（它不是核心模块），
 > 但**它同样禁止在生成期依赖系统时钟做判定**：`generated_at` 只作审计，不参与任何决策。
 
+**复用候选（尚未引入 —— 不是已批准的依赖）**：本模块的两处手写生成能力已对过开源实现，
+判据与边界见 [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md)（**只看默认行为是否 fail-closed**）：
+
+| 能力 | 候选 | 为什么现在**不**引 |
+| --- | --- | --- |
+| `AR-33` 唯一出口 + 任务注册表 + 启动期断言（`service.py` / `tasks/_registry.py`） | `guardrails-ai` · `NeMo Guardrails`（均 Apache-2.0） | 两者都是「框架 + Hub + 服务端」形态，而本模块要的是「一个函数 + 启动期断言 + 门禁结构检查」；`guardrails-ai` 的 `fix` / `reask` 动作与 `AR-15`（禁止修复后放行）直接冲突，且框架会进调用图 ⇒ **`AR-33` 的机器判据失效** |
+| 阶段 A 的确定性模板生成器（`tasks/content.py`） | `Faker`（MIT，19.4k★）· `Mimesis`（MIT） | 两者都有 `seed()` ⇒ **可满足 `AR-30` 的确定性要求**；但落地属阶段 B（与真实模型后端一起做），且需先验 `seed()` 的跨版本稳定性（ADR-0024 失效条件 5） |
+
 ## 4. 关键规则
 
 | 规则 | 与本模块的关系 |
@@ -131,8 +139,8 @@
 
 | # | 未决 | 阻塞什么 | 去向 |
 | --- | --- | --- | --- |
-| 1 | 模型后端与结构化输出框架（Outlines / Instructor 等） | 阶段 B 的生成质量与多样性 | [ADR-0023](../background/decisions/0023-deception-content-injection.md) 未解决 1 |
-| 2 | PII / 泄露检测（Presidio 类） | `AR-22` 泄露类的覆盖度 | 同上 2 |
+| 1 | 模型后端与结构化输出框架（Outlines / Instructor 等） | 阶段 B 的生成质量与多样性 | [ADR-0023](../background/decisions/0023-deception-content-injection.md) 未解决 1；**调研与许可已做**（[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md) §3.3），判据在 [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) —— 本项仍需在阶段 B 单独评估（含出网风险） |
+| 2 | PII / 泄露检测（Presidio 类） | `AR-22` 泄露类的覆盖度 | 同上 2；调研已确认 Presidio 为 MIT、仓库已迁至 `data-privacy-stack/presidio`；**别名 `detect-secrets` 的 `protectai/llm-guard` 已归档，禁止引入**（同上 §3.2） |
 | 3 | 风格画像的来源（真实站点采样 → 去敏 → 入库） | 内容「像不像」 | 同上 3 |
 | 4 | 轮换与识破信号的接线（`strategy` → 清单版本 +1） | 被识破后的自愈 | 同上 4 |
 | 5 | 清单纯量上限与分片拉取接口 | 内容规模 | 同上 5 |
@@ -143,3 +151,4 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | 2026-09-20 | 首版：阶段 A（通路 · 开关 · 强制护栏）—— 唯一出口 `generate` · 任务注册表 · 三段式提示词 · 四关后置校验 · 内容对象与清单 · 确定性模板生成器 | 用户确认新增模块（`AR-33`）+ [ADR-0023](../background/decisions/0023-deception-content-injection.md) |
+| 2026-09-20 | §3 增「复用候选」表 · §8 未决项 1/2 补上调研结论与已归档禁用项（本轮**不改代码**） | [`../plans/2026-09-20-ai-oss-reuse.md`](../plans/2026-09-20-ai-oss-reuse.md) · [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) |

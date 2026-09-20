@@ -277,30 +277,55 @@ type row struct {
 	Verdict verdict
 	Note    string
 	Files   []string
-	Own     bool // 本项目自身：它没有许可证不是「依赖问题」
+	Lang    string // langGo / langPython：台账里分节，审计里分组
+	Own     bool   // 本项目自身：它没有许可证不是「依赖问题」
 }
+
+// 依赖来源的语言标签。台账与审计输出按它分节 —— 两类的判定口径不同，混在一张表里说不清。
+const (
+	langGo     = "go"
+	langPython = "python"
+)
 
 func main() {
 	ledger := flag.Bool("ledger", false, "输出 markdown 台账到标准输出，不做审计")
+	pyLock := flag.String("py-lock", "analysis/requirements.txt", "Python 运行期依赖的锁文件")
+	pyVenv := flag.String("py-venv", "analysis/.venv", "Python 虚拟环境目录（读已安装发行版的元数据）")
 	flag.Parse()
 
 	mods, err := buildModules()
 	if err != nil {
 		fail("枚举依赖失败：%v", err)
 	}
+	goRows := goModuleRows(mods)
 
+	// Python 侧失败 = 审计未执行完毕 = 门禁失败（见 python.go 文件头设计决策 1/3）。
+	pyRowList, err := pyRows(*pyLock, *pyVenv)
+	if err != nil {
+		fail("Python 依赖审计未完成：%v", err)
+	}
+
+	if *ledger {
+		printLedger(goRows, pyRowList)
+		return
+	}
+	audit(goRows, pyRowList)
+}
+
+// goModuleRows 把 Go 模块枚举结果转成审计行。
+func goModuleRows(mods []buildModule) []row {
 	var rows []row
 	for _, m := range mods {
 		if m.Own {
 			rows = append(rows, row{
-				Module: m.Path, Version: "（本项目）", License: "未声明", Own: true,
+				Module: m.Path, Version: "（本项目）", License: "未声明", Own: true, Lang: langGo,
 				Verdict: unknown, Note: "本项目自身尚无 LICENSE 文件；属产品决策，交付前必须定",
 			})
 			continue
 		}
 		if m.Dir == "" {
 			rows = append(rows, row{
-				Module: m.Path, Version: m.Version, License: "未知",
+				Module: m.Path, Version: m.Version, License: "未知", Lang: langGo,
 				Verdict: unknown, Note: "模块未下载到本地缓存，无法判定",
 			})
 			continue
@@ -310,36 +335,40 @@ func main() {
 			id = "未识别"
 		}
 		rows = append(rows, row{
-			Module: m.Path, Version: m.Version, License: id,
+			Module: m.Path, Version: m.Version, License: id, Lang: langGo,
 			Verdict: v, Note: why, Files: files,
 		})
 	}
+	return rows
+}
 
-	if *ledger {
-		printLedger(rows)
-		return
-	}
+// audit 打印审计结果并决定退出码。
+func audit(goRows, pyRows []row) {
+	fmt.Printf("依赖许可审计：Go 模块 %d 个（参与构建）· Python 运行期依赖 %d 个（含传递闭包）\n\n",
+		len(goRows), len(pyRows))
 
-	// 审计模式：本项目自身缺 LICENSE 只提示、不失败（不是 TB-16 的管辖范围）
+	// 本项目自身缺 LICENSE 只提示、不失败（不是 TB-16 的管辖范围）
 	var bad []row
-	for _, r := range rows {
-		if r.Verdict != ok && !r.Own {
-			bad = append(bad, r)
+	for _, group := range []struct {
+		title string
+		rows  []row
+	}{{"Go 模块", goRows}, {"Python 运行期依赖", pyRows}} {
+		fmt.Printf("%s（%d）\n", group.title, len(group.rows))
+		for _, r := range group.rows {
+			mark := "✓"
+			if r.Verdict != ok {
+				mark = "✗"
+			}
+			fmt.Printf("  %s %-52s %-16s %s\n", mark, r.Module, r.License, r.Verdict)
+			if r.Verdict != ok {
+				fmt.Printf("      %s\n", r.Note)
+				if !r.Own {
+					bad = append(bad, r)
+				}
+			}
 		}
+		fmt.Println()
 	}
-
-	fmt.Printf("依赖许可审计：%d 个模块参与构建\n\n", len(rows))
-	for _, r := range rows {
-		mark := "✓"
-		if r.Verdict != ok {
-			mark = "✗"
-		}
-		fmt.Printf("  %s %-52s %-14s %s\n", mark, r.Module, r.License, r.Verdict)
-		if r.Verdict != ok {
-			fmt.Printf("      %s\n", r.Note)
-		}
-	}
-	fmt.Println()
 
 	if len(bad) > 0 {
 		fmt.Fprintf(os.Stderr, "许可审计发现 %d 个问题：\n\n", len(bad))
@@ -348,31 +377,47 @@ func main() {
 				r.Module, r.Version, r.Verdict, r.Note)
 		}
 		fmt.Fprintln(os.Stderr, "禁止的许可必须换依赖；「需人工判定」的经评审确认后加入")
-		fmt.Fprintln(os.Stderr, "scripts/licensecheck 的白名单，并在注释里写清依据。")
+		fmt.Fprintln(os.Stderr, "scripts/licensecheck 的登记表（Go 侧 signatures · Python 侧 spdxVerdicts），")
+		fmt.Fprintln(os.Stderr, "并在注释里写清依据。")
 		os.Exit(1)
 	}
 	fmt.Println("许可审计通过：没有传染性或限制性许可。")
 }
 
-func printLedger(rows []row) {
+func printLedger(goRows, pyRows []row) {
 	fmt.Println("# 依赖许可台账")
 	fmt.Println()
 	fmt.Println("> ⚠️ **本文件由 `make license-ledger` 生成，禁止手改。**")
 	fmt.Println("> 依据 `TB-16`（依赖必须经许可与漏洞审计）。审计逻辑见 [`../../scripts/licensecheck/`](../../scripts/licensecheck/)；")
 	fmt.Println("> 门禁项见 `make gate`。")
 	fmt.Println()
-	fmt.Println("| 模块 | 版本 | 许可 | 判定 | 说明 |")
+	fmt.Println("## 1. Go 模块（参与构建）")
+	fmt.Println()
+	printTable("模块", goRows)
+	fmt.Println()
+	fmt.Println("**判定口径**：只审**真正参与构建**的模块（`go list -deps` 反推），")
+	fmt.Println("完整模块图里的间接依赖不进二进制，不需要审。")
+	fmt.Println()
+	fmt.Println("## 2. Python 运行期依赖（L4 分析层）")
+	fmt.Println()
+	printTable("发行版", pyRows)
+	fmt.Println()
+	fmt.Println("**判定口径**：从 `analysis/requirements.txt` 出发的**运行期传递闭包**；")
+	fmt.Println("开发期依赖（`analysis/requirements-dev.txt`）不进交付物，与 Go 侧同口径不审。")
+	fmt.Println("许可声明取自已安装发行版的 `*.dist-info/METADATA`（`License-Expression` > `Classifier` > `License`）；")
+	fmt.Println("锁文件与环境的版本不一致即失败 —— 不允许拿 A 版本的元数据审定 B 版本的许可。")
+	fmt.Println()
+	fmt.Println("认不出的许可一律报「需人工判定」并让门禁失败 —— 许可识别错的代价是法律风险，")
+	fmt.Println("比构建失败严重得多，因此宁可多报一次。")
+}
+
+func printTable(firstCol string, rows []row) {
+	fmt.Printf("| %s | 版本 | 许可 | 判定 | 说明 |\n", firstCol)
 	fmt.Println("| --- | --- | --- | --- | --- |")
 	for _, r := range rows {
 		fmt.Printf("| `%s` | %s | %s | %s | %s |\n",
 			r.Module, r.Version, r.License, r.Verdict, r.Note)
 	}
-	fmt.Println()
-	fmt.Println("**判定口径**：只审**真正参与构建**的模块（`go list -deps` 反推），")
-	fmt.Println("完整模块图里的间接依赖不进二进制，不需要审。")
-	fmt.Println()
-	fmt.Println("认不出的许可一律报「需人工判定」并让门禁失败 —— 许可识别错的代价是法律风险，")
-	fmt.Println("比构建失败严重得多，因此宁可多报一次。")
 }
 
 func fail(format string, args ...any) {
