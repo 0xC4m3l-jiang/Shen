@@ -120,6 +120,14 @@
 | 4 | `block` 开关进配置 | 运维可编排 | 当前是构造参数；与后端池一起进 `config` |
 | 5 | `guard.false_route_budget` 消费 | 误调度率护栏 | 与观测报表一起 |
 
+## 8.1 拦截开关（`BlockEnabled`）
+
+`director.Config.BlockEnabled` 决定是否允许产出 `block`（默认**关**，依据 `Q5`）。装配层（`core/cmd/core`）用
+环境变量 `SHEN_BLOCK_ENABLED` 显式打开（`1/true/yes/on` 为真，其余为假）。
+
+为什么需要它：`block` 是三值决策之一，若没有运行时开关，**拦截路径既验不了、也无法在灰度放开时逐级启用**（`INT-12`）。
+默认仍为关；打开后 `score ≥ thresholds.block` 且非诱饵面才会产出 `block`（`MD-25`：诱饵面禁止 block）。
+
 ## 9. 变更记录
 
 | 日期 | 变更 | 依据 |

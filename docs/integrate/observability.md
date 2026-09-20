@@ -101,6 +101,14 @@ docker compose -f deploy/docker/compose.yaml down && \
   → 决策[改道（route_mirage）] → 幻境后端[mirage]
 ```
 
+验证**拦截（block）**：拦截默认关（Q5），要在 core 上显式打开 `SHEN_BLOCK_ENABLED=true`（验证覆盖文件已带），
+并用一条能触顶的流量（例如 Nuclei UA 打 `/actuator/env` ⇒ 分值 1.00 ≥ 阈值 0.95）：
+
+```text
+客户端 → 适配器 (L1)[GET /actuator/env] → 核心判定[分值 1.00 · 信号 ua-nuclei,path-actuator]
+  → 决策[拦截（block）] → 拦截[403]        🔴 真实告警
+```
+
 验证**白名单命中**（跳过判定）时，再放开适配器白名单（容器网络里来源是网关网段）：
 
 ```sh

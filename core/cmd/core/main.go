@@ -49,6 +49,20 @@ const (
 	exampleConfig = "deploy/config/config.example.yaml"
 )
 
+// envBool 读一个布尔环境变量；除 "1/true/yes/on"（忽略大小写与空白）外一律为 false。
+func envBool(key string, fallback bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if raw == "" {
+		return fallback
+	}
+	switch raw {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 func main() {
 	flag.Parse()
 	if err := run(); err != nil {
@@ -121,6 +135,10 @@ func run() error {
 		dir, derr := director.New(engine, loader, loader, director.Config{
 			DecoyPrefixes: decoyPrefixes(surf.assets),
 			Whitelist:     wl,
+			// 拦截默认关（Q5）：只有显式打开才允许产出 block。
+			// 为什么要有这个开关：三值决策里的 block 否则**没有任何运行时途径可启用**，
+			// 于是"拦截路径"既验不了、也无法在灰度放开时逐级启用（INT-12）。
+			BlockEnabled: envBool("SHEN_BLOCK_ENABLED", false),
 		})
 		if derr != nil {
 			return derr

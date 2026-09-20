@@ -229,6 +229,7 @@ make check-ignore           # 忽略清单不能误伤已入库文件
 | `SHEN_RUNDIR` | `${TMPDIR:-/tmp}/shen-<uid>` | 临时产物目录（二进制 / 日志 / 启动日志） |
 | `SHEN_CORE_ADDR` | `127.0.0.1:9443` | 适配器 / 控制台 / L4 访问核心判定面的地址 |
 | `SHEN_CONFIG` | `/etc/shen/config.yaml`（容器内） | 核心配置（挂载自 `deploy/config/config.example.yaml`） |
+| `SHEN_BLOCK_ENABLED` | `false` | 是否允许产出 `block`（拦截）；打开后 `score ≥ thresholds.block` 才拦截（`Q5` · `INT-12`） |
 
 > 核心判定面是**明文 gRPC**，只允许回环地址（`assertPlaintextListenIsLocal` 兜底）。
 > 容器里靠「除核心外都共享核心的网络命名空间」维持「同机」前提 —— 详见 [`../../deploy/docker/README.md`](../../deploy/docker/README.md)。

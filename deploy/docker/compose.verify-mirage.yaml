@@ -11,6 +11,9 @@
 # ⚠️ 这会让引擎**真的执行改道**（非影子模式）——只在本机验证环境使用。
 services:
   core:
+    environment:
+      # 拦截默认关（Q5）。验证 block 分支时显式打开；真实部署按 INT-12 阶梯放开。
+      SHEN_BLOCK_ENABLED: "true"
     volumes:
       - ../config/config.verify-mirage.yaml:/etc/shen/config.yaml:ro
   proxy:
