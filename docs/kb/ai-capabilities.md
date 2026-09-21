@@ -19,11 +19,11 @@
 
 **一句话结论**：**默认路径上没有任何一条生产链路在调模型**；L4 的三步分析（意图 / 攻击链 / 策略）
 已具备**模型路径**（`--llm` 显式开启，默认关闭），失败即回落确定性版。
-欺骗内容生成仍是确定性模板生成器（阶段 B 待接）。
+欺骗内容也可以走模型（`kind=content` + `--llm`，2026-09-21 落地）；默认仍是确定性模板生成器。
 
 | # | 能力 | 代码位置 | 今天靠什么产出 | 模型接了吗 | 产物 | 消费者 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | **欺骗内容生成** | [`analysis/aicap/`](../../analysis/aicap) | 确定性模板生成器 | ❌ 待接（阶段 B） | 内容对象 + 内容清单 | 核心 `policy` → 适配器 `modules/deception/proxy` | ✅ 阶段 A（通路已通） |
+| 1 | **欺骗内容生成** | [`analysis/aicap/`](../../analysis/aicap) | 默认：确定性模板生成器；`--llm`：模型（`kind=content`） | ✅ **已接**（`--llm`，默认关） | 内容对象 + 内容清单 | 核心 `policy` → 适配器 `modules/deception/proxy` | ✅ 阶段 A + 模型路（[实测报告](../ops/ai-injection-2026-09-21/README.md)） |
 | 2 | **意图识别** | [`analysis/intent/`](../../analysis/intent) | 正则规则表（`rule_hits`）；模型路径为 `aicap` 的 `kind=intent` | ✅ **已接**（`--llm`，默认关） | `Envelope{category, confidence, evidence_ids, rationale}` | `chain` / `strategy` / 遥测结论 | ✅ 双路（规则 / 模型） |
 | 3 | **攻击链还原** | [`analysis/chain/`](../../analysis/chain) | 阶段排序 + 证据校验；模型路径为 `kind=chain` | ✅ **已接**（`--llm`，默认关） | `{stages[], broken_decoy_signals[], rationale}` | `strategy` | ✅ 双路 |
 | 4 | **策略生成** | [`analysis/strategy/`](../../analysis/strategy) | 阈值下界 + 灰度上限；模型路径为 `kind=strategy` | ✅ **已接**（`--llm`，默认关） | `{decoy_selection[], gray_pct, threshold_suggestions{}, rationale}` | 核心 `policy`（经版本化下发） | ✅ 双路 |

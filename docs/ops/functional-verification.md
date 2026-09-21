@@ -32,6 +32,19 @@ $ scripts/shen.sh traffic --check-l4
 
 ---
 
+## 1.0 AI 注入 + 欺骗层整体功能的验证报告（2026-09-21 · 带 DAG 图）
+
+**报告**：[`ai-injection-2026-09-21/README.md`](ai-injection-2026-09-21/README.md) ——
+21 项端到端验收（关闭态字节一致 · 打开态注入 · `AR-30` 会话钉定 · 多态 · 关卡 · 秒级关闭 · 拦截 · DAG），
+**AI 生成的内容**（`generator=model-v1`，真模型）逐字节进了改道侧响应；
+四个阶段各带**由原始 JSON 渲染**的拓扑图与单请求链路图；原始数据（`dag/` · `logs/` · 清单）都在那个目录里。
+复跑：`make ai-check`（模板）/ `make ai-check-llm`（模型）· 出图：`make ai-dag`。
+
+> 与下面 §1.1 的关系：§1.1 是**阶段 A**（模板生成器）的验收；本节是**阶段 A + 模型路径**的验收，
+> 且把「三值决策」的第三值（`block`）与四个阶段的图示一并留下。
+
+---
+
 ## 1.1 AI 欺骗内容注入的验收（2026-09-20 · 阶段 A）
 
 命令：`make ai-check`（= `python3 scripts/dev/ai-inject-check.py`；它自己起业务站 + 幻境站 + 核心 + 适配器 + 控制台，

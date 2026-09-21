@@ -13,6 +13,8 @@
 | **一键端到端验证** | `scripts/shen.sh verify` | 状态 → 全量伪造流量 + L4 核对 → 报告与定位线索（报告落在临时目录） |
 | **发伪造流量并核对判定** | `scripts/shen.sh traffic` | 10 个场景（探针 / 爆破 / 注入 / 正常对照）+ 断言评分与信号；见 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md) |
 | 仓库级验证 | `scripts/shen.sh check`（= `make gate` + `make dev`） | 门禁 + 开发循环 |
+| **AI 注入端到端验收** | `make ai-check`（模板）· `make ai-check-llm`（模型，需 `SHEN_AI_KEY`） | 20/21 项：关闭态字节一致 · 注入 · `AR-30` · 关卡 · 秒级关闭 · 拦截 · DAG；报告见 [`ai-injection-2026-09-21/`](../ops/ai-injection-2026-09-21/README.md) |
+| DAG 图（从原始 JSON 渲染） | `make ai-dag`（`DAG_DIR` 可选） | 拓扑图 + 单请求链路图 |
 | 看日志（**不跟随**） | `scripts/shen.sh logs core` | 取尾部 80 行后立即返回 |
 | 本地进程起（开发） | `scripts/shen.sh local` | 不用 Docker；Go/Python 直接跑 |
 | 停掉 | `scripts/shen.sh down` | 删容器，保留镜像 |
@@ -250,6 +252,10 @@ make check-ignore           # 忽略清单不能误伤已入库文件
 | `SHEN_AI_TIMEOUT_S` | `30` | 单步超时（秒）。**写错即失败**，不悄悄换默认值 |
 
 ```sh
+make ai-check            # 注入端到端验收（模板生成器，无需密钥；含拦截覆盖）
+make ai-check-llm        # 同上，但内容由**模型**生成（需 SHEN_AI_KEY）
+make ai-dag              # 把上一步落盘的 DAG JSON 渲染成 Mermaid 图
+
 make analysis            # 确定性路径（默认；不需要任何密钥）
 make analysis-llm        # 模型路径（= --llm）：模型优先、失败回落
 ```

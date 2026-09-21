@@ -1,0 +1,8 @@
+== Docker 白名单（SHEN_VERIFY_WHITELIST=172.21.0.0/16）：命中即不调核心（INT-25）==
+  （同样发 HeadlessChrome + /.git/config —— 在模式 A 里它是 route_mirage，这里应变成 whitelist）
+
+  method  path                action   executed     unjudged  score  status
+  GET    /.git/config       -        whitelist    True      0      200
+  GET    /healthz           -        whitelist    True      0      200
+
+  totals = {'requests': 2, 'alerts': 0, 'high_risk': 0, 'unjudged': 2, 'fail_open': 0, 'to_origin': 2, 'to_mirage': 0, 'fallback': 0, 'blocked': 0, 'l4_conclusions': 0}

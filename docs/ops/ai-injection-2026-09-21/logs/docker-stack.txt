@@ -1,0 +1,12 @@
+=== docker compose ps ===
+analysis	Up 33 seconds
+business	Up 33 seconds
+console	Up 33 seconds
+core	Up 33 seconds
+proxy	Up 33 seconds
+
+=== core 启动日志（后端池 / 策略 / AI）===
+core-1  | 2026/09/21 15:44:03 策略已装载 policy_id=core-rules version=1 checksum=7df4cadc5a1fb6a87948271fd28b2f95b213663a3798439fa3e6281bcc9dee59 规则=16 条 灰度=0%
+core-1  | 2026/09/21 15:44:03 诱饵面：0 个资产启用（observe-only，MD-25）
+core-1  | 2026/09/21 15:44:03 幻境后端池：0 个登记 / 0 个可用（不实现具体蜜罐，ADR-0011）
+core-1  | 2026/09/21 15:44:03 核心已启动（影子模式（只算判定、不处置，INT-11））：127.0.0.1:9443

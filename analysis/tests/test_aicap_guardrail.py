@@ -23,7 +23,11 @@ from analysis.aicap.guardrail import inspect as guardrail_inspect
 from analysis.aicap.guardrail import prompts as guardrail_prompts
 from analysis.aicap.model import Unavailable, resolve
 from analysis.aicap.tasks import _registry
-from analysis.aicap.tasks.content import CONTENT_TASK, PROFILE_VOCAB
+from analysis.aicap.tasks.content import (
+    CONTENT_TASK,
+    GENERATOR,
+    PROFILE_VOCAB,
+)
 from analysis.llm import contract as _contract
 from analysis.llm.untrusted import DATA_BEGIN, DATA_END, UNTRUSTED_BANNER
 
@@ -139,7 +143,8 @@ def _check(candidate: dict[str, object]) -> list[dict[str, str]]:
 
 
 def _candidate(body: str) -> dict[str, object]:
-    return {"resource": "/", "variant": 0, "body": body}
+    # `generator` 是候选的必填字段（由 produce 按实际路径填，不由模型填）
+    return {"resource": "/", "variant": 0, "body": body, "generator": GENERATOR}
 
 
 def test_gate_schema() -> None:

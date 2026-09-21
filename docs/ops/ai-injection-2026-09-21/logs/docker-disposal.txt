@@ -1,0 +1,31 @@
+== Docker 接管模式（compose.verify-mirage.yaml）：改道 / 拦截 / 对照 ==
+--- 预热（第一条常因冷启动 failopen，见 K-24）---
+  /healthz → HTTP 200
+--- ① 改道：HeadlessChrome + /.git/config（0.9 ≥ route_mirage 0.70）---
+  /.git/config → HTTP 200
+--- ③ 拦截：sqlmap UA（0.7）+ path-probe（0.3）= 1.0 ≥ block 0.95 ---
+  /.git/config(sqlmap) → HTTP 403
+--- 对照：正常浏览器 ---
+  / → HTTP 200
+
+--- 控制台 DAG（/api/graphs）---
+  File "<string>", line 3
+    print(f"  {x.get(\"method\")} {x.get(\"path\"):16s} action={x.get(\"action\") or \"-\":12s} executed={x.get(\"executed\"):10s} backend={x.get(\"backend\") or \"-\":8s} score={x.get(\"score\")} status={x.get(\"status\")}")
+                      ^
+SyntaxError: unexpected character after line continuation character
+
+--- 控制台拓扑合计 ---
+  totals = {'requests': 4, 'alerts': 1, 'high_risk': 1, 'unjudged': 0, 'fail_open': 0, 'to_origin': 2, 'to_mirage': 1, 'fallback': 0, 'blocked': 1, 'l4_conclusions': 4}
+
+--- 核心启动日志 ---
+core-1  | 2026/09/21 15:51:27 策略已装载 policy_id=core-rules version=1 checksum=7cd08ab79e27a9eaadd27418b7ccab99eb760857fecc6319e0da4159788f366e 规则=16 条 灰度=100%
+core-1  | 2026/09/21 15:51:27 诱饵面：0 个资产启用（observe-only，MD-25）
+core-1  | 2026/09/21 15:51:27 幻境后端池：1 个登记 / 1 个可用（不实现具体蜜罐，ADR-0011）
+core-1  | 2026/09/21 15:51:27 核心已启动（接管模式（产出真实三值决策））：127.0.0.1:9443
+  method  path                action        executed     backend   score   status
+  GET    /                  route_origin  origin       -         0       200
+  GET    /.git/config       block         block        -         1       403
+  GET    /.git/config       route_mirage  mirage       mirage    0.9     200
+  GET    /healthz           route_origin  origin       -         0       200
+
+  totals = {'requests': 4, 'alerts': 1, 'high_risk': 1, 'unjudged': 0, 'fail_open': 0, 'to_origin': 2, 'to_mirage': 1, 'fallback': 0, 'blocked': 1, 'l4_conclusions': 4}

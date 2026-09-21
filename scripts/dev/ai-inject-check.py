@@ -36,6 +36,7 @@ RUNDIR = Path(tempfile.gettempdir()) / f"shen-ai-check-{os.getuid()}"
 BUSINESS_BODY = b"<html><body>REAL-BUSINESS</body></html>"
 MIRAGE_BODY = b"<html><body>MIRAGE-BACKEND</body></html>"
 RESOURCE = "/api/users"
+ELLIPSIS = "\u2026"  # 省略号（用转义写，避开工具层的字符损坏）
 
 failures: list[str] = []
 checks: list[str] = []
@@ -89,6 +90,22 @@ def http_get(
     if cookie:
         headers["Cookie"] = cookie
     return _http_get(port, path, headers)
+
+
+def http_status(
+    port: int, path: str, *, cookie: str | None = None, ua: str = "HeadlessChrome/120"
+) -> tuple[int, bytes]:
+    """像 `http_get`，但**不把 4xx 当异常** —— 拦截路径要读的就是 403。"""
+    headers = {"User-Agent": ua}
+    if cookie:
+        headers["Cookie"] = cookie
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
 
 
 def get_graphs(port: int, limit: int = 200) -> list[dict]:
@@ -182,7 +199,7 @@ session:
   cookie_name: "sid"
 thresholds:
   route_mirage: 0.70
-  block: 0.95
+  block: {block_threshold}
 guard:
   false_route_budget: 0.001
 store:
@@ -196,7 +213,7 @@ policy:
   gray_pct: 100
 rules:
   - id: "ua-headless"
-    weight: 0.9
+    weight: {rule_weight}
     match: {{field: "user_agent", op: "contains", value: "HeadlessChrome"}}
 whitelist:
   source_cidrs: []
@@ -221,7 +238,13 @@ AI_SECTION = """ai:
 
 
 def start_stack(
-    procs: Procs, ports: dict[str, int], config: Path, *, inject_content: bool
+    procs: Procs,
+    ports: dict[str, int],
+    config: Path,
+    *,
+    inject_content: bool,
+    block_enabled: bool = False,
+    tag: str = "core",
 ) -> tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]]:
     """起「核心 + 适配器 + 控制台」这一段可重启的栈；两个站点**不在**其中（它们全程不重启）。
 
@@ -229,8 +252,13 @@ def start_stack(
     """
     core_proc = procs.start(
         [str(RUNDIR / "core")],
-        {"SHEN_CONFIG": str(config), "SHEN_LISTEN": f"127.0.0.1:{ports['core']}"},
-        RUNDIR / "core.log",
+        {
+            "SHEN_CONFIG": str(config),
+            "SHEN_LISTEN": f"127.0.0.1:{ports['core']}",
+            # block 默认关（INT-12 阶梯放开）；覆盖验证时才显式打开
+            "SHEN_BLOCK_ENABLED": "true" if block_enabled else "false",
+        },
+        RUNDIR / f"core-{tag}.log",  # 每阶段一个名字：同路径覆盖会让「哪个阶段的日志」说不清
     )
     if not wait_for(ports["core"]):
         raise RuntimeError("核心没起来")
@@ -278,7 +306,9 @@ def wait_graph(port: int, predicate) -> list[dict]:
 # ── 主流程 ───────────────────────────────────────────────────────────────────
 
 
-def generate_manifest(out: Path, *, identifiers: str = "") -> subprocess.CompletedProcess[str]:
+def generate_manifest(
+    out: Path, *, identifiers: str = "", llm: bool = False
+) -> subprocess.CompletedProcess[str]:
     args = [
         str(ROOT / "analysis/.venv/bin/python"),
         "-m",
@@ -299,14 +329,77 @@ def generate_manifest(out: Path, *, identifiers: str = "") -> subprocess.Complet
     ]
     if identifiers:
         args += ["--identifiers", identifiers]
+    if llm:
+        # 走模型（需 SHEN_AI_KEY；缺失时 CLI 退出码 2，不静默回落）
+        args += ["--llm"]
     return subprocess.run(args, cwd=ROOT, capture_output=True, text=True)
 
 
-def run_checks(ports: dict[str, int], procs: Procs) -> None:
+def manifest_facts(path: Path) -> tuple[str, list[str]]:
+    """清单的 (generator, 该资源下全部 body)：核「注入的字节是不是清单里那一份」。
+
+    读不了就报一句人话：这是验收脚本，不该因为一个坏 JSON 抛一串 traceback。
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"清单读不了（{path}）：{exc}") from exc
+    bodies: list[str] = []
+    for entry in data.get("entries", []):
+        if entry.get("resource") == RESOURCE:
+            bodies = [str(b.get("body", "")) for b in entry.get("bodies", [])]
+    return str(data.get("generator", "")), bodies
+
+
+def dump_dag(ports: dict[str, int], out: Path) -> None:
+    """把控制台的 DAG / 拓扑原始 JSON 落盘（报告与图示都从它生成，**不手绘**）。
+
+    为什么落盘而不是直接画图：图是「从原始数据渲染出来的」才算证据 ——
+    留下 JSON，别人可以自己重画、也可以对着它核每个节点。
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    for name, path in (
+        ("topology", "/api/topology"),
+        ("graphs", "/api/graphs?limit=200"),
+        ("flow", "/api/flow?limit=200"),
+        ("analysis", "/api/analysis"),
+    ):
+        try:
+            raw = http_get(ports["console"], path)
+            (out / f"{name}.json").write_bytes(raw)
+            written.append(f"{name}.json({len(raw)}B)")
+        except Exception as exc:  # 落盘失败不该让验收变红：它只是证据附件
+            written.append(f"{name}.json(失败:{type(exc).__name__})")
+    print(f"DAG 原始数据：{out} · {', '.join(written)}")
+
+
+def maybe_dump(ports: dict[str, int], dag_out: Path | None, name: str) -> None:
+    """按阶段落盘 DAG 原始数据（`--dag-out` 才做）——报告里的图从它渲染，不手绘。"""
+    if dag_out is None:
+        return
+    print(f"\n[阶段 {name}] ", end="")
+    dump_dag(ports, dag_out / name)
+
+
+def run_checks(
+    ports: dict[str, int],
+    procs: Procs,
+    *,
+    llm: bool = False,
+    dag_out: Path | None = None,
+) -> None:
     manifest = RUNDIR / "manifest.json"
-    generated = generate_manifest(manifest)
+    generated = generate_manifest(manifest, llm=llm)
     print(f"清单：{generated.stdout.strip()}")
     check("清单生成成功", generated.returncode == 0 and manifest.exists(), generated.stdout.strip())
+    generator, bodies = manifest_facts(manifest)
+    if llm:
+        check(
+            "清单由模型产出（generator=model-v1，不是模板）",
+            generator == "model-v1",
+            f"generator={generator}；该资源 {len(bodies)} 个 body 由 AI 生成",
+        )
 
     blocked = RUNDIR / "blocked.json"
     rejected = generate_manifest(blocked, identifiers="service-detail")
@@ -318,29 +411,42 @@ def run_checks(ports: dict[str, int], procs: Procs) -> None:
 
     off_config = RUNDIR / "config-off.yaml"
     off_config.write_text(
-        CONFIG_TEMPLATE.format(**ports, version=1)
+        CONFIG_TEMPLATE.format(**ports, version=1, block_threshold=0.95, rule_weight=0.9)
         + AI_SECTION.format(enabled="false", manifest=""),
         encoding="utf-8",
     )
     on_config = RUNDIR / "config-on.yaml"
     on_config.write_text(
-        CONFIG_TEMPLATE.format(**ports, version=2)
+        CONFIG_TEMPLATE.format(**ports, version=2, block_threshold=0.95, rule_weight=0.9)
         + AI_SECTION.format(enabled="true", manifest=str(manifest)),
         encoding="utf-8",
     )
     off_again = RUNDIR / "config-off-2.yaml"
     off_again.write_text(
-        CONFIG_TEMPLATE.format(**ports, version=3)
+        CONFIG_TEMPLATE.format(**ports, version=3, block_threshold=0.95, rule_weight=0.9)
         + AI_SECTION.format(enabled="false", manifest=""),
         encoding="utf-8",
     )
 
     # ── ① 默认全关 ──────────────────────────────────────────────────────
     print("\n== ① 关闭态（ai.enabled=false + SHEN_PROXY_INJECT_CONTENT=false）==")
-    start_stack(procs, ports, off_config, inject_content=False)
+    start_stack(procs, ports, off_config, inject_content=False, tag="stage1")
     baseline_mirage = http_get(ports["mirage"], RESOURCE)
     baseline_business = http_get(ports["business"], RESOURCE)
-    through_off = http_get(ports["proxy"], RESOURCE, cookie="sid=off-1")
+    # 与阶段② 同样的时序问题：第一条请求可能落在启动窗口里（failopen 到业务侧）。
+    # 重试到**确实走了改道侧**为止 —— 断言的「不注入」是在改道侧上比，不是在「有没有到改道侧」上比。
+    through_off = b""
+    for attempt in range(10):
+        candidate = http_get(ports["proxy"], RESOURCE, cookie=f"sid=off-1-{attempt}")
+        if b"MIRAGE-BACKEND" in candidate:
+            through_off = candidate
+            break
+        time.sleep(0.5)
+    check(
+        "关闭态：确实到达改道侧（否则下面的字节比较没有意义）",
+        bool(through_off),
+        f"{len(through_off)} 字节",
+    )
     check(
         "改道侧与「未注入基线」逐字节一致",
         sha(through_off) == sha(baseline_mirage),
@@ -361,17 +467,52 @@ def run_checks(ports: dict[str, int], procs: Procs) -> None:
         f"{len(disabled)} 条改道侧请求，取值 {values}",
     )
 
+    maybe_dump(ports, dag_out, "1-closed")
+
     # ── ② 打开（核心与适配器各重启一次）─────────────────────────────────
     print("\n== ② 打开态（ai.enabled=true + 清单下发 + SHEN_PROXY_INJECT_CONTENT=true）==")
     procs.stop_all()
-    _core_on, proxy_proc = start_stack(procs, ports, on_config, inject_content=True)
-    injected = http_get(ports["proxy"], RESOURCE, cookie="sid=on-1")
-    check(
-        "改道侧响应含注入内容",
-        b'<section class="service-detail">' in injected
-        and injected.rstrip().endswith(b"</body></html>"),
-        f"{injected[:70]!r}…",
-    )
+    _core_on, proxy_proc = start_stack(procs, ports, on_config, inject_content=True, tag="stage2")
+    # 第一条请求可能落在「适配器还没 Pull 到后端表」那个窗口里（同 K-24），
+    # 于是它会回落业务侧。这里重试到**确实走了改道侧**：
+    # 断言的是注入，不是通道时序。
+    # 注意：重试条件只看「到没到改道侧」—— 注入坏了不会被掩盖
+    # （那时它到了改道侧，只是没有注入片段）。
+    injected = b""
+    for attempt in range(10):
+        # 每次换一个会话：避开判定缓存（ST-10）把上一次的结果重放回来
+        candidate = http_get(ports["proxy"], RESOURCE, cookie=f"sid=on-1-{attempt}")
+        if b"MIRAGE-BACKEND" in candidate:
+            injected = candidate
+            break
+        time.sleep(0.5)
+    if llm:
+        # 模型路的内容体没有固定标记（它是 AI 写的），所以直接核「注入的字节是不是清单里那一份」。
+        hit = next((b for b in bodies if b.encode("utf-8") in injected), "")
+        # 直接判别式：同一参数再生成一份**模板**清单，断言注入体**不在**模板产物里 ——
+        # 这样「注入的是 AI 内容」不依赖 `generator` 字段这一个间接证据。
+        tpl_manifest = RUNDIR / "manifest-template.json"
+        tpl = generate_manifest(tpl_manifest, llm=False)
+        _, tpl_bodies = manifest_facts(tpl_manifest)
+        in_template = next((b for b in tpl_bodies if b.encode("utf-8") in injected), "")
+        check(
+            "注入的内容体逐字节来自清单（即 AI 生成的那一份）",
+            bool(hit) and injected.rstrip().endswith(b"</body></html>"),
+            f"命中清单 body（{len(hit)} 字符）" if hit else "清单里没有任何 body 出现在响应中",
+        )
+        tpl_note = "模板清单里也有这段（可疑）" if in_template else "模板清单里没有这一段 ✓"
+        check(
+            "注入体**不在**模板产物里（与模板清单直接对比）",
+            tpl.returncode == 0 and not in_template,
+            tpl_note,
+        )
+    else:
+        check(
+            "改道侧响应含注入内容",
+            b'<section class="service-detail">' in injected
+            and injected.rstrip().endswith(b"</body></html>"),
+            f"{injected[:70]!r}" + ELLIPSIS,
+        )
     check(
         "注入是**插入**：幻境自己的正文仍在",
         b"MIRAGE-BACKEND" in injected,
@@ -423,13 +564,15 @@ def run_checks(ports: dict[str, int], procs: Procs) -> None:
         f"{hop.get('label') if hop else '（没有这一跳）'} ⇒ {hop.get('value') if hop else ''}",
     )
 
+    maybe_dump(ports, dag_out, "2-inject")
+
     # ── ⑤ 秒级关闭（核心切开关；适配器不重启）──────────────────────────
     print("\n== ⑤ 秒级关闭（核心重启 + 适配器不重启）==")
     procs.drop(_core_on)  # 只换核心；适配器保持**同一个进程**
     new_core = procs.start(
         [str(RUNDIR / "core")],
         {"SHEN_CONFIG": str(off_again), "SHEN_LISTEN": f"127.0.0.1:{ports['core']}"},
-        RUNDIR / "core-off.log",
+        RUNDIR / "core-stage3.log",
     )
     check("核心（关闭态 v3）已重启", wait_for(ports["core"]), f"pid={new_core.pid}")
     time.sleep(3.0)  # 等适配器下一次 Pull（SHEN_PROXY_POLICY_INTERVAL=1s）
@@ -449,11 +592,18 @@ def run_checks(ports: dict[str, int], procs: Procs) -> None:
         bool(after_off) and sha(after_off) == sha(baseline_mirage),
         f"{actual} == {sha(baseline_mirage)[:16]}",
     )
-    check(
-        "关闭后：响应体里没有注入片段",
-        b'<section class="service-detail">' not in after_off,
-        f"字节 {len(baseline_mirage)} → {len(after_off)}",
-    )
+    if llm:
+        check(
+            "关闭后：响应体里没有清单里的任何内容体",
+            not any(b.encode("utf-8") in after_off for b in bodies),
+            f"字节 {len(baseline_mirage)} 到 {len(after_off)}",
+        )
+    else:
+        check(
+            "关闭后：响应体里没有注入片段",
+            b'<section class="service-detail">' not in after_off,
+            f"字节 {len(baseline_mirage)} 到 {len(after_off)}",
+        )
     graphs = wait_graph(
         ports["console"], lambda g: g.get("executed") == "mirage" and g.get("inject") == "disabled"
     )
@@ -461,6 +611,47 @@ def run_checks(ports: dict[str, int], procs: Procs) -> None:
     check(
         "逐请求事件回到 inject=disabled（下发级开关生效）", bool(tail), f"{len(tail)} 条 disabled"
     )
+
+    maybe_dump(ports, dag_out, "3-killed")
+
+
+def run_block_stage(ports: dict[str, int], procs: Procs, *, dag_out: Path | None = None) -> None:
+    """③ 拦截（`block`）—— 三值里的第三个。
+
+    拦截**默认关**（`Q5` · `INT-12` 阶梯放开：先影子 → 只对高置信误导 → 再放开拦截），
+    所以这里是**显式打开的覆盖验证**：`SHEN_BLOCK_ENABLED=true` + 把 `block` 阈值降到 0.5，
+    让那条 0.9 分的请求落到拦截侧。断言三件事：403 · `executed=block` · **拦截侧不注入**。
+    """
+    print("\n== ③ 模拟高分请求 \u2192 拦截\uff08SHEN_BLOCK_ENABLED=true\uff09==")
+    procs.stop_all()
+    cfg = RUNDIR / "config-block.yaml"
+    cfg.write_text(
+        # 阈值必须满足 route_mirage <= block（校验会拒乱序），所以**不改阈值、改权重**：
+        # 规则权重 1.0 ⇒ 分值 1.0 ≥ block 0.95 ⇒ 落到拦截侧。
+        CONFIG_TEMPLATE.format(**ports, version=4, block_threshold=0.95, rule_weight=1.0)
+        + AI_SECTION.format(enabled="false", manifest=""),
+        encoding="utf-8",
+    )
+    start_stack(procs, ports, cfg, inject_content=False, block_enabled=True, tag="block")
+    status, body = http_status(ports["proxy"], RESOURCE, cookie="sid=block-1")
+    check(
+        "\u62e6\u622a\u8def\u5f84\uff1a403\uff08\u5bf9\u624b\u53ef\u89c1\u7684\u5904\u7f6e\uff09",
+        status == 403,
+        f"status={status} body={body[:40]!r}",
+    )
+    graphs = wait_graph(ports["console"], lambda g: g.get("executed") == "block")
+    blocked = [g for g in graphs if g.get("executed") == "block"]
+    check(
+        "\u9010\u8bf7\u6c42\u4e8b\u4ef6\uff1aexecuted=block \u4e14 action=block",
+        bool(blocked) and all(g.get("action") == "block" for g in blocked),
+        f"{len(blocked)} \u6761\u62e6\u622a\u8bf7\u6c42",
+    )
+    check(
+        "\u62e6\u622a\u4fa7\u4e0d\u6ce8\u5165\uff08inject=off\uff09",
+        bool(blocked) and all(g.get("inject") == "off" for g in blocked),
+        f"\u53d6\u503c {sorted({str(g.get('inject')) for g in blocked})}",
+    )
+    maybe_dump(ports, dag_out, "4-block")
 
 
 def cleanup_dir() -> None:
@@ -474,6 +665,21 @@ def cleanup_dir() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true", help="跑完保留临时目录（排查用）")
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="清单用**模型**生成（需 SHEN_AI_KEY）；默认用确定性模板生成器",
+    )
+    parser.add_argument(
+        "--block",
+        action="store_true",
+        help="额外跑一段**拦截（block）**覆盖验证（默认关；INT-12 阶梯放开）",
+    )
+    parser.add_argument(
+        "--dag-out",
+        default="",
+        help="把 DAG/拓扑原始 JSON 写到这个目录（拟报告与图示用）",
+    )
     args = parser.parse_args()
 
     ports = {name: free_port() for name in ("core", "proxy", "console", "business", "mirage")}
@@ -514,7 +720,10 @@ def main() -> int:
         if not wait_for(ports["business"]) or not wait_for(ports["mirage"]):
             check("站点就绪", False, "业务站或幻境站没起来")
         else:
-            run_checks(ports, stack)
+            dag_out = Path(args.dag_out) if args.dag_out else None
+            run_checks(ports, stack, llm=args.llm, dag_out=dag_out)
+            if args.block:
+                run_block_stage(ports, stack, dag_out=dag_out)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     finally:

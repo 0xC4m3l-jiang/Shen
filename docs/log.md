@@ -9,6 +9,68 @@
 
 ---
 
+## 2026-09-21 · 欺骗层功能验证 + **AI 生成内容的动态注入**（真模型端到端，带 DAG 图示报告）
+
+**做了什么**：你问的四件事逐条验了，并把缺的那一环补上（`kind=content` 接模型），最后用**你提供的 DeepSeek key** 端到端跑通。
+
+1. **补上缺的那一环**：`kind=content` 此前只有模板生成器 ⇒ 「AI 生成的内容被注入」在**产品路径上做不到**。
+   现在 `produce` 分两条路（模板 / 模型），由 `--llm` 显式选（靠 payload 的 `use_model`，**不靠环境变量隐式决定**）；
+   产物**如实标注** `generator`（`template-v1` / `model-v1`，闭集守住）；`resource`/`variant` 等身份字段**不从模型取**；
+   **缺后端就退出 2、不写清单**（不允许「一条 AI 内容都没有」却写出一份看着成功的清单）；
+2. **真模型验证**：`make ai-check-llm` → 16 条内容由 DeepSeek 生成、**0 条被拒**，
+   端到端 **21/21** 全过，其中关键断言是「**注入的字节逐字节来自清单**」（1634 字符命中）——
+   模板路有固定指纹可断言，模型路没有，所以这条断言才是「AI 内容真的进了响应」的证明；
+3. **顺手补了三值的第三值**：`--block` 覆盖验证（`SHEN_BLOCK_ENABLED=true` + 权重 1.0）⇒ 403 · `executed=block` · 拦截侧不注入；
+4. **每个阶段都有图**：`--dag-out` 落盘控制台原始 JSON → 新增 `scripts/dev/render-dag.py` 渲染成 mermaid。
+   报告里 **9 张图**（1 张架构示意 + 4 阶段各 2 张：拓扑图 + 单请求链路图），**图有出处、不是手绘**；
+5. **报告**：[`docs/ops/ai-injection-2026-09-21/README.md`](docs/ops/ai-injection-2026-09-21/README.md) ——
+   含四个问题的判定表 · 四阶段图示 · AI 正文样例 · 蜜罐诱导怎么实现 · **能力状态总表（含未实现项）** ·
+   **本次没验证的 7 项** · 复跑命令 · 证据文件清单。
+
+**改了哪些文件**：
+
+- 新增：`scripts/dev/render-dag.py` · `docs/plans/2026-09-21-ai-injection-verification.md` · `docs/ops/ai-injection-2026-09-21/`（README + 原始证据：`check-log.txt` · `manifest.ai.json` · `dag/` · `logs/`）
+- 修改：`analysis/aicap/tasks/content.py` · `analysis/aicap/__main__.py` · `analysis/tests/test_aicap_content.py` · `analysis/tests/test_aicap_guardrail.py` · `scripts/dev/ai-inject-check.py` · `Makefile`
+- 文档：`docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/kb/capabilities.md` · `docs/kb/ai-capabilities.md` · `docs/ops/runbook.md` · `docs/ops/functional-verification.md` · `docs/progress.md` · `docs/README.md` · `docs/background/decisions/0031-analysis-reuse-and-model-backend.md`（**追加**「修正」条目，正文不动）
+
+**对应文档**：`docs/plans/2026-09-21-ai-injection-verification.md` · 报告 `docs/ops/ai-injection-2026-09-21/README.md` · [ADR-0031](docs/background/decisions/0031-analysis-reuse-and-model-backend.md)（修正条目）· 规则依据 `AR-15` / `AR-33` / `AR-30` / `INT-8` / `NI-1` / `MD-12`
+
+**验证**：`make gate` 通过（**126 例** pytest —— 新增 8 例内容两条路的用例）·
+`make ai-check` **21/21**（模板 + 拦截，连跑 3 次稳定）· `make ai-check-llm` **22/22**（真模型，在**终版代码**上重跑）·
+`make dev` **6/6**（回归：响应路径仍不碰模型）· `make archcheck` 通过（`AR-33` 结构判据）·
+**Docker 交付形态也跑了**：默认栈（影子）流量扫描 `断言 26/27 · 缺口 8 · 链路 70 条核对`；接管覆盖（`compose.verify-mirage.yaml`）
+实测三值 `route_mirage→mirage`(200) / `block`(403) / `route_origin`(200) + 后端池 1/1；白名单（`INT-25`）实测 `executed=whitelist` + `unjudged=true`（不调核心）。
+**未验**：`scripts/shen.sh verify` 的完整报告 · Docker 形态下的 AI 注入 · 真实业务站 · 真实高交互蜜罐 · 模型 vs 模板质量对照 · 多节点 —— 逐条写在报告 §6。
+
+**证据**（关键行，逐条可复跑）：
+
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 内容由模型产出 | `generator=model-v1`、0 条被拒 | ✅ 16 条 AI 内容 |
+| **AI 内容被注入** | 注入体逐字节来自清单 | ✅ 命中 1634 字符 |
+| 只改道侧（`INT-8`） | 业务侧字节与直连一致 | ✅ |
+| 会话钉定（`AR-30`） | 同会话三次同 sha256 | ✅ `3c04f9fb72915807` |
+| 多态 | 16 会话落 ≥4 变体 | ✅ 8 个变体 |
+| 秒级关闭 | 只重启核心即停注入 | ✅ `inject=disabled` |
+| 拦截（第三值） | 403 + `executed=block` + 不注入 | ✅ |
+| 诱导到蜜罐后端 | 后端池 1/1、落点=mirage | ✅ 18 条落 `mirage` |
+| 白名单命中即不调核心（`INT-25`） | `executed=whitelist` + `unjudged=true` | ✅ Docker 接管形态实测（同一条请求在无白名单时是 `route_mirage`） |
+| Docker 交付形态的三值 | 改道 200 / 拦截 **403** / 对照 200 | ✅ `docs/ops/ai-injection-2026-09-21/logs/docker-disposal.txt` |
+
+**没做 / 遗留**（报告 §6 有完整表）：
+
+1. 报告里的数字来自**一次**运行（模型输出不确定）—— 判据是断言「注入体逐字节来自清单」，不是那些数字；
+2. **模型 vs 模板的质量对照**未做（[ADR-0031](docs/background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 1）；
+3. **`scripts/traffic/scenarios.json` 的 `whitelist-monitoring` 旧文案**已修正（上轮实现了白名单，但场景元数据还写着「未实现」—— 本轮改文案并**真的实证**了它）；真实的**高交互蜜罐**仍未接（`ADR-0011`：本项目不实现具体蜜罐）—— 本次用 web-clone 仿真站证明「诱导与改道执行通了」；
+4. 诱饵资产 → 边缘**未接通**（`MD-25` observe-only）· 内容轮换消费方未接（`ADR-0023` 未解决 4）；
+5. `block` 只做了「打开即生效」，灰度与误伤未评估（`INT-12`）。
+
+> 审视记录（14 条）与**独立评审（3 条 P1 + 4 条 P2，全部已处置）**见变更包 §7.1 / §7.3：
+> 评审抓到的最重一条是「报告里的引用块与随附 JSON **不是同一次运行**」——
+> 已把报告改成**从随附证据合成**（每个数字都断言取值，不再靠记忆），并用脚本核到四阶段渲染块**逐字**来自随附 JSON。
+
+---
+
 ## 2026-09-21 · 文档准确性审视：修 35 处漂移（知识库 / 模块设计 / 契约）· 补写缺失的 E2 结果段
 
 **做了什么**：按技能 `audit` 对**知识库 + 模块设计 + 直接相关的契约/运维/进度文档**做了一轮审视

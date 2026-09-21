@@ -19,7 +19,7 @@ PROTOS := $(shell find common/api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev ai-check commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
+        check-config replay smoke dev ai-check ai-check-llm ai-dag commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen check-pydeps analysis analysis-llm \
         docker-build up down docker-ps docker-logs docker-log check-ignore \
         start status app-smoke traffic verify
@@ -275,8 +275,14 @@ smoke: ## 在线冒烟：对已在跑的核心发判定请求（地址取 SHEN_D
 dev: ## 一键开发验证：配置干跑 → 起核心 → 在线冒烟 → 规则回放 → 关核心
 	@scripts/dev/smoke.sh
 
-ai-check: ## AI 欺骗内容注入端到端验收（六项：关闭态字节一致 / 打开态注入 / AR-30 / 关卡 / 秒级关闭 / DAG 注入跳）
-	@python3 scripts/dev/ai-inject-check.py
+ai-check: ## 欺骗内容注入端到端验收（模板生成器；含拦截覆盖：关闭态字节一致 / 打开态注入 / AR-30 / 关卡 / 秒级关闭 / DAG / block）
+	@python3 scripts/dev/ai-inject-check.py --block
+
+ai-check-llm: ## 同上，但内容由**模型**生成（需 SHEN_AI_KEY；DAG 落盘到 DAG_OUT）
+	@python3 scripts/dev/ai-inject-check.py --llm --block --dag-out "$${DAG_OUT:-/tmp/shen-ai-dag}"
+
+ai-dag: ## 把 DAG 原始 JSON 渲染成 Mermaid（DAG_DIR 默认 /tmp/shen-ai-dag）
+	@python3 scripts/dev/render-dag.py --dag-dir "$${DAG_DIR:-/tmp/shen-ai-dag}"
 
 clean: ## 清理构建缓存
 	$(GO) clean ./...

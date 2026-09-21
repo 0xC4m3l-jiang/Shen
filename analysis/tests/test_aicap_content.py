@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from analysis.aicap import service
 from analysis.aicap.content import (
     DEFAULT_MARKER,
@@ -27,11 +29,14 @@ from analysis.aicap.content import (
     manifest_bytes,
 )
 from analysis.aicap.tasks.content import (
+    CONTENT_TASK,
     GENERATOR,
+    MODEL_GENERATOR,
     PROFILE_VOCAB,
     _render_body,
     produce,
 )
+from analysis.llm.client import Unavailable
 
 STAMP = "2026-09-20T00:00:00+00:00"
 
@@ -291,3 +296,137 @@ def test_cli_rejects_unregistered_kind(tmp_path: Path) -> None:
 
     code = main(["--out", str(tmp_path / "m.json"), "--kind", "没有这个种类"])
     assert code == 2
+
+
+# ── 模型路径（阶段 B）：模型优先、失败回落，且**逐条标明实际生成器** ──────────────
+
+
+class _StubClient:
+    """满足 `AnalysisClient` 形状的替身：公开成员只有 `complete`（`AR-32`）。"""
+
+    def __init__(self, *, reply: str = "", fail: Exception | None = None) -> None:
+        self.reply = reply
+        self.fail = fail
+
+    def complete(self, prompt: str, *, session_id: str, timeout: float) -> str:
+        del prompt, session_id, timeout
+        if self.fail is not None:
+            raise self.fail
+        return self.reply
+
+
+def _spec(*, use_model: bool, resource: str = "/api/users", variant: int = 3):
+    return service.TaskSpec(
+        kind="content",
+        session_id="s",
+        deadline_s=1.0,
+        payload={
+            "resource": resource,
+            "variant": variant,
+            "version": 1,
+            "profile_id": "site-a",
+            "use_model": use_model,
+        },
+    )
+
+
+def test_produce_defaults_to_template_even_when_a_client_is_present() -> None:
+    """**不靠环境变量隐式决定**：`use_model` 不为真就该走模板，哪怕给了一个能用的客户端。"""
+    candidate = produce("p", _spec(use_model=False), _StubClient(reply='{"body": "<p>x</p>"}'))
+    assert candidate["generator"] == GENERATOR
+    assert "<section" in str(candidate["body"])
+
+
+def test_produce_model_path_labels_model_and_takes_identity_from_spec() -> None:
+    """模型只负责正文；`resource` / `variant` 由生成器从输入取（模型笔误不得改清单归属）。"""
+    reply = json.dumps(
+        {"resource": "/WRONG", "variant": 99, "body": "<section>Service status</section>"}
+    )
+    candidate = produce(
+        "p", _spec(use_model=True, resource="/api/users", variant=3), _StubClient(reply=reply)
+    )
+    assert candidate["generator"] == MODEL_GENERATOR
+    assert candidate["resource"] == "/api/users", "身份字段必须来自 spec"
+    assert candidate["variant"] == 3, "身份字段必须来自 spec"
+    assert candidate["body"] == "<section>Service status</section>", "正文必须是模型写的"
+
+
+def test_produce_falls_back_to_template_when_model_is_unavailable() -> None:
+    """模型不可用 ⇒ 回落模板，且**如实标注** `template-v1`（不冒充模型输出，`AR-15`）。"""
+    candidate = produce("p", _spec(use_model=True), _StubClient(fail=Unavailable("没配 key")))
+    assert candidate["generator"] == GENERATOR
+    assert "<section" in str(candidate["body"])
+
+
+def test_produce_falls_back_when_extraction_fails() -> None:
+    """模型答了但不是 JSON ⇒ 抽取失败，同样回落（与「结构不合契约」不是一回事）。"""
+    candidate = produce("p", _spec(use_model=True), _StubClient(reply="抱歉，我不能这样做。"))
+    assert candidate["generator"] == GENERATOR
+
+
+def test_schema_rejects_unknown_generator() -> None:
+    """生成器是**闭集**：写别的值会被契约层拒绝（`Field.allowed`）。"""
+    from analysis.llm.contract import ContractError, validate
+
+    with pytest.raises(ContractError):
+        validate(
+            {"resource": "/", "variant": 0, "body": "<p>x</p>", "generator": "evil-v1"},
+            CONTENT_TASK.schema,
+        )
+
+
+def test_service_end_to_end_model_path_is_accepted_and_labelled() -> None:
+    """走完整出口（两道检查）的模型路径：接受、且产物里写明 `model-v1`。"""
+    store = ContentStore()
+    envelope = service.generate(
+        _spec(use_model=True),
+        client=_StubClient(reply=json.dumps({"body": "<section>Service status</section>"})),
+        sink=store,
+    )
+    assert envelope.accepted, envelope.rejected_reason
+    assert envelope.data["generator"] == MODEL_GENERATOR
+    assert [item.generator for item in store.entries()] == [MODEL_GENERATOR]
+
+
+def test_service_end_to_end_template_path_still_labelled_template() -> None:
+    """回归：默认路径（`use_model` 不为真）仍标 `template-v1`，且形状与阶段 A 一致。"""
+    store = ContentStore()
+    envelope = service.generate(_spec(use_model=False), sink=store)
+    assert envelope.accepted, envelope.rejected_reason
+    assert envelope.data["generator"] == GENERATOR
+
+
+def test_cli_llm_without_key_exits_2(tmp_path: Path, monkeypatch) -> None:
+    """`--llm` 但没配 key ⇒ 在**开始生成之前**退出（避免生成一半模板、一半模型）。"""
+    from analysis.aicap.__main__ import main
+
+    monkeypatch.delenv("SHEN_AI_KEY", raising=False)
+    code = main(["--out", str(tmp_path / "m.json"), "--llm", "--quiet"])
+    assert code == 2
+    assert not (tmp_path / "m.json").exists()
+
+
+def test_cli_labels_mixed_when_some_items_fall_back(tmp_path: Path, monkeypatch) -> None:
+    """逐条回落时必须如实标 `mixed:…` —— 「不静默」的关键一步，得有人钉住。"""
+    import json as _json
+
+    from analysis.aicap.__main__ import main
+
+    calls = {"n": 0}
+
+    class _FlakyOnce:
+        """第一条给模型正文，之后抛 `Unavailable`（模拟中途限流/超时）。"""
+
+        def complete(self, prompt: str, *, session_id: str, timeout: float) -> str:
+            del prompt, session_id, timeout
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _json.dumps({"body": "<section>Service status</section>"})
+            raise Unavailable("模型中途不可用")
+
+    monkeypatch.setattr("analysis.aicap.__main__.from_environment", lambda: _FlakyOnce())
+    out = tmp_path / "m.json"
+    code = main(["--out", str(out), "--llm", "--quiet", "--resources", "/", "--variants", "3"])
+    assert code == 0, "部分回落不该让整轮失败（清单仍值得写）"
+    manifest = _json.loads(out.read_text(encoding="utf-8"))
+    assert manifest["generator"] == "mixed:model-v1,template-v1", manifest["generator"]

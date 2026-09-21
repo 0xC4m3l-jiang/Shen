@@ -63,8 +63,8 @@
 | `limits.max_output` | integer | **任务级**输出上限，必须 > 0；与用途上限**取较小者**生效（`AR-23`）。声明了就必须真的生效 —— 不生效的上限比没有上限更坏 |
 | `produce` | callable | `(prompt, spec, client) → 候选输出`（**未过护栏**） |
 | `build` | callable | `(checked, spec, generated_at) → Artifact`；内核只要求产物能 `to_wire()` |
-| `generator` | string | 生成器标识（进产物，供审计定位「这份东西是哪个版本产出的」） |
-| `requires_model` | bool | 产出**是否依赖模型**。`False` = 确定性生成器（今天只有 `content`）；`True` = 必须调模型才能产（L4 的三个任务）。它不影响护栏 —— 两条路都过同样四关 |
+| `generator` | string | 生成器标识（进产物，供审计定位「这份东西是哪个版本产出的」）；`kind=content` 的候选输出里也有这个字段（由生成代码按**实际走的路径**填，**不由模型自填**），取值是闭集 `template-v1` / `model-v1`（`Field.allowed` 守） |
+| `requires_model` | bool | 产出**是否依赖模型**。`False` = **有确定性路径**（`content`：模板是默认，模型是可选）；`True` = 必须调模型才能产（L4 的三个任务）。它不影响检查 —— 两条路都过同样四关 |
 
 **已登记的 `kind`（四个）**：`content`（除骗内容，阶段 A）· `intent` · `chain` · `strategy`（L4 三任务，
 [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md)）。
@@ -152,7 +152,7 @@
 | `marker` | 插入位置标记；空串 = 执行方用 `</body>`（`modules/deception/injection` 的既有语义） |
 | `checksum` | 对 `body` 的 **UTF-8 字节**取 SHA-256，小写十六进制 |
 | `version` | 内容版本（清单 `version`）；轮换时递增 |
-| `generator` | `template-v1` = 确定性模板生成器；阶段 B 接模型后写 `prompt-<模板版本>` |
+| `generator` | `template-v1` = 确定性模板生成器 · `model-v1` = **模型路径**（`--llm`，2026-09-21 落地）。两条路的产物**各自标注**，不得互相冒充（`AR-15`） |
 
 > **阶段 A 的生成器是确定性的**：同输入（同一 resource / variant / version / profile）必得**逐字节相同**的 `body`
 > —— 这是**阶段 A 的工程性质**（让生成结果可回归、清单可复现），**不是** `AR-30` 的要求：
@@ -283,6 +283,17 @@
 **已知缺口**：`chain.broken_decoy_signals[]` 与 `stages[].name` 的闭集**没有机器守卫**
 （`Field.allowed` 只作用于字符串字段）；取值靠提示词约束 + worker 的形状校验（每项必须是带
 `name` / `evidence_ids` 的对象）。这条记在 [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 2。
+
+**`kind=content` 也有模型路径**（2026-09-21 落地）：CLI 加 `--llm` ⇒ 该次生成的候选由模型产出。
+三个口径：
+
+1. **由命令行决定，不由环境变量隐式决定**：`TaskSpec.payload["use_model"]` 为真才走模型 ——
+   同一条命令在任何环境里产出同一类东西（否则「这次是模型还是模板」无法复现）；
+2. **身份字段不从模型取**：`resource` / `variant` 由生成器从输入取（模型只写 `body` 与可选的 `marker`）——
+   模型一次笔误不会把内容挂到错资源上；
+3. **回落要标注、缺后端要停**：模型逐条失败 ⇒ 回落模板且产物写 `template-v1`（清单 `generator` 取实际值，
+   可能是 `mixed:…`）；但**指定了 `--llm` 又没有可用后端**（缺 `SHEN_AI_KEY`）⇒ CLI **退出码 2**，
+   不在「一条 AI 内容都没有」的情况下写出一份看着成功的清单。
 
 **调用方（worker）的语义**：三步各自「模型优先、失败回落」；
 回落原因进结论载荷的 `model_rejected`（见 [`events.md`](events.md) §3）；

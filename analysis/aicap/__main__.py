@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -32,8 +33,8 @@ from pathlib import Path
 
 from . import service
 from .content import ContentStore, build_manifest, write_manifest
+from .model import KEY_ENV, MODEL_ENV, Unavailable, UnconfiguredClient, from_environment
 from .tasks._registry import kinds
-from .tasks.content import GENERATOR
 
 
 def _now_iso() -> str:
@@ -61,6 +62,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="部署方注入的真实业务标识（逗号分隔；命中即被护栏拒绝，AR-22）",
     )
     parser.add_argument("--quiet", action="store_true", help="只打印汇总行")
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help=(
+            "走模型生成（默认关；需 SHEN_AI_KEY）。"
+            "模型优先、失败回落模板，且每条产物都标明实际生成器"
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -68,6 +77,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (AssertionError, RuntimeError) as exc:
         print(f"aicap: 启动期断言失败：{exc}", file=sys.stderr)
         return 2
+
+    # `--llm`：显式启用模型路径。配置不全（缺 key / 端点写错）在**这里**失败，
+    # 不留到逐条生成时才发现（那样会生成一半模板、一半模型，清单里混着两类产物）。
+    client = None
+    if args.llm:
+        try:
+            client = from_environment()
+        except Unavailable as exc:
+            print(f"aicap: 模型配置不合法：{exc}", file=sys.stderr)
+            return 2
+        if isinstance(client, UnconfiguredClient):
+            # 缺 key 就是「**没有后端**」：这里必须**停下**，而不是让 16 条全部静默回落模板
+            # （那会把「模型路径跑成功了」当成结果报上去，而实际上一条 AI 内容都没有）。
+            print(
+                f"aicap: 指定了 --llm 但没有可用的模型后端（缺 {KEY_ENV}）。要模板就不要加 --llm。",
+                file=sys.stderr,
+            )
+            return 2
+        if not args.quiet:
+            print(
+                f"aicap: 模型路径：{os.environ.get(MODEL_ENV, '') or '(default)'}"
+                " · 模型优先、失败回落模板"
+            )
 
     resources = [item.strip() for item in args.resources.split(",") if item.strip()]
     if not resources:
@@ -99,8 +131,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "variant": variant,
                         "version": args.version,
                         "profile_id": args.profile,
+                        # 走不走模型由**命令行参数**决定，不靠环境变量隐式决定
+                        # （否则同一条命令在不同环境里产出不同类产物，无法复现）。
+                        "use_model": bool(args.llm),
                     },
                 ),
+                client=client,
                 sink=sink,
                 identifiers=identifiers,
                 generated_at=stamp,
@@ -116,18 +152,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  ✗ {reason}", file=sys.stderr)
         return 1
 
+    # 清单的 generator 按**实际产物**推导：模型可能逐条失败而回落模板，
+    # 直接写命令行参数会把模板产物记成模型产物（审计上就是假的）。
+    produced = sorted({str(item.generator) for item in store.entries()})
+    manifest_generator = produced[0] if len(produced) == 1 else "mixed:" + ",".join(produced)
     manifest = build_manifest(
         store.entries(),
         version=args.version,
         variants=args.variants,
         generated_at=stamp,
-        generator=GENERATOR,
+        generator=manifest_generator,
     )
     path = Path(args.out)
     size = write_manifest(path, manifest)
     entries = len(manifest["entries"])
     print(
         f"aicap: 生成 {len(store)} 条 / 护栏拒绝 {len(rejected)} 条 · "
+        f"生成器 {manifest_generator} · "
         f"清单 v{args.version} variants={args.variants} entries={entries} "
         f"bytes={size} → {path}"
     )

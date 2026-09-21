@@ -28,6 +28,9 @@
   受检字段与上限**由任务声明**，且**声明了就必须真的生效**；
 - **产物出口是缝隙**（`aicap/ports.py` 的 `Sink`），内核不知道它是不是内容库；
   只有过了护栏才会调 `put`；
+- **`kind=content`**：产出「资源 × 变体」的欺骗内容对象 —— **两条路**：默认**确定性模板生成器**，
+  加 `--llm` 走**模型**（2026-09-21 落地，[实测报告](../ops/ai-injection-2026-09-21/README.md)）；
+  两条路都过同一出口与同一套检查，**产物各自标注** `generator`（`template-v1` / `model-v1`）。原文如下：
 - **阶段 A 的任务**：`kind=content` —— 产出「资源 × 变体」的欺骗内容对象，
   并（由 `__main__` 的生成器）产出**内容清单**文件给核心装载；
 - **L4 的三个消费方**（2026-09-21 接入，[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md)）：
@@ -131,6 +134,8 @@
 | 任务缺护栏档案 / schema / limits | **启动期断言失败**（fail-closed） | ✅（起不来 ≠ 业务受影响） | `AR-33` |
 | 提示词模板缺失 / 占位符不齐 | 启动期断言失败（`AR-24`） | ✅ | `AR-24` |
 | 模型未配置而任务需要模型 | `Unavailable` 显式失败；**禁止**用模板冒充模型输出 | ✅ | `AR-15` |
+| `kind=content` 指定了 `--llm` 但缺 `SHEN_AI_KEY` | CLI **退出码 2**（**不写清单**）—— 否则会产出「一条 AI 内容都没有、却看着成功」的清单 | ✅ | `AR-15` / 本模块 §1 |
+| `kind=content` 走模型但**逐条**失败（不可用 / 抽取失败） | 该条回落模板，产物写 `template-v1` 并记 `WARNING`；清单 `generator` 取**实际值**（可能 `mixed:…`） | ✅ | `AR-15`（如实标注） |
 | 模型被拒 / 不可用 / 输出越界（L4 三任务） | 调用方（`worker`）**回落确定性版**并记原因（`model_rejected`）；模型失败不得拖垮整轮 | ✅（近线，`NI-1`） | [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 6 |
 | 模型给出越界的策略数值（`gray_pct` > 20% 等） | `build` 抛 `StrategyBoundError` ⇒ **不入库**；调用方回落确定性版（**不夹紧、不改写**） | ✅ | `INT-11` / `AR-15` |
 | 后置校验任一关不过 | 内容**不入库**、**不进清单**；拒绝原因进日志 | ✅ | `AR-15` / `AR-22` / `AR-23` |
@@ -149,6 +154,7 @@
 | 单元 | 内容对象：`checksum` 稳定 · `content_id` 幂等 · 同输入逐字节相同（**产物层**的确定性，对应 `AR-30` 的三条保证之一） | `analysis/tests/test_aicap_content.py` |
 | 单元 | 模板生成器：N 个变体互不相同且各自可复现 | 同上 |
 | 单元 | 清单文件：形状 · 单条上限 · 重复资源/variant 拒绝 | 同上 |
+| 单元 | **内容的两条路**：默认走模板（哪怕给了可用客户端）· `--llm` 走模型且**身份字段取自输入**（不取模型的）· 模型不可用/抽取失败**回落并如实标注** · 生成器是**闭集**（写别的值被拒） · CLI `--llm` 缺 key ⇒ 退出 2 | `analysis/tests/test_aicap_content.py` |
 | 结构 | 「无绕过路径」：`analysis/` 下除出口（`service.py`）·接缝（`model.py`）·`llm/` 自身与测试外，禁止 import 模型客户端 | `make archcheck`（`AR-33` 项） |
 | 结构 | **内核任务无关**：`analysis/aicap/**` 的仓内依赖只允许 `analysis.llm` 与自己；`analysis/llm/**` 禁止反向依赖 `aicap` | `make archcheck`（`MD-4` 项） |
 | 单元 | **假 kind 走完整内核**（只在测试里存在、字段名与产物都不是「内容」）—— 解耦的可执行证明 | `analysis/tests/test_aicap_guardrail.py::test_run_task_is_task_agnostic` |
@@ -164,7 +170,7 @@
 
 | # | 未决 | 阻塞什么 | 去向 |
 | --- | --- | --- | --- |
-| 1 | ~~模型后端与结构化输出框架（Outlines / Instructor 等）~~ | —— | ✅ **已定**（2026-09-21）：云模型（[ADR-0026](../background/decisions/0026-cloud-model-backend.md)）+ 既有三段式提取 + 独立契约校验；**不引** Outlines/Instructor（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 1）。该项的**阶段 B 部分**（`kind=content` 接模型）仍未做 |
+| 1 | ~~模型后端与结构化输出框架（Outlines / Instructor 等）~~ | —— | ✅ **已定**（2026-09-21）：云模型（[ADR-0026](../background/decisions/0026-cloud-model-backend.md)）+ 既有三段式提取 + 独立契约校验；**不引** Outlines/Instructor（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 1）。该项的**阶段 B 部分**（`kind=content` 接模型）**已于 2026-09-21 落地**（`--llm` + `use_model` 口径 + 生成器闭集），实测见 [`../ops/ai-injection-2026-09-21/README.md`](../ops/ai-injection-2026-09-21/README.md)；**仍未做**的是模型 vs 模板的**质量对照**（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 1） |
 | 2 | PII / 泄露检测（Presidio 类） | `AR-22` 泄露类的覆盖度 | 同上 2；**本轮决定不引**（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 2），改为提示词禁令 + `rationale` 受检字段；**机器识别原始 URI 查询串/UA 仍缺**（ADR-0031 未解决 3）。调研已确认 Presidio 为 MIT；**`protectai/llm-guard` 已归档，禁止引入**（[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md) §3.2） |
 | 3 | 风格画像的来源（真实站点采样 → 去敏 → 入库） | 内容「像不像」 | 同上 3 |
 | 4 | 轮换与识破信号的接线（`strategy` → 清单版本 +1） | 被识破后的自愈 | 同上 4 |

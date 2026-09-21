@@ -450,9 +450,9 @@
       },
       "expect": {
         "gap": {
-          "kind": "未实现",
-          "why": "配置的 whitelist 段本期只解析与校验、**不消费**（配置注释已写明）",
-          "close": "在 director 引流判定前接入白名单（来源网段 / UA / 路径前缀）"
+          "kind": "未断言（能力已实现，默认配置没开）",
+          "why": "白名单**已实现**：边缘侧命中即 `executed=whitelist` 且不调核心，核心侧 `loader.Whitelist()` → `director.whitelisted()` 先于引流判定（单测 TestWhitelistByUserAgentSkipsJudgement）。但演示栈默认配置的 whitelist 段是**空的**，所以这条场景在默认栈里断言不了",
+          "close": "用 `deploy/docker/compose.verify-mirage.yaml` 覆盖起栈，并把 `SHEN_VERIFY_WHITELIST` 设成你的来源网段，再发同一条请求：应看到 `executed=whitelist` + `unjudged=true`。实证：docs/ops/ai-injection-2026-09-21/logs/docker-whitelist.txt"
         }
       }
     },

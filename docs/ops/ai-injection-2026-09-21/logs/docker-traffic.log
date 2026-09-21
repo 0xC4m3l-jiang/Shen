@@ -1,0 +1,73 @@
+场景                           分组     HTTP     分数  决策           信号
+------------------------------------------------------------------------------
+probe-git-headless           自动化探针   200   0.90  route_origin ua-headless,path-probe  ✓
+probe-git-normal-ua          自动化探针   200   0.90  route_origin ua-headless,path-probe  ✗
+                               ↳ 分数 0.8999999999999999 高于上界 0.35
+probe-git-head               自动化探针   200   0.30  route_origin path-probe  ✓
+headless-home                自动化探针   200   0.60  route_origin ua-headless  ✓
+probe-gitignore              规则精度    200   0.30  route_origin path-probe  缺口
+probe-git-prefixed           规则精度    200   0.70  route_origin path-traversal  缺口
+scanner-sqlmap               扫描器指纹   200   0.70  route_origin ua-sqlmap  ✓
+scanner-nuclei               扫描器指纹   200   1.00  route_origin ua-nuclei,path-actuator  ✓
+scanner-nikto                扫描器指纹   200   0.60  route_origin ua-nikto  ✓
+scanner-masscan              扫描器指纹   200   0.50  route_origin ua-masscan  ✓
+scanner-script-client        扫描器指纹   200   0.20  route_origin ua-script-client  ✓
+endpoint-env                 敏感端点    200   0.50  route_origin path-env  ✓
+endpoint-svn                 敏感端点    200   0.40  route_origin path-svn  ✓
+endpoint-aws-credentials     敏感端点    200   0.60  route_origin path-aws-credentials  ✓
+endpoint-admin               敏感端点    200   0.30  route_origin path-admin  ✓
+endpoint-wp-login            敏感端点    501   0.50  route_origin path-wp-login  ✓
+injection-traversal-plain    规则精度    200   0.00  route_origin —  缺口
+injection-traversal-encoded  规则精度    200   0.00  route_origin —  缺口
+injection-sqli-union         规则精度    200   0.00  route_origin —  缺口
+injection-sqli-encoded       规则精度    200   0.00  route_origin —  缺口
+method-delete                破坏性方法   501   0.50  route_origin method-destructive  ✓
+method-put                   规则精度    501   0.00  route_origin —  缺口
+session-reuse                会话与缓存   200   0.90  route_origin ua-headless,path-probe  ✓
+session-reuse                会话与缓存   200   0.90  route_origin ua-headless,path-probe  ✓
+session-distinct             会话与缓存   200   0.90  route_origin ua-headless,path-probe  ✓
+session-distinct             会话与缓存   200   0.90  route_origin ua-headless,path-probe  ✓
+whitelist-monitoring         白名单     200   0.00  route_origin —  缺口
+normal-firefox-home          正常对照    200   0.00  route_origin —  ✓
+normal-safari-api            正常对照    200   0.00  route_origin —  ✓
+normal-static-asset          正常对照    200   0.00  route_origin —  ✓
+normal-chrome-css            正常对照    200   0.00  route_origin —  ✓
+boundary-long-ua             边界      200   0.00  route_origin —  ✓
+boundary-long-path           边界      200   0.00  route_origin —  ✓
+boundary-empty-ua            边界      200   0.00  route_origin —  ✓
+boundary-unicode-path        边界      200   0.00  route_origin —  ✓
+
+断言 26/27 通过 · 观察 0 条 · 缺口 8 条 · 出口卫生问题 0 条
+失败场景：probe-git-normal-ua
+
+── 已知缺口（不算失败；这是「设计有、当前没做到」的清单）──
+  · [精度] probe-gitignore（规则精度）：前缀匹配只看字符串开头，`/.gitignore` 被当成源码目录探测
+      实测：当前分数 0.3、信号 ['path-probe']
+      怎么关：改为路径段边界匹配（或 equals 具体文件），并在配置规范里写明前缀语义
+  · [精度] probe-git-prefixed（规则精度）：未归一化就匹配，加一层无害前缀即可绕过
+      实测：当前分数 0.7、信号 ['path-traversal']
+      怎么关：对 path 归一化（去 `..`、合并重复斜杠）后再匹配；需评估代价
+  · [未覆盖] injection-traversal-plain（规则精度）：载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的穿越/SQLi 完全不可见
+      实测：当前分数 0、信号 []
+      怎么关：给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）
+  · [精度] injection-traversal-encoded（规则精度）：规则匹配原始路径字符串，编码后不命中
+      实测：当前分数 0、信号 []
+      怎么关：匹配前解码/归一化 query（注意解码代价与幂等）
+  · [未覆盖] injection-sqli-union（规则精度）：载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的注入完全不可见
+      实测：当前分数 0、信号 []
+      怎么关：给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）
+  · [精度] injection-sqli-encoded（规则精度）：同上：编码形式不被字符串规则命中
+      实测：当前分数 0、信号 []
+      怎么关：同 encoded-traversal
+  · [未覆盖] method-put（规则精度）：示例规则只登记 DELETE，PUT/PATCH 未建模（演示站对两者都回 501，属业务行为）
+      实测：当前分数 0、信号 []
+      怎么关：按业务语义补齐方法维度规则或给出推荐基线集
+  · [未实现] whitelist-monitoring（白名单）：配置的 whitelist 段本期只解析与校验、**不消费**（配置注释已写明）
+      实测：当前分数 0、信号 []
+      怎么关：在 director 引流判定前接入白名单（来源网段 / UA / 路径前缀）
+
+── 逐请求链路核对（DAG）──
+  · 链路 70 条；落点取值与每步三段均已核对
+
+── L4 结论核对（AR-12：引用必须真实存在）──
+  · 结论 2 条（接受 1）· 遥测里已知判定 67 个

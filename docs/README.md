@@ -117,6 +117,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | --- | --- | --- |
 | 运维（部署 / 升级 / 故障 / 容量） | [`ops/runbook.md`](ops/runbook.md)（启动 · 检查 · 修复表 · 更新 · 产物落在哪） | `NI-1`…`NI-14` · `V-1…V-5` |
 | 要验证"整体功能有没有问题" | [`ops/functional-verification.md`](ops/functional-verification.md)（跑法 · **缺口清单** · 环境验不了什么） | `NI-1` · `ST-7` · `AR-12` |
+| 要看"欺骗引擎 + AI 注入到底跑没跑通"（**带 DAG 图**） | [`ops/ai-injection-2026-09-21/README.md`](ops/ai-injection-2026-09-21/README.md)（21 项验收 · 四阶段图示 · 原始数据） | `AR-33` · `AR-30` · `INT-8` · `NI-1` |
 | 接入方（站点接进来 / 接完验证） | [`integrate/business-onboarding.md`](integrate/business-onboarding.md)（形态选择 + 最小步骤）· [`integrate/quickstart.md`](integrate/quickstart.md) | `INT-1`…`INT-25` |
 | 看告警 / 流量 / 流动 / L4 结论 | [`integrate/observability.md`](integrate/observability.md) | `ST-7` · `AR-10` |
 | 人工测试（一轮 15 分钟） | [`ops/functional-verification.md`](ops/functional-verification.md) §7 + [`../scripts/traffic/README.md`](../scripts/traffic/README.md) | — |
@@ -134,7 +135,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | 目录 | 受众 | 现在有什么 |
 | --- | --- | --- |
 | [`integrate/`](integrate/README.md) ✅ | 接入方 + 运维 + 做人工测试的人 | `README`（总览）· `quickstart`（5 分钟）· `business-onboarding`（怎么把业务接进来）· `observability`（看告警/流量/流动）|
-| [`ops/`](ops/runbook.md) ✅ | 运维 + 任何要验证的人 | `runbook.md`（启动/检查/**修复表**/更新/产物卫生）· `functional-verification.md`（整体功能验证 + **缺口清单** + 环境验不了什么） |
+| [`ops/`](ops/runbook.md) ✅ | 运维 + 任何要验证的人 | `runbook.md`（启动/检查/**修复表**/更新/产物卫生）· `functional-verification.md`（整体功能验证 + **缺口清单** + 环境验不了什么）· `ai-injection-2026-09-21/`（**AI 注入功能验证报告** + DAG 图 + 原始数据） |
 | `analytics/` ⏳ 未建 | 运营 | 待建：`dashboards.md`（每个指标在哪看 + 怎么读 + 异常怎么办）· `playbook.md`（影子 → 放开的晋升判据）；规则来源 `INT-12` · `INT-18` |
 | [`integrate/doctor.md`](integrate/doctor.md) ✅ | 接入方 | 接入自检五项（`INT-17`）的用法 · 四种结果状态怎么读 · 与 `traffic`/哨兵的分工（**工具已实现**：`scripts/shen.sh doctor`） |
 | `scripts/sentinel` ⏳ 占位 | 接入方 | 差异哨兵（真实业务 vs 幻境逐字段 diff 12 项） |

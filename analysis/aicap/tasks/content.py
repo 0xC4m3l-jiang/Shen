@@ -9,9 +9,15 @@
 产物**冻结进清单** + `content_id` 由**内容体**算出 + **会话钉定**
 （[ADR-0026](../../../docs/background/decisions/0026-cloud-model-backend.md) 决定 2）。
 
-阶段 B 接模型时，**只换 `produce`**：提示词已在 `service.generate()` 内渲染并校验过
-（三段式 + 数据区），后置四关也照旧执行。本任务的 `requires_model=False` 就是这个意思：
-模板生成器不需要模型。
+阶段 B 接模型（**2026-09-21 落地**）：`produce` 分两条路（模型 / 模板），
+按 `TaskSpec.payload["use_model"]` 选（由 CLI 的 `--llm` 置位）。
+两条路都走同一个出口与同一套护欏，**并且各自在产物里如实标注 `generator`**：
+模型路 `model-v1`、模板路 `template-v1`（`AR-15`：不得用一者的输出冒充另一者）。
+
+**身份字段不从模型取**：`resource` / `variant` 由生成器从 `spec` 取值
+—— 模型只负责 `body`（与可选的 `marker`）。
+理由：这两个字段是**清单的键**，模型一次笔误就会把内容挂到错资源上，而那属「修复不了只能拒绝」的错；
+内容本身（`body`）仍然是模型产出的。
 """
 
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
@@ -20,11 +26,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ...llm.contract import Field, Schema
+from ...llm.extract import ExtractionError
 from ..content import CONTENT_KIND, ContentObject, make_content
+from ..model import Unavailable
+from ._produce import structured_candidate
 from ._registry import GuardrailProfile, Task, TaskLimits
 
 if TYPE_CHECKING:  # pragma: no cover - 只用于类型标注，避免运行期循环导入
@@ -34,6 +44,14 @@ if TYPE_CHECKING:  # pragma: no cover - 只用于类型标注，避免运行期�
 GENERATOR = "template-v1"
 """生成器标识（进内容对象，供审计定位「这份内容是哪个版本产出的」）。"""
 
+logger = logging.getLogger(__name__)
+
+MODEL_GENERATOR = "model-v1"
+"""模型路径的生成器标识（与 L4 三任务同一口径）。"""
+
+GENERATORS: tuple[str, ...] = (GENERATOR, MODEL_GENERATOR)
+"""生成器闭集（由 `Field.allowed` 守住）：写别的值会被后置检查拒绝。"""
+
 CONTENT_SCHEMA = Schema(
     name="content",
     fields=(
@@ -41,6 +59,7 @@ CONTENT_SCHEMA = Schema(
         Field("variant", (int,), True),
         Field("body", (str,), True),
         Field("marker", (str,), False, 64),
+        Field("generator", (str,), True, 32, allowed=GENERATORS),
     ),
 )
 """候选输出的结构契约（后置护栏第一关，`AR-15`）。"""
@@ -115,13 +134,52 @@ def _render_body(*, resource: str, profile_id: str, variant: int, version: int) 
 
 
 def produce(prompt: str, spec: TaskSpec, client: AnalysisClient) -> Mapping[str, Any]:
-    """产出候选输出（**未过护栏**）。
+    """产出候选输出（**未过检查**）：模型优先、失败回落模板。
 
-    `prompt` 与 `client` 在本实现里**刻意不用**：阶段 A 是模板生成器，不调模型。
-    提示词仍由 `service.generate()` 渲染并校验（三段式 + 数据区，`AR-31` / `AR-24`），
-    所以阶段 B 换成模型实现时，这条路径的其余部分**一行都不用改**。
+    走哪条路看 `spec.payload["use_model"]`（CLI 的 `--llm` 置位）——**不靠环境变量隐式决定**：
+    同一个命令在任何环境里都该产出同一类东西，否则「这次是模型还是模板」无法复现。
+
+    回落**不静默**：产物写明 `generator=template-v1`，日志里有 `WARNING`（含原因）。
+    抽取失败（模型不是 JSON）算回落；**结构不合契约**则是后置检查拒绝 —— 两者不是一回事。
     """
-    del prompt, client
+    if _wants_model(spec):
+        candidate = _model_candidate(prompt, spec, client)
+        if candidate is not None:
+            return {**candidate, "generator": MODEL_GENERATOR}
+    return {**_template_candidate(spec), "generator": GENERATOR}
+
+
+def _wants_model(spec: TaskSpec) -> bool:
+    """`payload["use_model"]` 为真才走模型（默认模板 —— 与阶段 A 的行为逐字一致）。"""
+    return bool(spec.payload.get("use_model", False))
+
+
+def _model_candidate(
+    prompt: str, spec: TaskSpec, client: AnalysisClient
+) -> Mapping[str, Any] | None:
+    """让模型产出 body；不可用/抽取失败返回 `None`（由调用方回落模板并记日志）。
+
+    **身份字段覆盖为 spec 的值**（`resource` / `variant`）：它们决定内容进哪个清单条目，
+    不能由模型的一次笔误决定（与 `AR-12` 同一纪律：可核的字段不由模型自述）。
+    """
+    try:
+        raw = structured_candidate(prompt, spec, client)
+    except (Unavailable, ExtractionError) as exc:
+        logger.warning("aicap：模型路径不可用，回落模板生成器：%s", exc)
+        return None
+    candidate: dict[str, Any] = {
+        "resource": str(spec.payload.get("resource", "")),
+        "variant": _as_variant(spec.payload.get("variant")),
+        "body": raw.get("body"),
+    }
+    marker = raw.get("marker")
+    if isinstance(marker, str) and marker:
+        candidate["marker"] = marker
+    return candidate
+
+
+def _template_candidate(spec: TaskSpec) -> Mapping[str, Any]:
+    """确定性模板生成器（阶段 A 的实现；仍是默认路径与落底面）。"""
     resource = str(spec.payload.get("resource", ""))
     profile_id = str(spec.payload.get("profile_id", ""))
     variant = _as_variant(spec.payload.get("variant"))
@@ -136,7 +194,11 @@ def produce(prompt: str, spec: TaskSpec, client: AnalysisClient) -> Mapping[str,
 
 
 def build(checked: Mapping[str, Any], spec: TaskSpec, generated_at: str) -> ContentObject:
-    """把过完护栏的输出变成**内容对象**（契约 §2）。"""
+    """把过完检查的输出变成**内容对象**（契约 §2）。
+
+    `generator` 取**候选自报的那一个**（由 `produce` 按实际路径填），不是任务默认值 ——
+    否则模型产出的内容会被记成模板产出，审计上就是假的（`AR-15`）。
+    """
     profile_id = str(spec.payload.get("profile_id", ""))
     return make_content(
         resource=str(checked["resource"]),
@@ -145,7 +207,7 @@ def build(checked: Mapping[str, Any], spec: TaskSpec, generated_at: str) -> Cont
         body=str(checked["body"]),
         version=_as_variant(spec.payload.get("version")),
         generated_at=generated_at,
-        generator=GENERATOR,
+        generator=str(checked["generator"]),
         marker=str(checked.get("marker", "")),
     )
 

@@ -74,7 +74,7 @@
 | 欺骗响应一致性 | ✅ 已实现 | [`common/core/internal/responder/`](../../common/core/internal/responder)：同 `(会话, 资源)` 命中同一内容（`AR-30`，禁非确定性） |
 | LLM 契约纪律 | ✅ 已实现 | [`analysis/llm/`](../../analysis/llm)：契约校验（`AR-15`）· 信封（`AR-16`）· 三段式解析（`AR-17`）· 双阶段收尾（`AR-19`…`AR-21`）· 黑名单（`AR-22`）· 提示词资源化（`AR-24`）· 注入防护（`AR-31`/`AR-32`） |
 | L4 分析链路 | ✅ 已实现（近线，**双路**） | [`analysis/worker.py`](../../analysis/worker.py)：读事件 → 去重（`AR-14`）→ 意图/攻击链/策略 → 结论事件；**不持有执行能力**（`AR-32`）。三步各自「**模型优先、失败回落**」（`--llm` 才走模型；回落原因进结论的 `model_rejected`） |
-| **模型后端** | 🟡 **分两半**（别混） | **L4 三任务已接**（`intent` / `chain` / `strategy`，2026-09-21）：`analysis/llm/deepseek.py` 的适配器（**只用标准库**）＋ `aicap` 的唯一出口＋护欏；`--llm` 开启，默认关。**`kind=content`（欺骗内容）仍未接**（阶段 B）——它今天仍是**确定性模板生成器**（保证**生成期**可复现；那是阶段 A 的工程性质，**不是** `AR-30` 的要求）；接模型时 `UnconfiguredClient` **显式失败**（`AR-15`：禁止用模板冒充模型输出） |
+| **模型后端** | ✅ **已接**（`--llm` 显式开启，默认关） | `analysis/llm/deepseek.py` 的适配器（**只用标准库**）＋ `aicap` 的唯一出口＋检查：**L4 三任务**（`intent`/`chain`/`strategy`）与**欺骗内容**（`kind=content`，2026-09-21 落地）都走这条路。默认关时内容仍是**确定性模板生成器**；两条路的产物**各自标注** `generator`（`model-v1` / `template-v1`）。**实测报告**见 [`../ops/ai-injection-2026-09-21/README.md`](../ops/ai-injection-2026-09-21/README.md) |
 | L4 结论 → 内容轮换 | ❌ **未接通（阶段 B）** | `strategy` 已产出识破信号，但「谁消费它把清单 `version` +1」未接（[ADR-0023](../background/decisions/0023-deception-content-injection.md) 未解决 4） |
 
 **结论（诚实版）**：现在的注入是**预生成、过护栏、确定性命中**的内容（不是现场生成）——这正是设计要的形状：
@@ -113,7 +113,7 @@
 | 1 | **查询串不参与判定** | 参数型攻击（SQLi/穿越）默认不判 | [`../ops/functional-verification.md`](../ops/functional-verification.md) §2 #1 |
 | 2 | **一次 URL 编码即绕过**规则匹配 | 同上 | 同上 #2 |
 | 3 | 前缀规则误伤 / 可绕过 | `/.gitignore` 误伤；加前缀可绕过 | 同上 #3/#4 |
-| 4 | **`kind=content` 的模型后端未接**（L4 三任务已于 2026-09-21 接上） | 阶段 A 的**内容**由确定性模板生成器产出（像不像另说）；L4 结论已有模型路 | 内容接模型属阶段 B（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 1 的 stage-B 部分）；L4 的质量对照见其未解决 1 |
+| 4 | ~~模型后端未接~~ | —— | ✅ **已闭合**（2026-09-21）：L4 三任务与欺骗内容都走 `--llm` 的模型路径。**仍未做**的是**模型 vs 模板的质量对照**（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 1） |
 | 5 | **诱饵资产 → 边缘**未接通 | 诱饵面内容到不了响应（与 AI 内容是两条通路） | 见本文 §1.5 |
 | 6 | `severity` 档位未定 | 控制台"告警"恒为 0 | [`../spec/metrics.md`](../spec/metrics.md) §2 |
 | 7 | 真实存储未接 | 重启丢观测数据 | `NI-13` |
