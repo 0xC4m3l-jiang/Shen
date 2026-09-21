@@ -86,7 +86,7 @@ scripts/shen.sh up      # 等价于 make up；会自动等就绪并打印地址
 
 | 地址 | 是什么 |
 | --- | --- |
-| http://127.0.0.1:19444/ | **观测控制台** —— 概览 · 告警 · 流量访问与流动 · L4 分析结论 |
+| http://127.0.0.1:19444/ | **观测控制台** —— 概览（含观测新鲜度）· 配置 · 逐请求链路 · 告警 · 逐判定日志 · L4 分析结论 · 原始事件 |
 | http://127.0.0.1:18080/ | **业务入口**（经引擎；默认影子模式：只观测、不处置，`INT-11`） |
 
 ```sh
@@ -202,7 +202,7 @@ analysis/     L4（Python）：意图 · 攻击链 · 策略生成 · LLM 契约
                └ pyproject.toml / requirements*.txt / .venv   ← 本层的工具链与配置全部收在本目录
                └ proto/                由 make pygen 生成的 gRPC 桩
                └ tools/genproto.py     生成脚本（让生成物成为 analysis.proto.* 普通包）
-console/      控制台：只读观测（Web UI + 4 个接口；语言偏离见 ADR-0020）
+console/      控制台：只读观测（Web UI + 只读接口；清单见 docs/spec/console-api.md §2；语言偏离见 ADR-0020）
 scripts/      门禁与运维工具：archcheck · tracecheck · check-leak · licensecheck · devcheck · demo/（本地演示环境）
                └ bin/                 门禁工具二进制缓存（不入库）
 deploy/       部署物料

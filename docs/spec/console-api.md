@@ -80,7 +80,7 @@
 | 影子模式标志 | 同上（它是模式，不是配置路径；但它决定了「现在有没有真的在处置」—— 见 §1.4 未解决） |
 | 白名单 / 隔离名单的**内容** | 接入方的资产面；观测只需知道「有几条」 |
 | 任何密钥 | `ST-20` / `ST-21` |
-| 进程 `started_at` | 核心全库**零** `time.Now()`（`MD-6` 的纪律）—— 不为一个展示字段开这个口子。「是不是刚重启」由 `/api/summary` 的事件时间范围回答 |
+| 进程 `started_at` | 核心全库**零** `time.Now()`（`MD-6` 的纪律）—— 不为一个展示字段开这个口子。「是不是刚重启」由 `/api/summary` 的事件时间范围回答：页面把 `first_seen` / `last_seen` 显示为**观测窗口**，并把「最后一条距今多久」摆在概览第一眼（超过 120 秒标色 —— 见 §2 的 `/api/summary` 行） |
 
 ### 1.3 失败语义
 
@@ -110,7 +110,7 @@
 | --- | --- | --- | --- |
 | `GET /` | —— | 静态页（`go:embed`，无构建步骤） | 二进制内嵌 |
 | `GET /healthz` | —— | `ok`。**只反映本进程存活** —— 核心是否可达由页面上的错误提示体现（`ST-17` 的语义区分） | —— |
-| `GET /api/summary` | —— | 概览：`total` · `by_action` · `alerts` · `l4_conclusions` · `first_seen` · `last_seen` | `ListEvents` |
+| `GET /api/summary` | —— | 概览：`total` · `by_action` · `alerts` · `l4_conclusions` · `first_seen` · `last_seen`。**页面消费方式**：`first_seen`/`last_seen` → 「观测窗口」一行；`last_seen` 距今 > 120 秒 ⇒ 概览右上角标色（「⚠️ 观测可能已停」）—— 这个阈值是**页面常量**（`STALE_AFTER_MS`），不是契约字段 | `ListEvents` |
 | `GET /api/config` | —— | **核心只读快照**（§1.1 的字段，包在 `{policy, ai}` 两层里） | `GetCoreSnapshot` |
 | `GET /api/events` | `limit` · `type` | 最近事件（原始视图） | `ListEvents` |
 | `GET /api/flow` | `limit` | **逐判定**记录：`decision_id` / `source_ip` / `method` / `path` / `user_agent` / `action` / `severity` / `backend` / `score` / `signals` / `at`（与 `logs.md` §3 的字段表一一对应） | `ListEvents`（`type=decision`） |

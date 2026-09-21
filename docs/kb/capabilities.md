@@ -37,7 +37,9 @@
 | 逐请求日志 | `SHEN_PROXY_LOG_REQUESTS=1` 时看 `路由：… 落点=…`（演示栈默认开） |
 | 控制台接口 | **10 个只读接口**（权威表：[`../spec/console-api.md`](../spec/console-api.md) §2）：`/`（页面）· `/api/summary` · **`/api/config`（核心只读快照）** · `/api/flow`（逐判定）· `/api/events` · `/api/analysis` · `/api/graphs`（逐请求链路）· `/api/trace`（单请求四段）· `/api/topology`（聚合）· `/healthz` |
 | **DAG 逐请求链路** | 每条请求一条链路，**每步可点**看「请求 / 响应 / 为什么执行」；5 秒刷新；文字折行不溢出 |
-| 告警 | 两段式：真实告警（`block` 或 `severity≠none`）+ 高风险显示标记（`score ≥ SHEN_CONSOLE_ALERT_SCORE`，**仅显示**） |
+| **配置快照** | 核心**当前生效态**（策略 id/版本/校验和/规则数/白名单条数 · AI 开关/种类/模型/清单路径/变体/已装载条数），2026-09-21 新增；**阈值/灰度/影子模式不在其中**（核心运行参数，不进契约面） |
+| **观测新鲜度** | 概览第一眼显示**最后一条事件距今多久** + **观测窗口**；超过 120 秒（≈24 个刷新周期）标色提醒「观测可能已停」。为什么需要它：控制台最易出的错不是「显示错」而是「**数据停了**」—— 页面看上去正常，只是不再变 |
+| 告警 | 两段式：真实告警（`block` 或 `severity≠none`）+ 高风险显示标记（`score ≥ SHEN_CONSOLE_ALERT_SCORE`，**仅显示**）。⚠️ 影子模式下真实告警**恒为 0**（`severity` 档位未定，见 [`../spec/metrics.md`](../spec/metrics.md) §2） |
 | 指标 | [`../spec/metrics.md`](../spec/metrics.md)：**已采集 10 项** / 未采集 6 项（各带关法） |
 | 接入自检 | `scripts/shen.sh doctor`（`INT-17` 五项：body 可读 / TLS 方式 / 会话粘性 / 实境与幻境 / 是否在路径上） |
 | 怎么验 | `scripts/shen.sh verify`（状态 + 全量伪造流量 + L4 核对 + DAG 一致性 + 报告） |

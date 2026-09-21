@@ -44,7 +44,7 @@
 | 19 | `strategy` | **策略生成** + 诱饵再生成决策（经 `policy` 下发） | L4 | Python | `analysis/strategy/` | ✅ [`modules/strategy.md`](modules/strategy.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 20 | `llm-components` | LLM 契约纪律（`AR-15`…`AR-27`）+ **间接注入防护** + 内容预生成 | L4 | Python | `analysis/llm/` | ✅ [`modules/llm-components.md`](modules/llm-components.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 25 | `ai-capability` | **AI 能力服务**：可开关的生成出口（强制护栏）—— 阶段 A 产出欺骗内容 + 内容清单，经策略面下发到改道侧 | L4 | Python | `analysis/aicap/` | ✅ [`modules/ai-capability.md`](modules/ai-capability.md) | ✅ **已实现（阶段 A：通路 + 开关 + 护栏）** | 3 |
-| 21 | `console` | 控制台：**观测（只读）** —— 告警 · 流量访问 · 请求流动 | 控制台 | **Go + 静态页**（[ADR-0020](background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | `console/` | ✅ [`modules/console.md`](modules/console.md) | ✅ **已实现（最小可用）**（页面 + 4 个只读接口） | 2b |
+| 21 | `console` | 控制台：**观测（只读）** —— 告警 · 逐判定日志 · 请求流动 · **配置快照** · **观测新鲜度** | 控制台 | **Go + 静态页**（[ADR-0020](background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | `console/` | ✅ [`modules/console.md`](modules/console.md) | ✅ **已实现（最小可用）**（页面 + 4 个只读接口） | 2b |
 | 22 | `control` | **服务面**：gRPC 入参映射 · 会话身份提取 · 熔断（`NI-10`）· **禁止回显的强制点** | 核心 | Go | `core/internal/control/` | ✅ [`modules/control.md`](modules/control.md) | ✅ 3 文件 + 1 单测 | 1 |
 | 23 | `decoy` | **诱饵面**：五类（Developer API / 指令文件 / MCP / 数据集 / 蜜饵）+ 多态轮换 | 核心 | Go | `core/internal/decoy/` | ✅ [`modules/decoy.md`](modules/decoy.md) | ✅ 2 文件 + 1 单测 | 2b |
 | 24 | `honeypot` | **蜜罐入口**：类型注册 + `config` 开关 + 后端池解析；**不实现具体蜜罐**（接第三方） | 核心 | Go | `core/internal/honeypot/` | ✅ [`modules/honeypot.md`](modules/honeypot.md) | ✅ 2 文件 + 1 单测 | 2b |

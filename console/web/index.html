@@ -41,6 +41,7 @@
   <section>
     <h2>概览</h2>
     <div class="cards" id="cards"></div>
+    <p class="muted" id="obsWindow" style="margin:10px 0 0"></p>
     <p class="flow" style="margin:10px 0 0">
       流量在引擎中的流动：<b>客户端</b> → L0(客户 LB/nginx，终结 TLS) → <b>本引擎适配器</b>（白名单 → 判定缓存 → gRPC 判定）
       → <b>核心</b>（judge 打分 → director 三值） → <b>按决策执行</b>（放行到业务 / 改道到幻境并注入诱饵 / 拦截 403）
@@ -122,6 +123,27 @@ async function get(path) {
   const body = await r.json().catch(() => null);
   if (!r.ok) throw new Error((body && body.error) || ("HTTP " + r.status));
   return body;
+}
+
+// 观测新鲜度：最后一条事件距现在多久。
+//
+// 为什么值得占版面：控制台只读遥测面，它最容易出的错不是「显示错」而是「**数据停了**」——
+// 核心挂了 / 适配器上报断了 / 事件类型过滤写错了，页面看上去都「正常」（表格只是不再变）。
+// 所以把「多久没有新数据」摆在第一眼，超时就用错误色标出来（只标色，不改任何处置 —— AR-10）。
+const STALE_AFTER_MS = 120_000; // 120 秒 ≈ 24 个刷新周期（页面默认 5 秒刷一次）
+
+function freshness(lastSeen) {
+  if (!lastSeen) return { text: "暂无判定数据", stale: false };
+  const ms = Date.now() - new Date(lastSeen).getTime();
+  if (!Number.isFinite(ms)) return { text: "最后一条时间戳不可解析", stale: true };
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (ms > STALE_AFTER_MS) return { text: `最后一条在 ${secs} 秒前（⚠️ 观测可能已停）`, stale: true };
+  return { text: `最后一条在 ${secs} 秒前`, stale: false };
+}
+
+function fmtWindow(sum) {
+  if (!sum.first_seen && !sum.last_seen) return "观测窗口：暂无数据（核心刚起？还是没流量？）";
+  return `观测窗口：${fmtTime(sum.first_seen)} ~ ${fmtTime(sum.last_seen)}（共 ${sum.total} 条事件）`;
 }
 
 function fmtTime(t) { return t ? new Date(t).toLocaleString("zh-CN", { hour12:false }) : "—"; }
@@ -458,7 +480,10 @@ async function load() {
       get("/api/summary"), get("/api/flow?limit=300"), get("/api/events?limit=100"),
       get("/api/analysis?limit=100"),
     ]);
-    $("meta").textContent = `事件 ${sum.total} 条 · 告警 ${sum.alerts} 条 · L4 结论 ${sum.l4_conclusions || 0} 条`;
+    const fresh = freshness(sum.last_seen);
+    $("meta").textContent = `事件 ${sum.total} 条 · 告警 ${sum.alerts} 条 · L4 结论 ${sum.l4_conclusions || 0} 条 · ${fresh.text}`;
+    $("meta").className = fresh.stale ? "err" : "muted";
+    $("obsWindow").textContent = fmtWindow(sum);
 
     const cards = $("cards"); cards.textContent = "";
     const entries = Object.entries(sum.by_action || {});
