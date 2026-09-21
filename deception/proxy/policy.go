@@ -17,7 +17,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 
 	policyv1 "shen/api/policy/v1"
-	"shen/edge/injection"
+	"shen/deception/injection"
 )
 
 // PolicyClient 是本端对**策略面**（`api/policy/v1`，接缝 S4）的依赖。

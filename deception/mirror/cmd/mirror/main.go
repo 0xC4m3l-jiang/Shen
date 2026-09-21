@@ -16,7 +16,7 @@ import (
 
 	judgev1 "shen/api/judge/v1"
 	telemetryv1 "shen/api/telemetry/v1"
-	"shen/edge/mirror"
+	"shen/deception/mirror"
 )
 
 const (

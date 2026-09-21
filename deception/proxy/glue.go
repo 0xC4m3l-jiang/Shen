@@ -134,7 +134,7 @@ func parsePrefixesFromList(list []string) ([]netip.Prefix, error) {
 //
 // 「会话」这里取 Cookie 头的原值 —— 只是读，不解析、不外传（INT-20）。
 //
-// 形态①的接收端（edge/mirror）有一份**同样语义**的实现。两处刻意不共享代码：
+// 形态①的接收端（deception/mirror）有一份**同样语义**的实现。两处刻意不共享代码：
 // 适配器之间必须能各自独立部署（INT-5），而这段逻辑只有十几行且由 ST-10 固定；
 // 改其一时必须同时改另一处。
 func decisionID(r *http.Request, trustXFF bool, window time.Duration, now time.Time) string {

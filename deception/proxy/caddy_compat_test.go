@@ -35,7 +35,7 @@ func TestCaddyAssumptionsStillHold(t *testing.T) {
 	// 若 Caddy 改了默认值 → 我们的清洗会静默失效 → 攻击者又能看到代理栈指纹（OH-2）。
 	if caddyhttp.ServerHeader != caddyDefaultServerHeader {
 		t.Fatalf("Caddy 的默认 Server 头变了：%q（我们期待 %q）。"+
-			"请同步 edge/proxy/handler.go 的 caddyDefaultServerHeader，否则 OH-2 清洗会静默失效",
+			"请同步 deception/proxy/handler.go 的 caddyDefaultServerHeader，否则 OH-2 清洗会静默失效",
 			caddyhttp.ServerHeader, caddyDefaultServerHeader)
 	}
 

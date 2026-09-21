@@ -124,7 +124,7 @@ make run                                        # 监听 127.0.0.1:9443
 make smoke                                      # 另开一个终端：对判定面发三个样本
 SHEN_CORE_ADDR=127.0.0.1:9443 make analysis      # 跑一轮 L4（结论进控制台「分析结论」块）
 SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 \
-  go run ./edge/proxy/cmd/proxy                 # 起反向代理前置（③），业务地址指向真实服务
+  go run ./deception/proxy/cmd/proxy                 # 起反向代理前置（③），业务地址指向真实服务
 ```
 
 ---
@@ -196,7 +196,7 @@ vendor/       Go 依赖副本（入库 ⇒ 构建与门禁离线可用，不需�
 core/         核心：判定 · 决策 · 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
                └ internal/<模块>/  一模块一目录（iface.go + 实现 + 单测）
                └ cmd/core/         核心进程入口
-edge/         L1 边缘：proxy（③前置 + ④边车，内嵌 Caddy）· mirror（①旁路镜像）· dns（②纯配置）· injection（处置）
+deception/         L1 边缘：proxy（③前置 + ④边车，内嵌 Caddy）· mirror（①旁路镜像）· dns（②纯配置）· injection（处置）
 deception/    L2/L3：协议仿真蜜罐 · 蜜网（阶段 3）
 analysis/     L4（Python）：意图 · 攻击链 · 策略生成 · LLM 契约纪律 · 近线 worker
                └ pyproject.toml / requirements*.txt / .venv   ← 本层的工具链与配置全部收在本目录

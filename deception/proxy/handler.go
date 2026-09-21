@@ -29,7 +29,7 @@ import (
 	judgev1 "shen/api/judge/v1"
 	policyv1 "shen/api/policy/v1"
 	telemetryv1 "shen/api/telemetry/v1"
-	"shen/edge/injection"
+	"shen/deception/injection"
 )
 
 // 上游 Transport 的连接层超时。没有超时的 Transport 会让挂死的上游一直占住连接与 goroutine。
@@ -185,7 +185,7 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	h.report = telemetryv1.NewDeceptionTelemetryClient(conn)
 
 	// 诱饵注入（L1）：把配置片段注入**引流侧**的 HTML 响应。
-	// 接口 Injector 由本模块定义；这里接上 edge/injection 的纯变换实现。
+	// 接口 Injector 由本模块定义；这里接上 deception/injection 的纯变换实现。
 	if len(h.Inject) > 0 {
 		inj, ierr := injection.New(injectRules(h.Inject))
 		if ierr != nil {
@@ -657,7 +657,7 @@ func errString(err error) string {
 	return err.Error()
 }
 
-// injectRules 把注入片段（已按 `;;` 拆分）映射成 edge/injection 的 Rule。
+// injectRules 把注入片段（已按 `;;` 拆分）映射成 deception/injection 的 Rule。
 // 空片段 = 不注入。
 func injectRules(snippets []string) []injection.Rule {
 	var out []injection.Rule
@@ -758,7 +758,7 @@ func upstreamAddr(raw string) (dial string, tlsUpstream bool, err error) {
 //	① **静态规则**（本地 env / 策略面 `inject_rules`）—— 由 `currentInjector()` 给；
 //	② **AI 欺骗内容**（策略面 `content_manifest`）—— 需开关成立 + 命中资源 + 校验和相符。
 //
-// 无论哪种，最终都走 `edge/injection` 的同一份改写语义（`ST-5`）。
+// 无论哪种，最终都走 `deception/injection` 的同一份改写语义（`ST-5`）。
 type injectingTransport struct {
 	// handler 而非注入器本身：注入规则可经**策略面**在运行期变（`applyEdgePolicy`），
 	// 而 transport 是建后端的时刻就挂上的 —— 持注入器会把规则钉死在当时那一份。

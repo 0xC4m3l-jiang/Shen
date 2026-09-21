@@ -91,7 +91,8 @@ def _record_id(*, variant: int, version: int) -> str:
 def _render_body(*, resource: str, profile_id: str, variant: int, version: int) -> str:
     """生成一个 **HTML 片段**（不是完整文档）。
 
-    为什么是片段：注入复用 `edge/injection` 的**插入**语义（插在标记之前，`ST-5` 不新增替换语义），
+    为什么是片段：注入复用 `deception/injection` 的**插入**语义
+    （插在标记之前，`ST-5` 不新增替换语义），
     所以内容得是「能插进去的一段」，而不是另一个 `<html>` 文档。
     """
     headline = PROFILE_VOCAB[variant % len(PROFILE_VOCAB)]

@@ -54,13 +54,13 @@
 | 22 | `control` | 核心 | Go | `core/internal/control/` | `docs/modules/control.md` | gRPC 服务面：入参映射、会话身份提取、**禁止回显的强制点**、遥测与策略面的对账 | 1 |
 | 23 | `decoy` | 核心 | Go | `core/internal/decoy/` | `docs/modules/decoy.md` | **诱饵面**：功能性伪装诱饵（Developer API / 指令文件 / MCP / 消耗战数据集）+ 三类蜜饵 + SSRF 蜜饵；产出诱饵定义与投放片段。依据 [ADR-0010](../background/decisions/0010-functional-camouflage.md) | 2b |
 | 24 | `honeypot` | 核心 | Go | `core/internal/honeypot/` | `docs/modules/honeypot.md` | **蜜罐入口与后端池**：类型注册 · `config` 开关 · 生命周期 · 把 `route_mirage` 的逻辑后端名解析到实例。**不实现具体蜜罐**（接第三方）。依据 [ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md) | 2b |
-| 9 | `edge-injection` | L1 | Go | `edge/injection/` | `docs/modules/edge-injection.md` | 投毒响应改写、假路径、蜜饵注入（被适配器引用，**不独立部署**，`ST-5`） | 2b |
-| 10 | `adapter-mirror` | L1 | 配置 + Go | `edge/mirror/` | `docs/modules/adapter-mirror.md` | 只读采集，**不处置**（**不在请求路径**，见 `INT-6`） | **1** |
-| 11 | **`adapter-proxy`** | L1 | Go | `edge/proxy/` | `docs/modules/adapter-proxy.md` | ③ 反向代理前置 **与** ④ Sidecar 的**同一份实现**：拦截 → 调核心 → 按决策选 upstream → 异步上报。两形态的差别只在部署位置与 upstream 指向。转发与 **TLS 终结**用**内嵌 Caddy**（[ADR-0017](../background/decisions/0017-caddy-l1-base.md)）；模块身份与对外接口不变 | **2a** |
-| ~~12~~ | ~~`adapter-sidecar`~~ | L1 | Go | ~~`edge/sidecar/`~~ | —— | ❌ **已合并入第 11 行 `adapter-proxy`**（同一份代码的另一种部署形态，不构成独立模块） | —— |
-| 13 | `adapter-dns` | L1 | 配置 | `edge/dns/` | `docs/modules/adapter-dns.md` | 按来源解析到引擎或真实服务（**纯配置，无源码**） | **2a** |
-| 14 | `honeypot-protocol` | L2 | Go / Rust | `deception/honeypot/` | `docs/modules/honeypot-protocol.md` | 协议仿真（SSH / MySQL / Redis / FTP）+ 交互捕获 | 3 |
-| 15 | `honeypot-shell` | L2 | Go / Rust | `deception/shell/` | `docs/modules/honeypot-shell.md` | 命令表分发、内存文件系统、文件投递 | 3 |
+| 9 | `edge-injection` | L1 | Go | `deception/injection/` | `docs/modules/edge-injection.md` | 投毒响应改写、假路径、蜜饵注入（被适配器引用，**不独立部署**，`ST-5`） | 2b |
+| 10 | `adapter-mirror` | L1 | 配置 + Go | `deception/mirror/` | `docs/modules/adapter-mirror.md` | 只读采集，**不处置**（**不在请求路径**，见 `INT-6`） | **1** |
+| 11 | **`adapter-proxy`** | L1 | Go | `deception/proxy/` | `docs/modules/adapter-proxy.md` | ③ 反向代理前置 **与** ④ Sidecar 的**同一份实现**：拦截 → 调核心 → 按决策选 upstream → 异步上报。两形态的差别只在部署位置与 upstream 指向。转发与 **TLS 终结**用**内嵌 Caddy**（[ADR-0017](../background/decisions/0017-caddy-l1-base.md)）；模块身份与对外接口不变 | **2a** |
+| ~~12~~ | ~~`adapter-sidecar`~~ | L1 | Go | ~~`deception/sidecar/`~~ | —— | ❌ **已合并入第 11 行 `adapter-proxy`**（同一份代码的另一种部署形态，不构成独立模块） | —— |
+| 13 | `adapter-dns` | L1 | 配置 | `deception/dns/` | `docs/modules/adapter-dns.md` | 按来源解析到引擎或真实服务（**纯配置，无源码**） | **2a** |
+| 14 | `honeypot-protocol` | L2 | Go / Rust | `honeypot/protocol/` | `docs/modules/honeypot-protocol.md` | 协议仿真（SSH / MySQL / Redis / FTP）+ 交互捕获 | 3 |
+| 15 | `honeypot-shell` | L2 | Go / Rust | `honeypot/shell/` | `docs/modules/honeypot-shell.md` | 命令表分发、内存文件系统、文件投递 | 3 |
 | 16 | `netpolicy` | L3 | 声明式 + eBPF | `deception/netpolicy/` | `docs/modules/netpolicy.md` | 微隔离、假拓扑、运行时检测与阻断 | 3 |
 | 17 | `intent` | L4 | Python | `analysis/intent/` | `docs/modules/intent.md` | 意图识别 | 3 |
 | 18 | `chain` | L4 | Python | `analysis/chain/` | `docs/modules/chain.md` | 攻击链还原（引用须校验证据存在，`AR-12`） | 3 |

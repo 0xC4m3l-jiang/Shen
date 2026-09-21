@@ -43,7 +43,7 @@ pattern ./...: directory prefix . does not contain main module or its selected d
 
 **原因**：`go.mod` 在 `src/` 里 —— Go 工具链、编辑器、任何默认配置都按「仓库根 = 模块根」的约定工作，多一层就全部要特判。
 
-**结论**：**代码不放 `src/`**，按架构平面扁平放（`core/` `edge/` `deception/` `analysis/` `console/`）。
+**结论**：**代码不放 `src/`**，按架构平面扁平放（`core/` `deception/` `deception/` `analysis/` `console/`）。
 代价是顶层目录多几个，换来的是工具链零摩擦。见 ADR-0007。
 
 ---
@@ -342,7 +342,7 @@ L[n-1] = new          # 行号定位，不猜缩进
 **症状**：把形态①（旁路镜像）的接收端逻辑照搬给形态③（反向代理）时，
 业务侧收到的请求体变成空 —— 因为复制端「读观测」时把 `r.Body` 读空了。
 
-**原因**：`edge/mirror` 处理的是流量**副本**，读 body 没有任何副作用，
+**原因**：`deception/mirror` 处理的是流量**副本**，读 body 没有任何副作用，
 所以它把 body 塞进了 `headers["x-observed-body-prefix"]`。
 但代理要**继续转发**同一个请求，读掉 body 就没得转了；
 若改成「读进来再回填」还要全量缓冲，大文件上传会同时拖垮延迟与内存。

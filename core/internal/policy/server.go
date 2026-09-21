@@ -70,7 +70,7 @@ type edgeContentBody struct {
 	Marker    string `json:"marker,omitempty"`
 }
 
-// edgeInjectRule 是一条响应改写规则（字段与适配器侧 `edge.proxy.policyInjectRule` 手工对齐）。
+// edgeInjectRule 是一条响应改写规则（字段与适配器侧 `deception.proxy.policyInjectRule` 手工对齐）。
 type edgeInjectRule struct {
 	Kind    string `json:"kind,omitempty"`
 	Snippet string `json:"snippet"`

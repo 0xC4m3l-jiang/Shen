@@ -11,7 +11,7 @@
 
 ```text
 core/        核心 —— 判定与响应生成的唯一实现
-edge/        L1 数据平面 —— 四个接入适配器 + L1 处置
+deception/        L1 数据平面 —— 四个接入适配器 + L1 处置
 deception/   L2+L3 执行平面 —— 蜜罐、假 shell、网络策略（阶段 2/3）
 analysis/    L4 分析平面（阶段 3）
 console/     控制平面（阶段 2）
@@ -30,7 +30,7 @@ api/         跨语言契约（.proto + 生成的 stub）
 
 > `core/internal/` 下的任何包，只有 `core/` 子树内的代码能 import。
 
-`edge/mirror` 在 `core/` 之外，**编译期就无法**拿到核心内部类型 —— 它只能走 `api/` 的 proto stub。这条规则就是 `ST-3`，强制方式是编译器而不是 lint。
+`deception/mirror` 在 `core/` 之外，**编译期就无法**拿到核心内部类型 —— 它只能走 `api/` 的 proto stub。这条规则就是 `ST-3`，强制方式是编译器而不是 lint。
 
 ---
 

@@ -51,7 +51,7 @@
 | --- | --- |
 | **任何 LLM 运行时 / 外呼** | `MD-6`：核心禁止外呼；热路径不放 LLM（[ADR-0014](../background/decisions/0014-generative-deceptive-response.md)） |
 | `judge` / `director` | 依赖方向单向（`MD-4`） |
-| 适配器（`edge/`） | 适配器 → 核心单向；**注入执行**在 `edge-injection` |
+| 适配器（`deception/`） | 适配器 → 核心单向；**注入执行**在 `edge-injection` |
 
 ## 4. 关键规则
 

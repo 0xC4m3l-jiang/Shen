@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -25,13 +26,12 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNDIR = Path(os.environ.get("TMPDIR", "/tmp")) / f"shen-ai-check-{os.getuid()}"
+RUNDIR = Path(tempfile.gettempdir()) / f"shen-ai-check-{os.getuid()}"
 
 BUSINESS_BODY = b"<html><body>REAL-BUSINESS</body></html>"
 MIRAGE_BODY = b"<html><body>MIRAGE-BACKEND</body></html>"
@@ -59,25 +59,42 @@ def free_port() -> int:
     return port
 
 
+def _http_get(port: int, path: str, headers: dict[str, str]) -> bytes:
+    """向本机发一次 GET。
+
+    用 `http.client` 而不是 `urllib.request`：**scheme 在类型层面只能是 http**
+    （没有 `file://` 之类的降级空间），而且这里全都是 `127.0.0.1`。
+    非 2xx 一律抛错 —— 与原先 `urllib` 的行为一致（它在 4xx/5xx 时抛异常），
+    免得「引擎坏了」被静默当成「拿到了一段错误页」。
+
+    已知差异：`http.client` **不跟随 3xx**（`urlopen` 默认跟随）。本脚本访问的端点不重定向，
+    但对齐测试里有一条 302 用例把这个差异钉住（想跟随时得自己写循环）。
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status >= 400:
+            raise RuntimeError(f"HTTP {resp.status}：{path}")
+        return body
+    finally:
+        conn.close()
+
+
 def http_get(
     port: int, path: str, cookie: str | None = None, ua: str = "HeadlessChrome/120"
 ) -> bytes:
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}")
-    req.add_header("User-Agent", ua)
+    headers = {"User-Agent": ua}
     if cookie:
-        req.add_header("Cookie", cookie)
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.read()
+        headers["Cookie"] = cookie
+    return _http_get(port, path, headers)
 
 
 def get_graphs(port: int, limit: int = 200) -> list[dict]:
-    url = f"http://127.0.0.1:{port}/api/graphs?limit={limit}"
-    if not url.startswith("http://127.0.0.1:"):  # 只允许本机 http（无别的 scheme）
-        raise ValueError(f"只允许本机 http 地址：{url}")
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            raw = json.loads(resp.read())
-    except (urllib.error.URLError, ValueError):
+        raw = json.loads(_http_get(port, f"/api/graphs?limit={limit}", {}))
+    except (OSError, RuntimeError, ValueError):
         return []
     if not isinstance(raw, list):
         return []
@@ -468,7 +485,7 @@ def main() -> int:
     print("构建（core / proxy / console）…")
     for binary, pkg in (
         ("core", "./core/cmd/core"),
-        ("proxy", "./edge/proxy/cmd/proxy"),
+        ("proxy", "./deception/proxy/cmd/proxy"),
         ("console", "./console/cmd/console"),
     ):
         subprocess.run(

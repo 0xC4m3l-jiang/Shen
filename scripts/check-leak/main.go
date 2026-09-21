@@ -185,7 +185,7 @@ func responseSurfaceDirs(root string) ([]string, error) {
 			continue
 		}
 		cells := strings.Split(line, "|")
-		// 模块名列是**第一个**带反引号的单元格（形如 `adapter-proxy`）；源码目录列形如 `edge/proxy/`。
+		// 模块名列是**第一个**带反引号的单元格（形如 `adapter-proxy`）；源码目录列形如 `deception/proxy/`。
 		name := ""
 		dir := ""
 		for _, cell := range cells {
@@ -196,8 +196,8 @@ func responseSurfaceDirs(root string) ([]string, error) {
 			}
 			p := strings.Trim(cell, "`")
 			switch {
-			case strings.HasSuffix(p, "/") && (strings.HasPrefix(p, "edge/") ||
-				strings.HasPrefix(p, "core/") || strings.HasPrefix(p, "deception/") ||
+			case strings.HasSuffix(p, "/") && (strings.HasPrefix(p, "deception/") ||
+				strings.HasPrefix(p, "honeypot/") || strings.HasPrefix(p, "core/") ||
 				strings.HasPrefix(p, "analysis/") || strings.HasPrefix(p, "console/")):
 				if dir == "" {
 					dir = p
@@ -361,7 +361,10 @@ func scanFile(fset *token.FileSet, path string, f *ast.File, allows []*allowEntr
 //	① 内部日志调用的参数（OH-2 表：服务端内部日志攻击者不可见 → 允许）；
 //	② 错误构造的参数（`errors.New` / `fmt.Errorf`）—— 内部错误只上行到适配器，适配器把它
 //	   折叠成 fail-open（`NI-3`），不落进响应体；且 `ST-7` 另行禁止回显；
-//	③ struct tag（`json:"mirage"` 这类）—— 它是**配置键**，不是会进响应的值（OH-2 表：服务端配置允许）。
+//	③ struct tag（`json:"mirage"` 这类）—— 它是**配置键**，不是会进响应的值（OH-2 表：服务端配置允许）；
+//	④ **import 路径**（`import "shen/deception/mirror"`）—— 编译期标识符，不是会进响应的字符串：
+//	   它只出现在符号表与构建元数据里（OH-2 判据：攻击者的屏幕上不会出现）。没有这条，
+//	   顶层目录名一旦含泄漏词（如今 ① 欺骗层叫 `deception/`），每个 import 它的文件都会被误报。
 func skippedLiterals(f *ast.File) map[*ast.BasicLit]bool {
 	skipped := map[*ast.BasicLit]bool{}
 	collect := func(n ast.Node) {
@@ -377,6 +380,10 @@ func skippedLiterals(f *ast.File) map[*ast.BasicLit]bool {
 		case *ast.Field:
 			if v.Tag != nil {
 				skipped[v.Tag] = true
+			}
+		case *ast.ImportSpec:
+			if v.Path != nil {
+				skipped[v.Path] = true
 			}
 		case *ast.CallExpr:
 			if isLogCall(v) || isErrorCall(v) {

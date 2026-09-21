@@ -6,7 +6,7 @@
 | 所属层 | `L1`（依据 MD-1） |
 | 实现语言 | `Go`（依据 [`../design/language.md`](../design/language.md) §1 与 [ADR-0008](../background/decisions/0008-edge-language-go.md)） |
 | 负责人 | — |
-| 状态 | ✅ 已实现（阶段 2b，`edge/injection/`，含单测）；规则由核心配置 `injects` 经策略面下发 |
+| 状态 | ✅ 已实现（阶段 2b，`deception/injection/`，含单测）；规则由核心配置 `injects` 经策略面下发 |
 | 最后更新 | 2026-09-19 |
 
 ---
@@ -80,8 +80,8 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 注入位置 · 多规则 · 非 HTML 原样返回 · 纯变换确定性 | `edge/injection/injection_test.go` |
-| 集成（在适配器侧） | 引流侧 HTML 被注入；业务侧不被改写（`INT-8`） | `edge/proxy/proxy_test.go` |
+| 单元 | 注入位置 · 多规则 · 非 HTML 原样返回 · 纯变换确定性 | `deception/injection/injection_test.go` |
+| 集成（在适配器侧） | 引流侧 HTML 被注入；业务侧不被改写（`INT-8`） | `deception/proxy/proxy_test.go` |
 | 单元 | 黑名单校验 | 同上 |
 | 分支穷尽性 | 注入类型的全分支 | `MD-8` |
 
@@ -98,4 +98,4 @@
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：投毒改写 + 假路径 + 蜜饵注入 | [ADR-0010](../background/decisions/0010-functional-camouflage.md) · [ADR-0008](../background/decisions/0008-edge-language-go.md) |
 | 2026-09-18 | **实现**：注入引擎（非 HTML 原样返回、纯变换）+ 单测 | 本轮开发 |
-| 2026-09-18 | **接进适配器**（`ST-5`）：`edge/proxy` 通过 `Injector` 接口引用（接口由代理定义，避免适配器互依 `MD-4`）；只改引流侧 HTML（`INT-8`），大响应不缓冲 | 本轮开发 |
+| 2026-09-18 | **接进适配器**（`ST-5`）：`deception/proxy` 通过 `Injector` 接口引用（接口由代理定义，避免适配器互依 `MD-4`）；只改引流侧 HTML（`INT-8`），大响应不缓冲 | 本轮开发 |

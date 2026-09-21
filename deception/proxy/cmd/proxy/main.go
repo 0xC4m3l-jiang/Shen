@@ -6,7 +6,7 @@
 //	④ Sidecar：  SHEN_PROXY_UPSTREAM 指向 127.0.0.1:<同 Pod 内业务端口>
 //
 // 转发与 TLS 终结由内嵌 Caddy 承担：本进程用 env 解析出配置，程序化生成 Caddy 配置
-// 并 caddy.Run()。判定逻辑在 edge/proxy 的 Caddy 模块 `http.handlers.shen_proxy` 里。
+// 并 caddy.Run()。判定逻辑在 deception/proxy 的 Caddy 模块 `http.handlers.shen_proxy` 里。
 //
 // 默认是**影子模式**（SHEN_PROXY_SHADOW=true）：照算判定并上报，但永不改道、永不拦截。
 // 首次上线必须如此（INT-11）。
@@ -26,7 +26,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	_ "github.com/caddyserver/caddy/v2/modules/standard" // 注册 http / tls / reverse_proxy 等标准模块
 
-	"shen/edge/proxy"
+	"shen/deception/proxy"
 )
 
 const (

@@ -48,7 +48,7 @@
 | --- | --- | --- |
 | 输入 | 配置文件（YAML） | [`../spec/config.md`](../spec/config.md)（接缝 **S4**） |
 | 输出 | `contract.PolicySnapshot`（进程内共享类型） | `core/internal/contract/policy.go` |
-| 输出（跨进程） | `api/policy/v1` 的 `PolicySnapshot`（`Pull`）+ `PolicyAck`（回执）—— **消费者是 L1 适配器**（`edge/proxy`） | `api/policy/v1/policy.proto` · 载荷格式见 [`../spec/policy-payload.md`](../spec/policy-payload.md) |
+| 输出（跨进程） | `api/policy/v1` 的 `PolicySnapshot`（`Pull`）+ `PolicyAck`（回执）—— **消费者是 L1 适配器**（`deception/proxy`） | `api/policy/v1/policy.proto` · 载荷格式见 [`../spec/policy-payload.md`](../spec/policy-payload.md) |
 | 消费方契约 | `judge.RuleSource` —— 由**消费方**定义，本模块实现它 | `core/internal/judge/iface.go` |
 | 台账契约 | `store.PolicyStore`（`Current` / `Publish` / `RecordAck` / `Acks`） | `core/internal/store/iface.go` |
 

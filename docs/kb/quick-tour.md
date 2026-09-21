@@ -23,7 +23,7 @@
 
 ```text
 接入层 L0   客户自己的 LB / nginx / Envoy（不自研，AR-3）
-数据平面 L1 edge/       ① 旁路镜像 · ② DNS 引流 · ③ 反向代理前置 · ④ Sidecar
+数据平面 L1 deception/       ① 旁路镜像 · ② DNS 引流 · ③ 反向代理前置 · ④ Sidecar
                        （判定逻辑禁止写在这里，AR-2 / AR-7）
 核心         core/      判定 → 决策（三值）→ 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
 执行平面 L2 deception/ 蜜罐协议框架（内容待调研）
@@ -51,11 +51,11 @@
 | 改诱饵资产 | `decoy` | [`core/internal/decoy/`](../../core/internal/decoy) | [`../modules/decoy.md`](../modules/decoy.md) |
 | 改幻境后端池 | `honeypot` | [`core/internal/honeypot/`](../../core/internal/honeypot) | [`../modules/honeypot.md`](../modules/honeypot.md) |
 | 改欺骗响应 / 一致性 | `responder` | [`core/internal/responder/`](../../core/internal/responder) | [`../modules/responder.md`](../modules/responder.md) |
-| 改边缘注入（改道侧改写） | `edge-injection` | [`edge/injection/`](../../edge/injection) | [`../modules/edge-injection.md`](../modules/edge-injection.md) |
-| 改反向代理 / 边车 / TLS | `adapter-proxy` | [`edge/proxy/`](../../edge/proxy) | [`../modules/adapter-proxy.md`](../modules/adapter-proxy.md) · [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) |
-| 接旁路镜像（形态①） | `adapter-mirror` | [`edge/mirror/`](../../edge/mirror) | [`../modules/adapter-mirror.md`](../modules/adapter-mirror.md) |
-| 配 DNS 引流（形态②） | `adapter-dns` | [`edge/dns/`](../../edge/dns) | [`../modules/adapter-dns.md`](../modules/adapter-dns.md) |
-| 改蜜罐协议框架 | `honeypot-protocol` | [`deception/honeypot/`](../../deception/honeypot) | [`../modules/honeypot-protocol.md`](../modules/honeypot-protocol.md) |
+| 改边缘注入（改道侧改写） | `edge-injection` | [`deception/injection/`](../../deception/injection) | [`../modules/edge-injection.md`](../modules/edge-injection.md) |
+| 改反向代理 / 边车 / TLS | `adapter-proxy` | [`deception/proxy/`](../../deception/proxy) | [`../modules/adapter-proxy.md`](../modules/adapter-proxy.md) · [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) |
+| 接旁路镜像（形态①） | `adapter-mirror` | [`deception/mirror/`](../../deception/mirror) | [`../modules/adapter-mirror.md`](../modules/adapter-mirror.md) |
+| 配 DNS 引流（形态②） | `adapter-dns` | [`deception/dns/`](../../deception/dns) | [`../modules/adapter-dns.md`](../modules/adapter-dns.md) |
+| 改蜜罐协议框架 | `honeypot-protocol` | [`honeypot/protocol/`](../../honeypot/protocol) | [`../modules/honeypot-protocol.md`](../modules/honeypot-protocol.md) |
 | 改 L3 网络欺骗产物 | `netpolicy` | [`deception/netpolicy/`](../../deception/netpolicy) | [`../modules/netpolicy.md`](../modules/netpolicy.md) |
 | 意图识别 / 攻击链 / 策略生成 | `intent` · `chain` · `strategy` | [`analysis/intent/`](../../analysis/intent) 等 | [`../modules/intent.md`](../modules/intent.md) 等 |
 | LLM 契约 / 超时 / 黑名单 | `llm-components` | [`analysis/llm/`](../../analysis/llm) | [`../modules/llm-components.md`](../modules/llm-components.md) |

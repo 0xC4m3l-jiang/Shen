@@ -28,9 +28,9 @@ scripts/bin/
 #    想验证「有没有源码被误忽略」：跑 `make check-ignore`（等价于
 #    `git ls-files | git check-ignore --no-index --stdin`，应为空）。
 /core/cmd/core/core
-/edge/proxy/cmd/proxy/proxy
+/deception/proxy/cmd/proxy/proxy
 /console/cmd/console/console
-/edge/mirror/cmd/mirror/mirror
+/deception/mirror/cmd/mirror/mirror
 *.test
 coverage.out
 

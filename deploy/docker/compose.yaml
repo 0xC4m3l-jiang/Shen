@@ -45,7 +45,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/go.Dockerfile
-      args: {SERVICE: ./edge/proxy/cmd/proxy}
+      args: {SERVICE: ./deception/proxy/cmd/proxy}
     network_mode: service:core
     depends_on: [core]
     environment:

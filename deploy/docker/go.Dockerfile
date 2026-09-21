@@ -20,7 +20,7 @@ COPY go.mod go.sum ./
 COPY vendor/ ./vendor/
 COPY api/ ./api/
 COPY core/ ./core/
-COPY edge/ ./edge/
+COPY deception/ ./deception/
 COPY console/ ./console/
 COPY scripts/ ./scripts/
 # CGO_ENABLED=0：静态二进制，运行镜像不需要 libc。

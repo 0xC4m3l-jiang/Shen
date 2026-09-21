@@ -22,7 +22,7 @@ import (
 	policyv1 "shen/api/policy/v1"
 )
 
-// 注意：本包在 `edge/` 下，**禁止** import `core/internal/*`（ST-3，archcheck 在编译期核对）。
+// 注意：本包在 `deception/` 下，**禁止** import `core/internal/*`（ST-3，archcheck 在编译期核对）。
 // 因此载荷结构与核心侧 `policy.edgeDoc` 是两处手工对齐的副本 —— 契约文档：docs/spec/policy-payload.md。
 
 // ── 替身（MD-22）─────────────────────────────────────────────────────────────

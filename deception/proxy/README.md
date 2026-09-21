@@ -69,7 +69,7 @@
 python -m analysis.aicap --out deploy/content/manifest.json --profile site-a --resources / --variants 8
 
 # ② 核心带上它（配置 ai.enabled=true + ai.manifest=...），适配器打开本地开关：
-SHEN_PROXY_INJECT_CONTENT=true SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 go run ./edge/proxy/cmd/proxy
+SHEN_PROXY_INJECT_CONTENT=true SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 go run ./deception/proxy/cmd/proxy
 ```
 
 ## 默认是影子模式
@@ -124,7 +124,7 @@ SHEN_PROXY_INJECT_CONTENT=true SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 go run 
 
 ```sh
 make build
-SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 go run ./edge/proxy/cmd/proxy
+SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 go run ./deception/proxy/cmd/proxy
 ```
 
 配 TLS：
@@ -134,7 +134,7 @@ SHEN_PROXY_TLS_MODE=manual \
 SHEN_PROXY_CERT_FILE=/etc/shen/tls/tls.crt \
 SHEN_PROXY_KEY_FILE=/etc/shen/tls/tls.key \
 SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 \
-go run ./edge/proxy/cmd/proxy
+go run ./deception/proxy/cmd/proxy
 ```
 
 配置项见 [`config/front-proxy.example.env`](config/front-proxy.example.env)。

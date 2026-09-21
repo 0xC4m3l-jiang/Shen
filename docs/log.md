@@ -9,6 +9,63 @@
 
 ---
 
+## 2026-09-21 · 顶层目录与「三个大模块」对齐（① 欺骗层 ② AI 蜜罐层 ③ 管控平台）
+
+**做了什么**：把顶层目录名改成你嘴里的三个大模块 —— ① 欺骗层的目录从 **edge** 改名为 `deception/`，
+② AI 蜜罐层从 deception/honeypot 改名为 `honeypot/protocol`；③ 管控平台 `console/` 本来就对得上。
+**`core/`（共享内核）与 `analysis/`（跨 ①② 的 L4）不改名** —— 它们不属于任何单个大模块，不改才是对的。
+
+1. **目录移动**（git mv，历史保留）：edge 下的 proxy / mirror / dns / injection → `deception/`；
+   deception/honeypot → `honeypot/protocol`；`deception/netpolicy` **原地不动**（它同属 ①）；
+2. **改名只碰 5 处 Go import**（实测：shen/core 81 处、shen/api 35 处全在自身内部，不动就不改）；
+3. **新建 ADR-0029**（候选 A/B/C 取舍 · 三条决定 · 失效条件 · 4 项未解决）；
+   `docs/background/decisions/0007-repo-layout.md` 标注**部分被取代**；
+4. **修掉机械替换留下的 6 处语义痕迹**：两行同名 `deception/`、仍写 edge 的映射句、
+   `docs/modules/_map.md` 里指向已删目录的悬空链接（`make trace` 抓到）等；
+5. **`scripts/check-leak/main.go` 精度修复**：把 **import 路径**归入规则级豁免第四类
+   （编译期标识符，判据同 `OH-2`：不上攻击者的屏幕）—— 否则 `deception/` 这个目录名会让每个 import 它的文件都误报；
+   **`OH-1` 规则本身一字未改**；`scripts/check-leak/allow.txt` 里 4 条例外的**字面量与理由未变**，
+   只有其中 2 条的**文件路径**随改名同步（`deception/proxy/...`）；
+6. **顺带修一处预存在缺陷**：`scripts/dev/ai-inject-check.py` 的 urlopen(变量) 改为 `http.client`
+   （scheme 在类型层面只能是 http），并用本地 HTTP 服务器做了行为对齐测试。
+
+**改了哪些文件**：
+
+- 目录：`deception/`（proxy · mirror · dns · injection · netpolicy）· `honeypot/protocol`（原 deception/honeypot）
+- 代码：`deception/proxy/handler.go` · `deception/proxy/policy.go` · `deception/proxy/content.go` · 两个 cmd 的 main.go（import 路径）
+- 门禁：`scripts/archcheck/main.go` · `scripts/check-leak/main.go` · `scripts/check-leak/README.md` · `scripts/check-leak/allow.txt`（2 条例外的路径随改名同步）
+- 物料：`Makefile` · `.gitignore` · `deploy/docker/go.Dockerfile` · `deploy/docker/compose.yaml` · `scripts/demo/run.sh` · `scripts/dev/ai-inject-check.py`
+- 文档：`docs/design/structure.md` · `docs/design/modules.md` · `docs/modules/_map.md` · `docs/kb/quick-tour.md` · `docs/progress.md` · `docs/ops/runbook.md` · `docs/README.md` · `README.md` 等约 30 份
+
+**对应文档**：`docs/background/decisions/0029-three-module-dirs.md`（新建）·
+`docs/background/decisions/0007-repo-layout.md`（部分被取代）·
+`docs/design/structure.md` §1.1（顶层目录白名单）· `docs/plans/2026-09-21-three-module-dirs.md`（变更包）
+
+**独立评审（冷上下文）抓到 10 条，全部已处理** —— 其中 4 条是我自己的检查范围不够：
+① 改名树内还有 **16 处旧路径**（含 4 条会失效的 `go run ./edge/...` 命令，因为 §7.2 的核查命令只扫了 `docs/`）；
+② `docs/design/structure.md` §1.7 的 `ST-2` 枚举漏了 `honeypot/`、重了 `deception/`（**在已确认基线的表格里**）；
+③ `docs/modules/_map.md` 同页自相矛盾（L2 仍指 `deception/`）且模块 15 行的链接标签与目标不符；
+④ 变更包与 ADR 里「`api/` 的 import 全在自身内部」是**事实错误**（24 文件里 11 个在 `core/` 之外）。
+另修：`allow.txt` 未列入文件清单 · 两处跨包注释仍写旧路径 · ADR-0028 决定 3/6 未标注被取代 · 302 语义差未记录。
+
+**验证**：`make gate`（构建 · staticcheck · errcheck · ruff · shellcheck · Go 单测含 -race · 80 例 pytest ·
+`scripts/archcheck/main.go` 的架构检查 · `make trace` 的追溯检查 · `make leakcheck` 的泄漏检查 · 许可审计）全绿 ·
+`make dev`（配置干跑 → 核心影子模式启动 → 3 样本冒烟 → 规则回放 4 例 → L4 出 2 条结论）通过
+
+**证据**：变更包 §6 —— `门禁通过。` · `泄漏检查通过。` · `ok shen/deception/proxy 19.616s` ·
+`ok shen/honeypot/protocol 1.423s` · 核心「已启动（影子模式）：127.0.0.1:19540」· L4「取事件 3 条 → 结论 2 条」
+
+**遗留**：honeypot/shell（假 shell，按你的裁定推迟，`MD-21` 不预建）· `analysis/` 是否拆成 ①/② 两半（需单独 ADR）·
+蜜罐**编排**的实现面（能力归属已在核心，实现面另开 ADR）· 历史文档里的旧路径**刻意不追改**（快照）。
+**未验**：`make ai-check`（端到端 17 项，需 Docker，本轮未跑；受影响的只有 `scripts/dev/ai-inject-check.py` 的 HTTP 层，
+已做隔离对齐测试 + 302 用例）· **`make demo`**（路径常量本轮改了，门禁不跑它）· `make up` 的真实 Docker 构建。
+
+**待办（新发现，不在本轮范围）**：① `check-leak` 的「import 路径」豁免类在 `OH-2` 位置表里没有落点 ——
+改基线需你确认（ADR-0029 未解决 5）；② 仓库根有一个**已入库的 Go 二进制** `licensecheck`（2.9 MB，来自更早的提交 `d76d236`，
+与 `.gitignore` 的策略相悳）—— 要不要清，等你一句话。
+
+---
+
 ## 2026-09-21 · 三个大模块（功能视角）↔ 五个平面：映射、索引与六处过期标记校准
 
 **做了什么**：你用「**三个大模块**」（欺骗层 / AI 蜜罐层 / 管控平台）想这套系统，而代码目录是**五个平面** ——

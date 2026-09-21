@@ -23,7 +23,7 @@ _TMPBASE=${TMPDIR:-/tmp}
 RUNDIR=${SHEN_RUNDIR:-${_TMPBASE%/}/shen-$(id -u)}
 mkdir -p "$RUNDIR"
 go build -o "$RUNDIR/core" ./core/cmd/core
-go build -o "$RUNDIR/proxy" ./edge/proxy/cmd/proxy
+go build -o "$RUNDIR/proxy" ./deception/proxy/cmd/proxy
 go build -o "$RUNDIR/console" ./console/cmd/console
 
 pids=()

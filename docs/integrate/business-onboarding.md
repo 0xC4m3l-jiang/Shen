@@ -19,7 +19,7 @@ SHEN_PROXY_UPSTREAM=http://10.0.0.20:9000 \
 SHEN_CORE_ADDR=127.0.0.1:9443 \
 SHEN_PROXY_LISTEN=0.0.0.0:8080 \
 SHEN_PROXY_SHADOW=true \                 # ★ 首次必须 true（INT-11）
-go run ./edge/proxy/cmd/proxy
+go run ./deception/proxy/cmd/proxy
 ```
 
 然后把业务域名的 upstream 改到 `引擎:8080`（云 LB / nginx / Ingress 的 upstream，**不改业务代码**，`INT-7`）。

@@ -25,8 +25,8 @@ Shen/
 ├── docs/                       # 设计、决策、背景材料
 ├── api/                        # ★ 契约单一事实源：.proto + 生成的 Go（无业务逻辑）
 ├── core/                       # 核心 —— 判定与响应生成的唯一实现（Go）
-├── edge/                       # L1 数据平面 —— 四个接入形态的适配器 + L1 处置（Go / 配置）
-├── deception/                  # L2+L3 执行平面 —— 蜜罐、假 shell、网络策略（Go / Rust / 声明式）
+├── deception/                  # ① 欺骗层 —— L1 四个接入适配器与处置 + L3 网络欺骗（Go / 配置 / 声明式）
+├── honeypot/                   # ② AI 蜜罐层 —— L2 协议仿真与假 shell（Go / Rust）
 ├── analysis/                   # L4 分析平面 —— 意图 / 攻击链 / 策略 / LLM 契约 + AI 能力服务 + 近线 worker（Python）
 │                               #   本层的工具链与配置**全部收在本目录**：pyproject.toml · requirements*.txt · .venv/
 ├── console/                    # 控制平面 —— 控制台（TypeScript）
@@ -37,13 +37,14 @@ Shen/
 ```
 
 > **顶层目录名直接对应架构的分层/平面**（见 [`architecture.md`](architecture.md) §7.1）：
-> `core` = 核心 · `edge` = 数据平面 L1 · `deception` = 执行平面 L2+L3 · `analysis` = 分析平面 L4 · `console` = 控制平面。
+> `core` = **共享内核**（判定与响应生成的唯一实现，不属于任何单个大模块）· `deception` = **① 欺骗层**（L1 处置 + L3 网络欺骗）· `honeypot` = **② AI 蜜罐层**（L2）· `console` = **③ 管控平台** · `analysis` = **L4 分析**（跨 ①②）。
 > 这样"代码在哪"与"架构图上的哪一块"是同一个答案。
 >
 > **顶层目录之外的形态约定**：`vendor/`（Go 依赖副本，入库以支持离线构建）与 `scripts/bin/`（门禁工具二进制，不入库）
 > 都不是源码平面，`make archcheck` 已把它们排除在「顶层目录白名单」之外。
 > **阶段未到的目录不预建**（`MD-21`）：顶层目录只在**进入其实施阶段**时才建。
-> 当前状态：`core/` `edge/` `deception/` `analysis/` `console/` **均已建**；`honeypot-shell` 与蜜罐协议栈内容按用户裁定**推迟**。
+> 当前状态：`core/` `deception/` `honeypot/` `analysis/` `console/` **均已建**；
+> 其中 `honeypot/shell/`（假 shell）与蜜罐协议栈内容按用户裁定**推迟**（`honeypot/protocol/` 是已建的框架）。
 
 ### 1.2 `core/` 内部
 
@@ -65,10 +66,10 @@ core/
     └── store/              #   唯一 I/O 出口（Redis / ClickHouse / PostgreSQL）
 ```
 
-### 1.3 `edge/` 内部
+### 1.3 `deception/` 内部
 
 ```text
-edge/
+deception/
 ├── injection/              # L1 处置逻辑（模块 edge-injection）—— Go，被适配器引用，不独立部署（阶段 2b）
 ├── mirror/                 # ① 旁路镜像（配置 + Go，阶段 1）
 ├── dns/                    # ② DNS 引流（**纯配置**，无源码，阶段 2a）
@@ -109,16 +110,16 @@ edge/
 | `core/internal/{judge,session,telemetry,store,control}` | ✅ 已建（含单测） |
 | `core/internal/policy` | ✅ 已建（阶段 2a：配置装载 · 版本 · 校验和 · 规则供给 · **下发面 `Pull`/`Ack`**，含单测） |
 | `core/cmd/core` | ✅ 已建 |
-| `edge/mirror/` | ✅ 已建（`receiver.go` + 单测） |
+| `deception/mirror/` | ✅ 已建（`receiver.go` + 单测） |
 | `core/internal/director` | ✅ 已建（阶段 2a：阈值→三值 + 灰度，含单测） |
 | `core/internal/{responder,isolation,decoy,honeypot}` | ✅ 已建（阶段 2b，含单测；**不在判定调用链上**）。⚠️ **处置内容的边缘通路只有一部分接通**：AI 欺骗内容已接通（`ai-capability` → 策略面 `content_manifest` → 适配器，`ADR-0023`）；诱饵资产仍未接 |
-| `edge/mirror/` 的 L0 配置模板 | ✅ 已建（`iptables-tee` / `nginx-mirror` / `envoy-mirror`） |
-| `edge/proxy/` | ✅ 已建（③前置 + ④边车的同一份实现，39 测试：内嵌 Caddy 转发 + TLS + 策略面消费） |
-| `edge/dns/` | 🟡 [`Corefile.example`](../../edge/dns/config/Corefile.example) 已建（② 纯配置，无源码） |
-| `edge/injection/` | ✅ 已建（阶段 2b，含单测；被适配器引用，**不独立部署** `ST-5`） |
-| `deception/honeypot/` | ✅ 已建（阶段 3 **框架**：协议注册表 · 运行框架 · 最小适配器 + 7 例单测；**真实协议栈待设计**） |
+| `deception/mirror/` 的 L0 配置模板 | ✅ 已建（`iptables-tee` / `nginx-mirror` / `envoy-mirror`） |
+| `deception/proxy/` | ✅ 已建（③前置 + ④边车的同一份实现，39 测试：内嵌 Caddy 转发 + TLS + 策略面消费） |
+| `deception/dns/` | 🟡 [`Corefile.example`](../../deception/dns/config/Corefile.example) 已建（② 纯配置，无源码） |
+| `deception/injection/` | ✅ 已建（阶段 2b，含单测；被适配器引用，**不独立部署** `ST-5`） |
+| `honeypot/protocol/` | ✅ 已建（阶段 3 **框架**：协议注册表 · 运行框架 · 最小适配器 + 7 例单测；**真实协议栈待设计**） |
 | `deception/netpolicy/` | 🟡 阶段 3：三份声明式产物（微隔离 / 假拓扑 / 运行时检测，复用 Cilium / Tetragon，**无源码**） |
-| `deception/shell/` | ⏸ **推迟**（用户裁定：蜜罐只做接入架构，内容与协议栈待专项调研） |
+| `honeypot/shell/` | ⏸ **推迟**（用户裁定：蜜罐只做接入架构，内容与协议栈待专项调研） |
 | `analysis/*` | ✅ 已建（阶段 3，Python：`llm` 契约层 · `intent` · `chain` · `strategy` + 24 例测试；工具链见 `requirements-dev.txt`） |
 | `analysis/aicap/` | ✅ 已建（阶段 3，模块 25：**可开关的 AI 能力服务**——`service.py` 是唯一出口且**内部强制走护栏**，子包 `tasks/`（任务注册表 + `content`）与 `guardrail/`（前置提示词 + 后置独立校验）；阶段 A 产出欺骗内容 + 清单给核心装载。依据 `AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)） |
 | `console/` | ✅ 已建（阶段 2b：Go 进程 + 静态页，只读观测；语言偏离见 [ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)） |
@@ -160,7 +161,7 @@ edge/
 ┌─ 进程 2 · shen-mirror ── ① 旁路镜像接收端（不在请求路径上）────────────────
 │  cmd/mirror/main.go      HTTP 服务入口
 │
-│  edge/mirror/            Receiver.ServeHTTP:
+│  deception/mirror/            Receiver.ServeHTTP:
 │      1. 取观测（IP / UA / 方法 / 路径 / 头）
 │      2. 算 decision_id（来源 + 会话 + 路径 + 60s 时间窗）
 │      3. 请核心判定 → 4. 记事件 → 5. 恒回 202
@@ -172,13 +173,13 @@ edge/
 │  cmd/proxy/main.go      env 装配 → proxy.BuildConfig → caddy.Run
 │                         （内嵌 Caddy：TLS 终结 + 转发，ADR-0017）
 │
-│  edge/proxy/            Handler = Caddy 中间件 `http.handlers.shen_proxy`；无状态，可随时重启
+│  deception/proxy/            Handler = Caddy 中间件 `http.handlers.shen_proxy`；无状态，可随时重启
 │    ServeHTTP:  白名单 → 本地判定缓存 → 请核心判定 → 按三值处置 → 异步上报
 │    dispatch:   route_origin  → 业务 upstream（原样透传）
 │                route_mirage  → 查**本进程的**引流表 → 注入诱饵 → 后端
 │                block         → 403（默认不产出，Q5）
 │    转发层:     Caddy 的 reverse_proxy（本模块只提供决定与后端地址）
-│  edge/injection/        注入引擎（被 proxy 通过 Injector 接口引用，ST-5）
+│  deception/injection/        注入引擎（被 proxy 通过 Injector 接口引用，ST-5）
 └──────────────────────────────────────────────────────────────────────────────
 ```
 
@@ -191,7 +192,7 @@ edge/
 ```text
 叶子（谁都不依赖）
   core/internal/contract                 ← 被全部核心模块依赖 —— 进程内的「词汇表」
-  edge/injection                         ← 纯变换；连 contract 都不依赖（ST-3 的自然结果）
+  deception/injection                         ← 纯变换；连 contract 都不依赖（ST-3 的自然结果）
 
 只依赖 contract（8 个）
   judge · session · telemetry · store · decoy · honeypot · isolation · responder
@@ -204,13 +205,13 @@ edge/
   control     →  contract · judge · session · telemetry · api/judge/v1 · api/telemetry/v1
 
 适配器（对 core/ 零依赖 —— 只能走 api/ 的 stub）
-  edge/mirror · edge/proxy   →  api/judge/v1 · api/telemetry/v1
+  deception/mirror · deception/proxy   →  api/judge/v1 · api/telemetry/v1
 
 装配层（只有 main 允许依赖具体实现）
   core/cmd/core          →  control · decoy · director · honeypot · isolation · judge
                             · policy · responder · session · store · telemetry · api/*
-  edge/mirror/cmd/mirror →  edge/mirror · api/*
-  edge/proxy/cmd/proxy   →  edge/proxy · edge/injection · api/*
+  deception/mirror/cmd/mirror →  deception/mirror · api/*
+  deception/proxy/cmd/proxy   →  deception/proxy · deception/injection · api/*
 ```
 
 实测得出的**四条结构性质**：
@@ -218,8 +219,8 @@ edge/
 | 性质 | 复核命令 |
 | --- | --- |
 | `contract` 是唯一被全部核心模块依赖的包 —— 进程内的「词汇表」 | `go list -deps ./core/... \| grep contract` |
-| `edge/injection` 的 shen 内部依赖数为 **0** —— 它连 `contract` 都不依赖 | `go list -f '{{.Imports}}' ./edge/injection` |
-| 两个适配器对 `core/` 依赖数为 **0** —— `ST-3` 由**编译器**强制 | `go list -f '{{.Imports}}' ./edge/proxy` |
+| `deception/injection` 的 shen 内部依赖数为 **0** —— 它连 `contract` 都不依赖 | `go list -f '{{.Imports}}' ./deception/injection` |
+| 两个适配器对 `core/` 依赖数为 **0** —— `ST-3` 由**编译器**强制 | `go list -f '{{.Imports}}' ./deception/proxy` |
 | `control` 是唯一同时依赖多个同级模块的包 —— 它是**接线板**，不是业务逻辑 | 见上方依赖图 |
 
 > ⚠️ **`api/policy/v1` 当前无人引用** —— 策略面（`Pull` / `Watch` / `Ack`）的服务端与客户端都未实现。
@@ -242,8 +243,8 @@ edge/
 | `telemetry` | `Telemetry` · `Sink` | `Report` / `ReportBatch` · `Write` |
 | `policy` | `Policy` | `Rules` · `Snapshot` · `Thresholds` · `GrayPct` · `Decoys` · `Honeypots` · `Whitelist` |
 | `store` | 7 个实体接口 | `SessionStore` · `IsolationStore` · `DecisionStore` · `EventStore` · `PolicyStore` · `DecoyStore` · `ContentStore` |
-| `edge/injection` | `Injector` | `Inject(contentType string, body []byte) ([]byte, bool)` |
-| `edge/proxy` | `JudgeClient` · `TelemetryClient` · `Injector` | 见 [`../modules/adapter-proxy.md`](../modules/adapter-proxy.md) |
+| `deception/injection` | `Injector` | `Inject(contentType string, body []byte) ([]byte, bool)` |
+| `deception/proxy` | `JudgeClient` · `TelemetryClient` · `Injector` | 见 [`../modules/adapter-proxy.md`](../modules/adapter-proxy.md) |
 
 > `Store`（isolation）· `AssetStore`（decoy）· `ContentStore`（responder）· `IsolationChecker`（control）· `Injector`（proxy）
 > 都是**消费方自定**的最小接口 —— 因此**没有任何模块 import 另一个模块的具体类型**。
@@ -256,7 +257,7 @@ edge/
 | `judge.RuleSource` | `policy`（配置文件装载） | ✅ **已接** |
 | `control.IsolationChecker` | `isolation` | ✅ **已接**（`WithIsolation`，命中即短路） |
 | `store.EventStore` / `PolicyStore` / `DecisionStore` / `SessionStore` / `IsolationStore` / `DecoyStore` / `ContentStore` | 内存实现（生产应换 ClickHouse / PostgreSQL / Redis） | 🟡 已接内存实现；**`ContentStore` 自 2026-09-20 起有真实消费方**（`policy` 装载期 `Put` / 投影期 `Get`，见 [ADR-0023](../../docs/background/decisions/0023-deception-content-injection.md)） |
-| **`api/policy/v1`（策略面 S4）** | `policy.Server`（核心侧）+ `edge/proxy` 的策略客户端 | ✅ **已接**：`Pull` 轮询 + `Ack` 回执（`ST-8` / `AR-13`）· `Watch` 未实现（见 [ADR-0018](../../docs/background/decisions/0018-policy-plane-pull-model.md)） |
+| **`api/policy/v1`（策略面 S4）** | `policy.Server`（核心侧）+ `deception/proxy` 的策略客户端 | ✅ **已接**：`Pull` 轮询 + `Ack` 回执（`ST-8` / `AR-13`）· `Watch` 未实现（见 [ADR-0018](../../docs/background/decisions/0018-policy-plane-pull-model.md)） |
 | `decoy` / `responder` / `honeypot` 到边缘的通路 | 经策略面下发 | 🟡 **部分接通**：改道后端表 · 白名单 · **响应改写规则（`injects` → `inject_rules`）** · **AI 欺骗内容（`ai-capability` → `content_manifest`）** 已能下发；**诱饵资产**仍未接通路（核心侧尚无「谁产出、存在哪」的定义） |
 
 > ✅ **2026-09-19：策略面已落地** —— 核心不再只能靠「改 env + 重启适配器」传递改道后端表：
@@ -273,10 +274,10 @@ edge/
 | ID | 规则 | 验证方式 |
 | --- | --- | --- |
 | **ST-1** | 代码**必须**按 §1.1 的顶层目录组织；**禁止**在顶层新增目录而不更新本节。 | `make archcheck` + 评审 |
-| **ST-2** | 一个进程的源码**必须**只在一个顶层目录内（`core/` / `edge/` / `deception/` / `analysis/` / `console/` 各自独立）；**禁止**跨目录 import 源码。 | `make archcheck` |
+| **ST-2** | 一个进程的源码**必须**只在一个顶层目录内（`core/` / `deception/` / `honeypot/` / `analysis/` / `console/` 各自独立）；**禁止**跨目录 import 源码。 | `make archcheck` |
 | **ST-3** | 适配器**禁止** import 核心内部包（`core/internal/`），**只能**经 `api/` 生成的 stub 调用。 | **编译期强制** —— 见下方说明 |
 | **ST-4** | 各层**禁止**跨层 import。 | `make archcheck` |
-| **ST-5** | L1 边缘处置模块（`edge/injection/`）**禁止**独立部署；它**必须**作为适配器内的模块被引用。 | 部署清单评审 |
+| **ST-5** | L1 边缘处置模块（`deception/injection/`）**禁止**独立部署；它**必须**作为适配器内的模块被引用。 | 部署清单评审 |
 
 > ⭐ **强制机制（2026-09-17 定）**
 >
@@ -296,7 +297,7 @@ edge/
 > ⭐ **`ST-3` 由编译器强制，不靠人工检查。**
 > 把进程内共享类型放在 `core/internal/contract/`，使 Go 的 `internal/` 目录规则生效：
 > **`core/internal/` 下的任何包，只有 `core/` 子树内的代码能 import**。
-> 适配器（`edge/`）因此在**编译期就无法**拿到核心内部类型 —— 只能走 `api/` 的 proto stub。
+> 适配器（`deception/`）因此在**编译期就无法**拿到核心内部类型 —— 只能走 `api/` 的 proto stub。
 
 ---
 

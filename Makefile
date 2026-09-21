@@ -1,6 +1,6 @@
 GO ?= go
 
-# shellcheck disable=SC1089
+# shellcheck disable=SC1089,SC2276,SC2157   # 见下：本文件是 Makefile，不是 shell；这三条都是同一个误读的副产品
 # 本文件是 **Makefile**，不是 shell 脚本。有工具会把整份文件当 shell 分析并在第一个 recipe 行报
 # 「parsing stopped here」——那是工具误用。make 自身已能正常解析并执行本文件的全部目标
 # （`make gate` / `make dev` 均在 CI 与本地实跑通过）。
@@ -206,18 +206,18 @@ caddy-surface: ## 列出我们对 Caddy 的 API 依赖（升级 Caddy 前先看�
 	@echo "我们对 Caddy 的依赖面（自动从代码提取）："
 	@echo
 	@echo "  · 引用的包："
-	@grep -rhoE 'github.com/caddyserver/caddy/v2[a-z/]*' --include='*.go' edge/ core/ | sort -u | sed 's/^/      /'
+	@grep -rhoE 'github.com/caddyserver/caddy/v2[a-z/]*' --include='*.go' deception/ core/ | sort -u | sed 's/^/      /'
 	@echo
 	@echo "  · 用到的导出符号："
-	@grep -rhoE '\b(caddy|caddyhttp|caddytls|caddyconfig|reverseproxy)\.[A-Z][A-Za-z]*' --include='*.go' edge/ core/ | sort -u | sed 's/^/      /'
+	@grep -rhoE '\b(caddy|caddyhttp|caddytls|caddyconfig|reverseproxy)\.[A-Z][A-Za-z]*' --include='*.go' deception/ core/ | sort -u | sed 's/^/      /'
 	@echo
 	@echo "  · 以字符串引用的模块 ID（改了就启动失败或静默失效）："
-	@grep -rhoE '"http\.(handlers|error_handlers)\.[a-z_]+"' --include='*.go' edge/ core/ | sort -u | sed 's/^/      /'
+	@grep -rhoE '"http\.(handlers|error_handlers)\.[a-z_]+"' --include='*.go' deception/ core/ | sort -u | sed 's/^/      /'
 
 # ── 基准：AR-29 的空载下界（直连 vs 经引擎）────────────────────────────────
 # 它只给下界；AR-29 的 P99 ≤ 5ms 要在接入演练里按真实载荷实测（实验 E3）。
 bench: ## 基准：业务路径额外延迟的空载下界（AR-29 的输入之一）
-	$(GO) test ./edge/proxy/ -run '^$$' -bench BenchmarkAddedLatency -benchtime 500x -count=1
+	$(GO) test ./deception/proxy/ -run '^$$' -bench BenchmarkAddedLatency -benchtime 500x -count=1
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
 test: pytest ## 全部单测，含数据竞争检测（依据 TB-15）

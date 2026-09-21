@@ -39,7 +39,7 @@ func (k DecoyKind) String() string {
 // 它跨模块使用（`policy` 装载 → 下发给适配器 → `edge-injection` 执行），因此按 `MD-5` 收敛到 `contract`。
 //
 // 契约见 [`docs/spec/policy-payload.md`] 的 `inject_rules[]`。两端（核心 `policy.edgeDoc`
-// 与适配器 `edge.proxy.edgePolicy`）**手工对齐**，因为适配器禁止 import `core/internal/`（`ST-3`）。
+// 与适配器 `deception.proxy.edgePolicy`）**手工对齐**，因为适配器禁止 import `core/internal/`（`ST-3`）。
 type InjectRule struct {
 	// Kind 是分类（见 InjectKinds），可为空串（未分类）。分类只用于组织与审计，不改变注入行为。
 	Kind string

@@ -276,7 +276,7 @@ L2 / L3 / L4（`honeypot-protocol` · `honeypot-shell` · `netpolicy` · `intent
 2. 用 [`_template.md`](_template.md) 创建 `docs/modules/<模块名>.md`（`MD-2` / `MD-17`，**一节都不许删**）
 3. 建源码目录（`MD-19`：清单外的目录**禁止**承载业务逻辑）：
    - 核心模块 → `core/internal/<模块名>/`
-   - L1 模块 → `edge/<模块名去 adapter- 前缀>/`
+   - L1 模块 → `deception/<模块名去 adapter- 前缀>/`
    - L2/L3 → `deception/<模块名>/` · L4 → `analysis/<模块名>/` · 控制台 → `console/`
 4. Go 模块三个文件：`iface.go`（导出的 interface）+ `<模块名>.go` + `<模块名>_test.go`（`MD-22`）
 5. 若属阶段 2/3：**禁止**现在实现（`MD-21`），除非先取得用户确认并更新阶段标记

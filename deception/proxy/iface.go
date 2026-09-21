@@ -25,7 +25,7 @@ type TelemetryClient interface {
 // Injector 是本端对「响应改写」的依赖。
 //
 // 接口由**消费方（本模块）**定义，便于单测用替身（`MD-22`）；
-// 生产实现是 `edge/injection`（L1 处置模块，`ST-5` 要求它**被适配器引用、不独立部署**）。
+// 生产实现是 `deception/injection`（L1 处置模块，`ST-5` 要求它**被适配器引用、不独立部署**）。
 // 注意 `MD-4` 禁止的是**适配器之间**互相依赖（`adapter-*` 三个之间）；
 // 处置模块不属适配器，因此 `handler.go` 的 `Provision` 里直接 import 它是合规的。
 type Injector interface {

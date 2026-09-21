@@ -19,7 +19,7 @@
 
 ```sh
 # 1) 把模板拷到你的 DNS 服务（CoreDNS）配置目录
-cp edge/dns/config/Corefile.example /etc/coredns/Corefile
+cp deception/dns/config/Corefile.example /etc/coredns/Corefile
 # 2) 按你的环境改三处：域名 · 可疑网段 · 引擎 IP（模板里都有注释标出）
 # 3) 校验并加载
 coredns -conf /etc/coredns/Corefile -dns.port 0   # 语法自检：能起来说明语法正确，随即 Ctrl-C

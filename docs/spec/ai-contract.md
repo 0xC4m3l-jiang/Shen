@@ -2,7 +2,7 @@
 
 > **状态**：已实现（阶段 A —— 通路 · 开关 · 强制护栏）。
 > 本文件是**跨模块与跨语言契约**：Python 侧生成（`analysis/aicap/`）、核心侧装载与投影（`core/internal/policy/`）、
-> L1 适配器消费（`edge/proxy/`）三方**必须**同键、同语义。
+> L1 适配器消费（`deception/proxy/`）三方**必须**同键、同语义。
 >
 > 规则依据：`AR-33`（生成必须经护栏出口）· `AR-15`（结构由独立代码层校验）· `AR-16`（统一信封）·
 > `AR-22`（黑名单三类）· `AR-23`（分用途长度）· `AR-24`（提示词资源化）· `AR-30`（同会话同资源同答案）·
@@ -17,7 +17,7 @@
 ## 0. 三个角色与各自的校验责任
 
 ```text
-① 生成期（Python · analysis/aicap/）      ② 装载期（核心 · policy）            ③ 消费期（适配器 · edge/proxy）
+① 生成期（Python · analysis/aicap/）      ② 装载期（核心 · policy）            ③ 消费期（适配器 · deception/proxy）
    generate(TaskSpec) → Envelope            读清单文件 → 逐条验校验和            读策略载荷 → 命中 → 再验校验和
    ├─ 前置护栏（提示词三段式）                → 验单条上限 / 总上限                 → 选变体（会话钉定）
    ├─ 生成（模板生成器 / 模型）               → 验 variants 与配置一致              → 构造 per-request 规则
@@ -137,7 +137,7 @@
 | `resource` | 请求路径的**精确值**（区分大小写）；阶段 A **不做**前缀匹配 |
 | `variant` | `[0, N)` 的整数；同一 `(resource, version)` 下唯一 |
 | `body` | **注入片段**（HTML 片段，不是完整文档）：它被插到改道侧响应的 `marker` **之前** —— 与 `edge-injection` 的既有语义一致（`ST-5`：复用纯改写，不新增替换语义）。长度 ≤ 65536 字节（UTF-8 计） |
-| `marker` | 插入位置标记；空串 = 执行方用 `</body>`（`edge/injection` 的既有语义） |
+| `marker` | 插入位置标记；空串 = 执行方用 `</body>`（`deception/injection` 的既有语义） |
 | `checksum` | 对 `body` 的 **UTF-8 字节**取 SHA-256，小写十六进制 |
 | `version` | 内容版本（清单 `version`）；轮换时递增 |
 | `generator` | `template-v1` = 确定性模板生成器；阶段 B 接模型后写 `prompt-<模板版本>` |
@@ -214,7 +214,7 @@
 
 1. 改本文件；
 2. 改生成侧 `analysis/aicap/`（内容对象 / 清单的构造）；
-3. 改核心侧 `core/internal/policy/`（装载与投影）与适配器侧 `edge/proxy/`（消费）——两侧**不能共享 Go 类型**
+3. 改核心侧 `core/internal/policy/`（装载与投影）与适配器侧 `deception/proxy/`（消费）——两侧**不能共享 Go 类型**
    （`ST-3` / `TB-24`：跨平面只允许 wire format）；
 4. 同步 `docs/spec/policy-payload.md`（载荷里的 `content_manifest` 是本文件 §3 的**投影**）与两侧单测。
 

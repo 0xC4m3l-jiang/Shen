@@ -169,7 +169,7 @@ func isToolDir(name string) bool {
 // 检查 2 · ST-2 / ST-4 禁止跨顶层目录 import
 // ─────────────────────────────────────────────────────────────────────────────
 
-// planeOf 取一个包所属的顶层目录（平面），如 core / edge / api。
+// planeOf 取一个包所属的顶层目录（平面），如 core / deception / api。
 func planeOf(importPath string) string {
 	if !strings.HasPrefix(importPath, modulePath+"/") {
 		return "" // 外部依赖或标准库
@@ -343,9 +343,9 @@ func checkModulesAgainstList(root string, pkgs []pkg, mods []module) []finding {
 				}
 				found["core/internal/"+r] = true
 			}
-		case "edge", "deception", "analysis":
+		case "deception", "honeypot", "analysis":
 			rest := strings.TrimPrefix(p.ImportPath, modulePath+"/"+plane+"/")
-			// 去掉子目录（如 edge/mirror/cmd/mirror）
+			// 去掉子目录（如 deception/proxy/cmd/proxy）
 			if i := strings.IndexByte(rest, '/'); i >= 0 {
 				rest = rest[:i]
 			}

@@ -30,7 +30,7 @@ make leakcheck          # 或：go run ./scripts/check-leak
 
 | 入选 | 理由（为什么它的文本可能上攻击者的屏幕） |
 | --- | --- |
-| `edge/proxy` · `edge/mirror` · `edge/injection` | 响应头、错误页、403、注入后的蜜罐侧响应体 |
+| `deception/proxy` · `deception/mirror` · `deception/injection` | 响应头、错误页、403、注入后的蜜罐侧响应体 |
 | `core/internal/responder` | 伪造响应内容 |
 | `core/internal/decoy` | 诱饵内容与**投放片段**（会被投放进客户环境） |
 | `core/internal/judge` · `director` · `control` · `isolation` · `honeypot` | 判定与决策的取值、后端名、对外行为描述 |
@@ -44,7 +44,7 @@ make leakcheck          # 或：go run ./scripts/check-leak
 
 | 类型 | 形式 | 依据 |
 | --- | --- | --- |
-| 规则级 | 内部日志调用的参数 · 错误构造的参数（`errors.New` / `fmt.Errorf`） · struct tag（配置键） | `OH-2` 适用位置表：「服务端配置与内部日志」允许；错误只上行到适配器并被折叠成 fail-open（`NI-3`），且 `ST-7` 另行禁止回显 |
+| 规则级 | 内部日志调用的参数 · 错误构造的参数（`errors.New` / `fmt.Errorf`） · struct tag（配置键） · **import 路径**（编译期标识符） | `OH-2` 适用位置表：「服务端配置与内部日志」允许；错误只上行到适配器并被折叠成 fail-open（`NI-3`），且 `ST-7` 另行禁止回显；import 路径只进符号表与构建元数据，不上攻击者的屏幕 —— 顶层目录名一旦含泄漏词（如 ① 欺骗层 `deception/`）就靠这条避免满仓库误报 |
 | 文件级 | 文件自己声明 `//check-leak:filter <理由>`（例：`responding` 的 AR-22 黑名单表**必须**逐字包含禁用词，否则拦不住模型自曝）；检查会把它打印出来供人核对 | `OH-4`「逐条显式声明并附理由」 |
 | 逐条 | [`allow.txt`](allow.txt)：`<检查ID> <文件> <字面量>  # 理由` —— **精确到文件 + 字面量**，同一字面量换一个文件要重新登记 | `OH-4` |
 

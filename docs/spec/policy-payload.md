@@ -9,7 +9,7 @@
 > 与 [`../design/`](../design/README.md) 冲突时以 `design/` 为准。
 >
 > ⚠️ **两处实现必须同时改**：核心侧 `core/internal/policy/server.go` 的 `edgeDoc` 与
-> 适配器侧 `edge/proxy/policy.go` 的 `edgePolicy`。两者**不能共享 Go 类型** ——
+> 适配器侧 `deception/proxy/policy.go` 的 `edgePolicy`。两者**不能共享 Go 类型** ——
 > 适配器**禁止** import `core/internal/`（`ST-3`，编译期强制），跨平面只允许 wire format（`TB-24`）。
 
 ---

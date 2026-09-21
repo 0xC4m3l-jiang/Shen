@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"shen/edge/injection"
+	"shen/deception/injection"
 )
 
 // AI 欺骗内容的**消费侧**（`ADR-0023` / `AR-33`）：
@@ -277,7 +277,7 @@ func (h *Handler) contentFor(r *http.Request, idx *contentIndex) (contentBody, b
 	return body, true
 }
 
-// injectContent 把命中的内容片段注入响应体（走 `edge/injection` 的既有改写语义，`ST-5`）。
+// injectContent 把命中的内容片段注入响应体（走 `deception/injection` 的既有改写语义，`ST-5`）。
 //
 // 返回 (改写后的字节, 内容标识, 是否真的改写)。任何一步不成立都原样返回 —— 绝不阻断。
 func (h *Handler) injectContent(r *http.Request, idx *contentIndex, contentType string, body []byte) ([]byte, string, bool) {

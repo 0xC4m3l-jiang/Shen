@@ -74,7 +74,7 @@
 | `inject` | string | **AI 欺骗内容注入的结果** —— 见下表（`ADR-0023` / `AR-33`）；与 `executed` 独立：`executed` 说“去了哪”，`inject` 说“我们改写了多少” |
 | `content_id` | string | 实际注入的内容标识（空串 = **未注入**）；定位“这一条上的是哪份内容” |
 
-`inject` 的四个取值（**唯一权威定义**，改它必须同步 `edge/proxy` 常量与本文）：
+`inject` 的四个取值（**唯一权威定义**，改它必须同步 `deception/proxy` 常量与本文）：
 
 | 取值 | 何时 |
 | --- | --- |
@@ -83,7 +83,7 @@
 | `no_content` | 开关开着、也在改道侧，但没有可用的内容（未命中资源 / 无该变体 / 校验和不符 / 非 HTML / 找不到标记） |
 | `off` | **未涉及注入**：不是改道侧（放行 / 白名单 / 缓存 / 判定失败 / 拦截 / 幻境回落） |
 
-`executed` 的七个取值（**唯一权威定义**，改它必须同步 `edge/proxy` 的 `executedFor` 与本文）：
+`executed` 的七个取值（**唯一权威定义**，改它必须同步 `deception/proxy` 的 `executedFor` 与本文）：
 
 | 取值 | 何时 |
 | --- | --- |
@@ -95,6 +95,6 @@
 | `mirage` | 决策 `route_mirage` 且成功转发到幻境后端 |
 | `block` | 决策 `block`，返回 403 |
 
-**夹具**：[`../../api/telemetry/v1/testdata/request_judged_event.json`](../../api/telemetry/v1/testdata/request_judged_event.json)（由 `edge/proxy` 的契约测试逐键比对）。
+**夹具**：[`../../api/telemetry/v1/testdata/request_judged_event.json`](../../api/telemetry/v1/testdata/request_judged_event.json)（由 `deception/proxy` 的契约测试逐键比对）。
 **消费者**：控制台的流量调度图与链路详情（`/api/topology` · `/api/trace`）—— 注入跳在 DAG 上只用 `inject=applied` + 非空 `content_id` 作为依据。
 **L4 worker 不消费本事件**（它只读 `decision`），所以**无需** Python 侧改动。
