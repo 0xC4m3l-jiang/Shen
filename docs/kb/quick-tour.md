@@ -19,17 +19,17 @@
 ## 2. 五层 → 目录（一张图）
 
 > 你可能会用「**三个大模块**」（欺骗层 / AI 蜜罐层 / 管控平台）来想这套系统 ——
-> 它们与这五个平面怎么对应、`core/` 为什么不属于任何单个模块：见 [`../modules/_map.md`](../modules/_map.md) §1.1。
+> 它们与这五个平面怎么对应、`common/core/` 为什么不属于任何单个模块：见 [`../modules/_map.md`](../modules/_map.md) §1.1。
 
 ```text
 接入层 L0   客户自己的 LB / nginx / Envoy（不自研，AR-3）
-数据平面 L1 deception/       ① 旁路镜像 · ② DNS 引流 · ③ 反向代理前置 · ④ Sidecar
+数据平面 L1 modules/deception/       ① 旁路镜像 · ② DNS 引流 · ③ 反向代理前置 · ④ Sidecar
                        （判定逻辑禁止写在这里，AR-2 / AR-7）
-核心         core/      判定 → 决策（三值）→ 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
-执行平面 L2 deception/ 蜜罐协议框架（内容待调研）
-        L3 deception/  网络欺骗：微隔离 · 假拓扑 · 运行时检测（声明式，复用 Cilium/Tetragon）
+核心         common/core/      判定 → 决策（三值）→ 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
+执行平面 L2 modules/deception/ 蜜罐协议框架（内容待调研）
+        L3 modules/deception/  网络欺骗：微隔离 · 假拓扑 · 运行时检测（声明式，复用 Cilium/Tetragon）
 分析平面 L4 analysis/  意图 · 攻击链 · 策略生成 · LLM 契约（Python）+ 近线 worker
-控制平面     console/ 只读观测台（禁止参与请求级判定，AR-10）
+控制平面     modules/console/ 只读观测台（禁止参与请求级判定，AR-10）
 ```
 
 目录用途全表（含语言与"是否源码"）见 [`../modules/_map.md`](../modules/_map.md) §1。
@@ -40,29 +40,29 @@
 
 | 我想… | 模块 | 代码 | 文档 |
 | --- | --- | --- | --- |
-| 改判定打分 / 规则求值 | `judge` | [`core/internal/judge/`](../../core/internal/judge) | [`../modules/judge.md`](../modules/judge.md) |
-| 改三值决策 / 灰度 / 阈值 | `director` | [`core/internal/director/`](../../core/internal/director) | [`../modules/director.md`](../modules/director.md) |
-| 改会话身份提取 | `session` | [`core/internal/session/`](../../core/internal/session) | [`../modules/session.md`](../modules/session.md) |
-| 改隔离短路 | `isolation` | [`core/internal/isolation/`](../../core/internal/isolation) | [`../modules/isolation.md`](../modules/isolation.md) |
-| 改策略装载 / 下发 / 回执 | `policy` | [`core/internal/policy/`](../../core/internal/policy) | [`../modules/policy.md`](../modules/policy.md) · [`../spec/policy-payload.md`](../spec/policy-payload.md) |
-| 改事件上报 / 读侧 | `telemetry` | [`core/internal/telemetry/`](../../core/internal/telemetry) | [`../modules/telemetry.md`](../modules/telemetry.md) · [`../spec/events.md`](../spec/events.md) |
-| 换存储驱动（Redis 等） | `store` | [`core/internal/store/`](../../core/internal/store) | [`../modules/store.md`](../modules/store.md) |
-| 改 gRPC 服务面 / 禁止回显点 | `control` | [`core/internal/control/`](../../core/internal/control) | [`../modules/control.md`](../modules/control.md) |
-| 改诱饵资产 | `decoy` | [`core/internal/decoy/`](../../core/internal/decoy) | [`../modules/decoy.md`](../modules/decoy.md) |
-| 改幻境后端池 | `honeypot` | [`core/internal/honeypot/`](../../core/internal/honeypot) | [`../modules/honeypot.md`](../modules/honeypot.md) |
-| 改欺骗响应 / 一致性 | `responder` | [`core/internal/responder/`](../../core/internal/responder) | [`../modules/responder.md`](../modules/responder.md) |
-| 改边缘注入（改道侧改写） | `edge-injection` | [`deception/injection/`](../../deception/injection) | [`../modules/edge-injection.md`](../modules/edge-injection.md) |
-| 改反向代理 / 边车 / TLS | `adapter-proxy` | [`deception/proxy/`](../../deception/proxy) | [`../modules/adapter-proxy.md`](../modules/adapter-proxy.md) · [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) |
-| 接旁路镜像（形态①） | `adapter-mirror` | [`deception/mirror/`](../../deception/mirror) | [`../modules/adapter-mirror.md`](../modules/adapter-mirror.md) |
-| 配 DNS 引流（形态②） | `adapter-dns` | [`deception/dns/`](../../deception/dns) | [`../modules/adapter-dns.md`](../modules/adapter-dns.md) |
-| 改蜜罐协议框架 | `honeypot-protocol` | [`honeypot/protocol/`](../../honeypot/protocol) | [`../modules/honeypot-protocol.md`](../modules/honeypot-protocol.md) |
-| 改 L3 网络欺骗产物 | `netpolicy` | [`deception/netpolicy/`](../../deception/netpolicy) | [`../modules/netpolicy.md`](../modules/netpolicy.md) |
+| 改判定打分 / 规则求值 | `judge` | [`common/core/internal/judge/`](../../common/core/internal/judge) | [`../modules/judge.md`](../modules/judge.md) |
+| 改三值决策 / 灰度 / 阈值 | `director` | [`common/core/internal/director/`](../../common/core/internal/director) | [`../modules/director.md`](../modules/director.md) |
+| 改会话身份提取 | `session` | [`common/core/internal/session/`](../../common/core/internal/session) | [`../modules/session.md`](../modules/session.md) |
+| 改隔离短路 | `isolation` | [`common/core/internal/isolation/`](../../common/core/internal/isolation) | [`../modules/isolation.md`](../modules/isolation.md) |
+| 改策略装载 / 下发 / 回执 | `policy` | [`common/core/internal/policy/`](../../common/core/internal/policy) | [`../modules/policy.md`](../modules/policy.md) · [`../spec/policy-payload.md`](../spec/policy-payload.md) |
+| 改事件上报 / 读侧 | `telemetry` | [`common/core/internal/telemetry/`](../../common/core/internal/telemetry) | [`../modules/telemetry.md`](../modules/telemetry.md) · [`../spec/events.md`](../spec/events.md) |
+| 换存储驱动（Redis 等） | `store` | [`common/core/internal/store/`](../../common/core/internal/store) | [`../modules/store.md`](../modules/store.md) |
+| 改 gRPC 服务面 / 禁止回显点 | `control` | [`common/core/internal/control/`](../../common/core/internal/control) | [`../modules/control.md`](../modules/control.md) |
+| 改诱饵资产 | `decoy` | [`common/core/internal/decoy/`](../../common/core/internal/decoy) | [`../modules/decoy.md`](../modules/decoy.md) |
+| 改幻境后端池 | `honeypot` | [`common/core/internal/honeypot/`](../../common/core/internal/honeypot) | [`../modules/honeypot.md`](../modules/honeypot.md) |
+| 改欺骗响应 / 一致性 | `responder` | [`common/core/internal/responder/`](../../common/core/internal/responder) | [`../modules/responder.md`](../modules/responder.md) |
+| 改边缘注入（改道侧改写） | `edge-injection` | [`modules/deception/injection/`](../../modules/deception/injection) | [`../modules/edge-injection.md`](../modules/edge-injection.md) |
+| 改反向代理 / 边车 / TLS | `adapter-proxy` | [`modules/deception/proxy/`](../../modules/deception/proxy) | [`../modules/adapter-proxy.md`](../modules/adapter-proxy.md) · [`ADR-0017`](../background/decisions/0017-caddy-l1-base.md) |
+| 接旁路镜像（形态①） | `adapter-mirror` | [`modules/deception/mirror/`](../../modules/deception/mirror) | [`../modules/adapter-mirror.md`](../modules/adapter-mirror.md) |
+| 配 DNS 引流（形态②） | `adapter-dns` | [`modules/deception/dns/`](../../modules/deception/dns) | [`../modules/adapter-dns.md`](../modules/adapter-dns.md) |
+| 改蜜罐协议框架 | `honeypot-protocol` | [`modules/honeypot/protocol/`](../../modules/honeypot/protocol) | [`../modules/honeypot-protocol.md`](../modules/honeypot-protocol.md) |
+| 改 L3 网络欺骗产物 | `netpolicy` | [`modules/deception/netpolicy/`](../../modules/deception/netpolicy) | [`../modules/netpolicy.md`](../modules/netpolicy.md) |
 | 意图识别 / 攻击链 / 策略生成 | `intent` · `chain` · `strategy` | [`analysis/intent/`](../../analysis/intent) 等 | [`../modules/intent.md`](../modules/intent.md) 等 |
 | LLM 契约 / 超时 / 黑名单 | `llm-components` | [`analysis/llm/`](../../analysis/llm) | [`../modules/llm-components.md`](../modules/llm-components.md) |
 | AI 生成出口 / 护栏 / 欺骗内容 | `ai-capability` | [`analysis/aicap/`](../../analysis/aicap) | [`../modules/ai-capability.md`](../modules/ai-capability.md) |
 | 让 L4 跑起来（近线） | worker | [`analysis/worker.py`](../../analysis/worker.py) | [`ADR-0022`](../background/decisions/0022-l4-near-line-worker.md) |
 | 想确认**某能力到底实现了没、怎么验** | — | [`capabilities.md`](capabilities.md) | — |
-| 看**流量调度图（意图 vs 实际落点）** | `console` | [`console/`](../../console) | [`../integrate/observability.md`](../integrate/observability.md) |
+| 看**流量调度图（意图 vs 实际落点）** | `console` | [`modules/console/`](../../modules/console) | [`../integrate/observability.md`](../integrate/observability.md) |
 | 发伪造流量做验证 | — | [`scripts/traffic/`](../../scripts/traffic) | [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md) |
 | 看日志字段 / 定位一条请求 | — | 核心与适配器 | [`../spec/logs.md`](../spec/logs.md) |
 

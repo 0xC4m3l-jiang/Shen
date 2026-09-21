@@ -10,12 +10,12 @@
 顶层按**架构平面**分组，而不是塞进一个 `src/` 桶：
 
 ```text
-core/        核心 —— 判定与响应生成的唯一实现
-deception/        L1 数据平面 —— 四个接入适配器 + L1 处置
-deception/   L2+L3 执行平面 —— 蜜罐、假 shell、网络策略（阶段 2/3）
+common/core/        核心 —— 判定与响应生成的唯一实现
+modules/deception/        L1 数据平面 —— 四个接入适配器 + L1 处置
+modules/deception/   L2+L3 执行平面 —— 蜜罐、假 shell、网络策略（阶段 2/3）
 analysis/    L4 分析平面（阶段 3）
-console/     控制平面（阶段 2）
-api/         跨语言契约（.proto + 生成的 stub）
+modules/console/     控制平面（阶段 2）
+common/api/         跨语言契约（.proto + 生成的 stub）
 ```
 
 好处：`go.mod` 在仓库根 → `go build ./...` / `go test ./...` / 编辑器全部零摩擦；目录名直接对应架构图上的哪一块。
@@ -26,11 +26,11 @@ api/         跨语言契约（.proto + 生成的 stub）
 
 ## Q2 · 怎么保证适配器不会偷偷 import 核心内部代码？
 
-**靠编译器，不靠人眼。** 进程内共享类型放在 `core/internal/contract/`，于是 Go 的 `internal` 目录规则生效：
+**靠编译器，不靠人眼。** 进程内共享类型放在 `common/core/internal/contract/`，于是 Go 的 `internal` 目录规则生效：
 
-> `core/internal/` 下的任何包，只有 `core/` 子树内的代码能 import。
+> `common/core/internal/` 下的任何包，只有 `common/core/` 子树内的代码能 import。
 
-`deception/mirror` 在 `core/` 之外，**编译期就无法**拿到核心内部类型 —— 它只能走 `api/` 的 proto stub。这条规则就是 `ST-3`，强制方式是编译器而不是 lint。
+`modules/deception/mirror` 在 `common/core/` 之外，**编译期就无法**拿到核心内部类型 —— 它只能走 `common/api/` 的 proto stub。这条规则就是 `ST-3`，强制方式是编译器而不是 lint。
 
 ---
 
@@ -94,7 +94,7 @@ make help       # 列出全部
 make build      # 编译全部
 make test       # 跑单测（含数据竞争检测）
 make vet        # 静态检查
-make generate   # 由 api/*.proto 生成 Go 代码
+make generate   # 由 common/api/*.proto 生成 Go 代码
 make run        # 本地起核心（影子模式）
 ```
 

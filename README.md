@@ -58,7 +58,7 @@
 | **2b · 处置内容** | 诱饵面 · 幻境后端池 · 响应生成 · 隔离 · 边缘注入 | 🟡 模块已实现并单测；**幻境后端池 · 白名单 · 响应改写规则 · AI 欺骗内容清单已能经策略面下发到边缘**（端到端实测：改道 + 注入，`make ai-check`）；诱饵资产到边缘的通路**未通** |
 | **3 · 高交互与智能** | 协议仿真蜜罐 · 蜜网 · LLM 会话 · 意图与攻击链 | 🟡 **蜜罐只做接入架构**（用户裁定）：协议注册表 · 运行框架（并发上限/对称回收）· 会话录制契约已就绪；**蜜罐内容与协议栈待专项调研**；其余模块未开始 |
 
-> ✅ **策略面（S4）已落地（2026-09-19）**：核心经 `api/policy/v1` 把**改道后端表 · 白名单 · 响应改写规则**下发到适配器，
+> ✅ **策略面（S4）已落地（2026-09-19）**：核心经 `common/api/policy/v1` 把**改道后端表 · 白名单 · 响应改写规则**下发到适配器，
 > 带版本号、校验和与回执（`ST-8` / `AR-13`），实测「核心下发 → 适配器应用 → 真实改道 + 注入」全程跑通。
 > ✅ **AI 欺骗内容注入已通（2026-09-20，阶段 A）**：`ai-capability` 离线生成（**强制过护栏**：结构/黑名单/长度/风格）
 > → 清单 → 核心装载 → 策略面 `content_manifest` → 适配器按会话哈希确定性命中并注入改道侧；
@@ -124,7 +124,7 @@ make run                                        # 监听 127.0.0.1:9443
 make smoke                                      # 另开一个终端：对判定面发三个样本
 SHEN_CORE_ADDR=127.0.0.1:9443 make analysis      # 跑一轮 L4（结论进控制台「分析结论」块）
 SHEN_PROXY_UPSTREAM=http://127.0.0.1:9000 \
-  go run ./deception/proxy/cmd/proxy                 # 起反向代理前置（③），业务地址指向真实服务
+  go run ./modules/deception/proxy/cmd/proxy                 # 起反向代理前置（③），业务地址指向真实服务
 ```
 
 ---
@@ -191,18 +191,18 @@ code=200 http=2
 > **每个目录做什么、每个模块在哪个目录、能力是什么、怎么接起来** —— 看 [`docs/modules/_map.md`](docs/modules/_map.md)（一张表回答全部）。
 
 ```text
-api/          契约的唯一事实源（.proto；客户端必须生成，禁止手写）
+common/api/          契约的唯一事实源（.proto；客户端必须生成，禁止手写）
 vendor/       Go 依赖副本（入库 ⇒ 构建与门禁离线可用，不需要 Go 代理）
-core/         核心：判定 · 决策 · 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
+common/core/         核心：判定 · 决策 · 会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面 · 欺骗面
                └ internal/<模块>/  一模块一目录（iface.go + 实现 + 单测）
                └ cmd/core/         核心进程入口
-deception/         L1 边缘：proxy（③前置 + ④边车，内嵌 Caddy）· mirror（①旁路镜像）· dns（②纯配置）· injection（处置）
-deception/    L2/L3：协议仿真蜜罐 · 蜜网（阶段 3）
+modules/deception/         L1 边缘：proxy（③前置 + ④边车，内嵌 Caddy）· mirror（①旁路镜像）· dns（②纯配置）· injection（处置）
+modules/deception/    L2/L3：协议仿真蜜罐 · 蜜网（阶段 3）
 analysis/     L4（Python）：意图 · 攻击链 · 策略生成 · LLM 契约纪律 · 近线 worker
                └ pyproject.toml / requirements*.txt / .venv   ← 本层的工具链与配置全部收在本目录
                └ proto/                由 make pygen 生成的 gRPC 桩
                └ tools/genproto.py     生成脚本（让生成物成为 analysis.proto.* 普通包）
-console/      控制台：只读观测（Web UI + 只读接口；清单见 docs/spec/console-api.md §2；语言偏离见 ADR-0020）
+modules/console/      控制台：只读观测（Web UI + 只读接口；清单见 docs/spec/console-api.md §2；语言偏离见 ADR-0020）
 scripts/      门禁与运维工具：archcheck · tracecheck · check-leak · licensecheck · devcheck · demo/（本地演示环境）
                └ bin/                 门禁工具二进制缓存（不入库）
 deploy/       部署物料

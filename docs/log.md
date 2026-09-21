@@ -9,30 +9,115 @@
 
 ---
 
-## 2026-09-21 · 顶层目录与「三个大模块」对齐（① 欺骗层 ② AI 蜜罐层 ③ 管控平台）
+## 2026-09-21 · 顶层收成两级：`modules/`（三个大模块）+ `common/`（公用代码）
 
-**做了什么**：把顶层目录名改成你嘴里的三个大模块 —— ① 欺骗层的目录从 **edge** 改名为 `deception/`，
-② AI 蜜罐层从 deception/honeypot 改名为 `honeypot/protocol`；③ 管控平台 `console/` 本来就对得上。
-**`core/`（共享内核）与 `analysis/`（跨 ①② 的 L4）不改名** —— 它们不属于任何单个大模块，不改才是对的。
+**做了什么**：你提的两件事都做了 —— ① 三个大模块的根目录收进**一个容器**，② **公用代码有了自己的位置**。
 
-1. **目录移动**（git mv，历史保留）：edge 下的 proxy / mirror / dns / injection → `deception/`；
-   deception/honeypot → `honeypot/protocol`；`deception/netpolicy` **原地不动**（它同属 ①）；
+```text
+modules/            产品功能模块（开发从这里进去）
+├── modules/deception/      ① 欺骗层
+├── honeypot/       ② AI 蜜罐层
+└── modules/console/        ③ 管控平台
+common/             公用代码（被 modules/ 共用，不是功能模块）
+├── common/core/           共享内核（判定与响应生成的唯一实现）
+└── common/api/            跨进程契约（.proto + 生成的 Go 桩）
+analysis/           L4 分析层（Python；跨 ①②，故既不在 modules/ 也不在 common/）
+```
+
+1. **搬目录**（git mv，历史保留）：`modules/deception/` `honeypot/` `modules/console/` → `modules/` 下；`common/core/` `common/api/` → `common/` 下；
+2. **Go import 124 处**机械替换（`shen/core/` 81 · `shen/api/` 35 · `shen/deception/` 6 · `shen/console/` 2）；
+3. **门禁脚本**：`scripts/archcheck/main.go` 的 `planeOf` 改为**感知容器**的两级解析（新增 `planeRoot` 映射表），
+   `scripts/check-leak/main.go` 的清单前缀表改为 `modules/` `common/` `analysis/`；
+4. **物料**：`Makefile` · `deploy/docker/go.Dockerfile`（4 条 COPY + SERVICE）· `deploy/docker/compose.yaml`（3 个 SERVICE）·
+   `.gitignore`（4 条产物兜底）· `analysis/tools/genproto.py`（proto 根）· `scripts/demo/run.sh` · `scripts/dev/smoke.sh` · `scripts/dev/ai-inject-check.py`；
+5. **文档约 184 行 + 链接**：`docs/design/structure.md`（§1.1 两级树与容器映射表 · §1.2 `common/core/` · §1.3 `modules/` 三棵子树 ·
+   §1.5 已建表 · §1.6 包级地图 · §1.7 的 `ST-1`/`ST-2` 枚举）· `docs/design/modules.md` §1.1 的 24 行源码目录列 ·
+   `docs/modules/_map.md` §1 换成容器视角 · 其余活文档路径；
+6. **新增四个入口页**：`modules/README.md`（**我要做 ①/②/③ 的哪件事 → 进哪个子目录 → 看哪份文档 → 跑什么测试**）·
+   `common/README.md` · `modules/deception/README.md` · `modules/honeypot/README.md` · `modules/console/README.md`；
+7. **新建 ADR-0030**（四个候选的取舍 + 四条决定 + 四条失效条件 + 三项未解决）；
+   `docs/background/decisions/0029-three-module-dirs.md` 与 `0028-three-module-view.md` 已标注被取代的那部分。
+
+**改了哪些文件**：
+
+- 目录：新增 `modules/` 与 `common/` 两个容器，五个平面各下移一层；
+- 代码：只动 import 前缀（逻辑一行未改）· 三处测试夹具相对路径 ·
+  `common/core/cmd/core/main.go` 的 nosemgrep 注释位置（预存在的抑制失效，纯注释）；
+- 门禁：`scripts/archcheck/main.go` · `scripts/check-leak/main.go`；
+- 物料：`Makefile` · `.gitignore` · `deploy/docker/go.Dockerfile` · `deploy/docker/compose.yaml` ·
+  `scripts/demo/run.sh` · `scripts/dev/smoke.sh` · `scripts/dev/ai-inject-check.py` · `analysis/tools/genproto.py`；
+- 文档：`docs/design/structure.md` · `docs/design/modules.md` · `docs/modules/_map.md` ·
+  `docs/background/decisions/0030-two-level-layout.md`（新）· `docs/plans/2026-09-21-two-level-layout.md`（新）·
+  `modules/README.md`（新）· `common/README.md`（新）· 三个模块的 README（新）· 其余活文档。
+
+**独立评审（冷上下文）拓 12 条，全部已处理** —— 最关键的一条：本轮**把我自己的一条既有约束收窄了**。
+
+1. **容器子目录脱出了 `ST-1` 的覆盖**（容器里的野目录不会被拦）⇒ `scripts/archcheck/main.go` 新增
+   `parseContainerChildren` + `checkContainerChildren`（从 §1.1 解析容器下的平面并逐一核对）；
+   **已用探针验证**：造一个 `modules/` 下的野目录与一个 `common/` 下的野目录 → 各自被拦下；移走 → 恢复通过；
+2. 同类静默失效：`modulePath` 硬编码 `shen`，项目名一变（ADR-0004）ST-2/ST-3/MD-20 会**全部静默通过**
+   ⇒ `main()` 加自检，一个平面都解析不出时直接 `fatal`；
+3. **活文档的代码块里仍有失效命令**（≥10 个文件）：
+
+   ```text
+   go run ./deception/proxy/cmd/proxy    ← 仓库根已无 deception/
+   go test ./console/cmd/console/        ← 应为 ./modules/console/...
+   go list -deps ./core/...              ← 应为 ./common/core/...
+   ```
+
+   根因：我上一道 `sed` 的 `(?<![\/\w])` 前瞻正好把 `./X/` 这种形式排除了（只扫 markdown 链接也抓不到命令块）⇒
+   补一道针对 `./X/` 的改写，并扫到 `scripts/` 下的 README · `deploy/config/` 的注释 · `analysis/requirements.txt` · `.proto` 注释
+   （随后重生成 Go 桩，每文件 2–6 行差异）；
+4. `MD-21` 被当成「目录不预建」引用（**原文不支持该语义**：它管的是阶段 1 的交付范围）⇒ 4 处改引 `ADR-0007` 的阶段划分；
+5. `structure.md` §1.6.2 「`common/api/policy/v1` 当前无人引用」与 §1.6.4 「✅ 已接 Pull + Ack」矛盾
+   ⇒ 改述为「只差 `Watch`」，并去掉那句过期的「到不了边缘」因果；
+6. 其余：`modules/console/README.md` 描述了不存在的 `internal/` 内容 · §1.6.4 末尾两句重复 ·
+   §1.1 的**历史行**被 sed 写成了新路径（**事实错误**）· 并行 `sed` 又把容器子目录行污染回去（竞态，
+   后果是白名单解析为空 → 全量误报，靠 `-dump` 定位）。
+
+**对应文档**：`docs/background/decisions/0030-two-level-layout.md`（新建）· `docs/design/structure.md` §1.1（顶层白名单）· 
+`docs/modules/_map.md` §1（分层 ↔ 目录）· `docs/plans/2026-09-21-two-level-layout.md`（变更包）
+
+**验证**：`make gate`（构建 · staticcheck · errcheck · ruff · shellcheck · Go 单测含 -race · 80 例 pytest ·
+架构检查 · 追溯检查 · 泄漏检查 · 许可审计）全绿 · `make dev`（配置干跑 → 核心影子模式启动 → 3 样本冒烟 →
+规则回放 4 例 → L4 出 2 条结论）通过
+
+**证据**：变更包 §6 —— `架构检查通过。` · `泄漏检查通过。` · `门禁通过。` ·
+`ok shen/common/core/cmd/core 0.475s`（包路径已是新布局）· L4「取事件 3 条 → 结论 2 条」
+
+**遗留**：`modules/honeypot/shell/`（未建，按你的裁定推迟）· `analysis/` 是否拆 ①/② 两半（需单独 ADR）·
+蜜罐**编排**的实现面（能力归属已在核心）· 仓库根的 `licensecheck` 二进制（预存在，待你定要不要清）。
+
+**未验**（本轮最值得先验的排第一）：
+
+1. **`make up` 的真实 Docker 构建** —— 改了 `deploy/docker/go.Dockerfile` 的 4 条 COPY 与 3 个 SERVICE 路径，
+   但**只被静态检查覆盖**，本轮没跑 Docker；漏一个 COPY 路径就是构建期才炸；
+2. `make ai-check`（端到端 17 项）· `make demo` · `make pygen` · `make traffic` / `make doctor` —— 均未跑
+   （受影响的只有各自的路径常量），已逐项写进变更包 §8；
+3. 控制台页面在浏览器里的观感（本轮未动 `modules/console/web/`）。
+
+**做了什么**：把顶层目录名改成你嘴里的三个大模块 —— ① 欺骗层的目录从 **edge** 改名为 `modules/deception/`，
+② AI 蜜罐层从 modules/deception/honeypot 改名为 `honeypot/protocol`；③ 管控平台 `modules/console/` 本来就对得上。
+**`common/core/`（共享内核）与 `analysis/`（跨 ①② 的 L4）不改名** —— 它们不属于任何单个大模块，不改才是对的。
+
+1. **目录移动**（git mv，历史保留）：edge 下的 proxy / mirror / dns / injection → `modules/deception/`；
+   modules/deception/honeypot → `honeypot/protocol`；`modules/deception/netpolicy` **原地不动**（它同属 ①）；
 2. **改名只碰 5 处 Go import**（实测：shen/core 81 处、shen/api 35 处全在自身内部，不动就不改）；
 3. **新建 ADR-0029**（候选 A/B/C 取舍 · 三条决定 · 失效条件 · 4 项未解决）；
    `docs/background/decisions/0007-repo-layout.md` 标注**部分被取代**；
-4. **修掉机械替换留下的 6 处语义痕迹**：两行同名 `deception/`、仍写 edge 的映射句、
+4. **修掉机械替换留下的 6 处语义痕迹**：两行同名 `modules/deception/`、仍写 edge 的映射句、
    `docs/modules/_map.md` 里指向已删目录的悬空链接（`make trace` 抓到）等；
 5. **`scripts/check-leak/main.go` 精度修复**：把 **import 路径**归入规则级豁免第四类
-   （编译期标识符，判据同 `OH-2`：不上攻击者的屏幕）—— 否则 `deception/` 这个目录名会让每个 import 它的文件都误报；
+   （编译期标识符，判据同 `OH-2`：不上攻击者的屏幕）—— 否则 `modules/deception/` 这个目录名会让每个 import 它的文件都误报；
    **`OH-1` 规则本身一字未改**；`scripts/check-leak/allow.txt` 里 4 条例外的**字面量与理由未变**，
-   只有其中 2 条的**文件路径**随改名同步（`deception/proxy/...`）；
+   只有其中 2 条的**文件路径**随改名同步（`modules/deception/proxy/...`）；
 6. **顺带修一处预存在缺陷**：`scripts/dev/ai-inject-check.py` 的 urlopen(变量) 改为 `http.client`
    （scheme 在类型层面只能是 http），并用本地 HTTP 服务器做了行为对齐测试。
 
 **改了哪些文件**：
 
-- 目录：`deception/`（proxy · mirror · dns · injection · netpolicy）· `honeypot/protocol`（原 deception/honeypot）
-- 代码：`deception/proxy/handler.go` · `deception/proxy/policy.go` · `deception/proxy/content.go` · 两个 cmd 的 main.go（import 路径）
+- 目录：`modules/deception/`（proxy · mirror · dns · injection · netpolicy）· `honeypot/protocol`（原 modules/deception/honeypot）
+- 代码：`modules/deception/proxy/handler.go` · `modules/deception/proxy/policy.go` · `modules/deception/proxy/content.go` · 两个 cmd 的 main.go（import 路径）
 - 门禁：`scripts/archcheck/main.go` · `scripts/check-leak/main.go` · `scripts/check-leak/README.md` · `scripts/check-leak/allow.txt`（2 条例外的路径随改名同步）
 - 物料：`Makefile` · `.gitignore` · `deploy/docker/go.Dockerfile` · `deploy/docker/compose.yaml` · `scripts/demo/run.sh` · `scripts/dev/ai-inject-check.py`
 - 文档：`docs/design/structure.md` · `docs/design/modules.md` · `docs/modules/_map.md` · `docs/kb/quick-tour.md` · `docs/progress.md` · `docs/ops/runbook.md` · `docs/README.md` · `README.md` 等约 30 份
@@ -43,9 +128,9 @@
 
 **独立评审（冷上下文）抓到 10 条，全部已处理** —— 其中 4 条是我自己的检查范围不够：
 ① 改名树内还有 **16 处旧路径**（含 4 条会失效的 `go run ./edge/...` 命令，因为 §7.2 的核查命令只扫了 `docs/`）；
-② `docs/design/structure.md` §1.7 的 `ST-2` 枚举漏了 `honeypot/`、重了 `deception/`（**在已确认基线的表格里**）；
-③ `docs/modules/_map.md` 同页自相矛盾（L2 仍指 `deception/`）且模块 15 行的链接标签与目标不符；
-④ 变更包与 ADR 里「`api/` 的 import 全在自身内部」是**事实错误**（24 文件里 11 个在 `core/` 之外）。
+② `docs/design/structure.md` §1.7 的 `ST-2` 枚举漏了 `honeypot/`、重了 `modules/deception/`（**在已确认基线的表格里**）；
+③ `docs/modules/_map.md` 同页自相矛盾（L2 仍指 `modules/deception/`）且模块 15 行的链接标签与目标不符；
+④ 变更包与 ADR 里「`common/api/` 的 import 全在自身内部」是**事实错误**（24 文件里 11 个在 `common/core/` 之外）。
 另修：`allow.txt` 未列入文件清单 · 两处跨包注释仍写旧路径 · ADR-0028 决定 3/6 未标注被取代 · 302 语义差未记录。
 
 **验证**：`make gate`（构建 · staticcheck · errcheck · ruff · shellcheck · Go 单测含 -race · 80 例 pytest ·
@@ -69,7 +154,7 @@
 ## 2026-09-21 · 三个大模块（功能视角）↔ 五个平面：映射、索引与六处过期标记校准
 
 **做了什么**：你用「**三个大模块**」（欺骗层 / AI 蜜罐层 / 管控平台）想这套系统，而代码目录是**五个平面** ——
-两套说法**不是一对一**（`core/` 是三者**共用的内核**）。本轮把对应关系写成权威索引，**不动代码、不动 design/**。
+两套说法**不是一对一**（`common/core/` 是三者**共用的内核**）。本轮把对应关系写成权威索引，**不动代码、不动 design/**。
 
 1. **ADR-0028**：六条决定（核心不拆散 · 本轮不搬目录 · 沿用行业术语 · 蜜罐先路由后编排 · 管控平台只读 · 先方案后搬），
    含候选 A–D 的取舍与「**为什么核心不能拆**」的书面理由；
@@ -91,7 +176,7 @@
 **零代码改动、零 `docs/design/` 改动。**
 
 **验证**：`make gate` 通过（80 例 pytest · 结构 / 追溯 / 泄漏 / 许可全绿）。
-逐条实测：13 个目录都存在 · `console/` 与 `deception/` **确实无第三方依赖** · `core/` 只有 gopkg.in/yaml.v3 ·
+逐条实测：13 个目录都存在 · `modules/console/` 与 `modules/deception/` **确实无第三方依赖** · `common/core/` 只有 gopkg.in/yaml.v3 ·
 `edge/` 有内嵌 Caddy · `analysis/` 运行期恰 3 个 · 控制台接口 **11** 个 · 模块清单 25 行（**24 有效**）。
 
 **证据**：
@@ -103,7 +188,7 @@ $ go list -deps（逐个平面，排掉 google/golang）
   core         gopkg.in/yaml.v3
   edge         github.com/caddyserver/caddy/v2（+ 其传递依赖树）
 
-$ grep -c 'mux.HandleFunc(' console/cmd/console/main.go
+$ grep -c 'mux.HandleFunc(' modules/console/cmd/console/main.go
 11
 
 $ make gate
@@ -133,8 +218,8 @@ $ make gate
   包装会**改变客户端看到的错误**（那是行为变更）；静态检查报的“bare error”在此是有意的；
 - 页面 JS 与 `handleStream` 本轮**未改** —— 前者上轮已抽成共用的列定义，后者结构已足够直（再拆只多一层间接）。
 
-**改了哪些文件**：`core/internal/telemetry/hub.go` · `core/internal/telemetry/hub_test.go` ·
-`core/internal/control/telemetry.go` · `docs/log.md`。
+**改了哪些文件**：`common/core/internal/telemetry/hub.go` · `common/core/internal/telemetry/hub_test.go` ·
+`common/core/internal/control/telemetry.go` · `docs/log.md`。
 
 **对应文档**：无（纯重构：契约、帧形状与行为均未变，因此**不需要**改 `docs/spec/console-api.md`）。
 
@@ -143,7 +228,7 @@ $ make gate
 **证据**：
 
 ```console
-$ go test -race -count=2 ./core/internal/telemetry/ ./core/internal/control/ ./console/...
+$ go test -race -count=2 ./common/core/internal/telemetry/ ./common/core/internal/control/ ./modules/console/...
 ok  shen/core/internal/telemetry   1.500s
 ok  shen/core/internal/control     1.650s
 ok  shen/console/cmd/console       2.229s
@@ -207,12 +292,12 @@ $ make gate
 `fetchType` 里的内联解码（→ `viewOf`，拉/推共用）· DAG 段的过期注释 ·
 并且**抓到自己引入的一处实效倒退**：DAG 改 30 秒对账后会比原来还慢 ⇒ 加事件驱动 + 去抖 1 秒重取。
 
-**改了哪些文件**：新增 `core/internal/telemetry/hub.go` · `core/internal/telemetry/hub_test.go` ·
+**改了哪些文件**：新增 `common/core/internal/telemetry/hub.go` · `common/core/internal/telemetry/hub_test.go` ·
 `docs/background/decisions/0027-observability-push.md` · `docs/plans/2026-09-21-observability-push.md`；
-修改 `api/telemetry/v1/telemetry.proto`（+ 重新生成两个 .pb.go）· `core/internal/telemetry/iface.go` ·
-`core/internal/telemetry/telemetry.go` · `core/internal/telemetry/telemetry_test.go` ·
-`core/internal/control/telemetry.go` · `core/cmd/core/main.go` · `console/cmd/console/main.go` ·
-`console/web/index.html` · `docs/spec/console-api.md` · `docs/modules/console.md` ·
+修改 `common/api/telemetry/v1/telemetry.proto`（+ 重新生成两个 .pb.go）· `common/core/internal/telemetry/iface.go` ·
+`common/core/internal/telemetry/telemetry.go` · `common/core/internal/telemetry/telemetry_test.go` ·
+`common/core/internal/control/telemetry.go` · `common/core/cmd/core/main.go` · `modules/console/cmd/console/main.go` ·
+`modules/console/web/index.html` · `docs/spec/console-api.md` · `docs/modules/console.md` ·
 `docs/kb/capabilities.md` · `docs/background/decisions/README.md` · `docs/log.md`。
 
 **对应文档**：`docs/plans/2026-09-21-observability-push.md`（含追溯矩阵 · 10 条场景表 · 审视 9 条）·
@@ -230,7 +315,7 @@ $ python3 /tmp/ai-probe/stream-check2.py <console> <core>
 ② 连上后注入唯一事件 → 量「记录 → 看见」延迟
   收到 3 条 · 延迟 最小 3ms · 中位 3ms · 最大 3ms
 
-$ go test -race ./core/internal/telemetry/ -v | grep '^--- '
+$ go test -race ./common/core/internal/telemetry/ -v | grep '^--- '
 --- PASS: TestHub_PublishNeverBlocksAndDropsOldest
 --- PASS: TestHub_PublishWithoutSubscribersIsNoop
 --- PASS: TestHub_ConcurrentPublishAndClose
@@ -272,7 +357,7 @@ $ make gate
 而 `make trace` **核不出来这一类** —— 它只能核「链接与标记存不存在」，核不出「内容对不对」。
 所以文档校准这件事**只能靠对着代码逐处读**，不能指望门禁。
 
-**改了哪些文件**：修改 `console/web/index.html`（`freshness()` / `fmtWindow()` / `STALE_AFTER_MS` + 概览一行）·
+**改了哪些文件**：修改 `modules/console/web/index.html`（`freshness()` / `fmtWindow()` / `STALE_AFTER_MS` + 概览一行）·
 `docs/spec/console-api.md`（把承诺与实现对齐 + 写明「阈值是页面常量」）·
 `docs/modules/console.md`（§1 职责逐条标 ✅ / ⬆）· `docs/kb/capabilities.md`（补两行能力 + 告警行的影子模式说明）·
 `docs/progress.md` · `README.md`（根，修两处过期）· `docs/kb/quick-tour.md`（控制台块清单）；
@@ -285,7 +370,7 @@ $ make gate
 **端到端实测**（核心 + 造 3 条判定 + 控制台）：/api/summary 返回真实时间窗
 （`first_seen 2026-09-21T12:50:56.840481+08:00` / `last_seen …56.841177+08:00` · `by_action {'route_origin': 3}`）；
 页面 5 项取键全部命中（`id="obsWindow"` · `sum.first_seen` · `freshness(` · `STALE_AFTER_MS` · `观测可能已停`）；
-`git diff --name-only core/ api/` → **空**（零后端改动）。
+`git diff --name-only common/core/ common/api/` → **空**（零后端改动）。
 
 **证据**：
 
@@ -302,7 +387,7 @@ $ curl -s http://<console>/api/summary
 total: 3 | first_seen: 2026-09-21T12:50:56.840481+08:00 | last_seen: 2026-09-21T12:50:56.841177+08:00
 by_action: {'route_origin': 3}
 
-$ git diff --name-only core/ api/
+$ git diff --name-only common/core/ common/api/
 （空）
 ```
 
@@ -340,8 +425,8 @@ $ git diff --name-only core/ api/
 
 **两条设计取舍写进了契约**（不是随手决定）：
 
-- **阈值 / 灰度 / 影子模式不进快照**：它们是核心运行参数，`core/internal/contract/thresholds.go` 明确禁止
-  写进 `api/` 下 proto 的对外响应（`ST-23` 只要求它们集中定义、可配置）⇒ 只有两类字段能进：
+- **阈值 / 灰度 / 影子模式不进快照**：它们是核心运行参数，`common/core/internal/contract/thresholds.go` 明确禁止
+  写进 `common/api/` 下 proto 的对外响应（`ST-23` 只要求它们集中定义、可配置）⇒ 只有两类字段能进：
   ① 已经允许离开核心的（策略版本/校验和/AI 配置，本就在策略载荷或回执里）；② 比①**更弱**的描述性信息（白名单只给**条数**）。
 - **不带进程 `started_at`**：核心全库**零** `time.Now()`（`MD-6` 的纪律）—— 不为一个展示字段开这个口子；
   「是不是刚重启」由 /api/summary 的事件时间范围回答。
@@ -349,12 +434,12 @@ $ git diff --name-only core/ api/
 **「不伪造」贯穿两侧**：核心未装配快照读侧 ⇒ 返 `Unimplemented`（不回全零快照）；控制台取不到 ⇒ 报错（不返全零配置）。
 **零值看起来完全正常**（version=0 / 变体=0），一份看起来正常的错数据比一个错误危险得多。
 
-**改了哪些文件**：新增 `docs/spec/console-api.md` · `console/cmd/console/config_test.go` ·
-`core/internal/contract/snapshot.go` · `docs/plans/2026-09-21-console-config-log.md`；
-修改 `api/telemetry/v1/telemetry.proto`（+ 重新生成 `telemetry.pb.go` 与 `telemetry_grpc.pb.go`）·
-`core/internal/control/observer.go`（加 `SnapshotProvider` 端口）· `core/internal/control/telemetry.go`（RPC + 映射）·
-`core/internal/control/telemetry_test.go`（+3 条）· `core/cmd/core/main.go`（提供方 + 接线）·
-`console/cmd/console/main.go`（接口 + 视图）· `console/web/index.html`（配置块 + 日志列）·
+**改了哪些文件**：新增 `docs/spec/console-api.md` · `modules/console/cmd/console/config_test.go` ·
+`common/core/internal/contract/snapshot.go` · `docs/plans/2026-09-21-console-config-log.md`；
+修改 `common/api/telemetry/v1/telemetry.proto`（+ 重新生成 `telemetry.pb.go` 与 `telemetry_grpc.pb.go`）·
+`common/core/internal/control/observer.go`（加 `SnapshotProvider` 端口）· `common/core/internal/control/telemetry.go`（RPC + 映射）·
+`common/core/internal/control/telemetry_test.go`（+3 条）· `common/core/cmd/core/main.go`（提供方 + 接线）·
+`modules/console/cmd/console/main.go`（接口 + 视图）· `modules/console/web/index.html`（配置块 + 日志列）·
 `docs/spec/README.md` · `docs/README.md` · `docs/modules/console.md` · `docs/kb/capabilities.md` · `docs/log.md`。
 
 **对应文档**：`docs/plans/2026-09-21-console-config-log.md`（含追溯矩阵 · 11 条场景表 · 审视 9 条）·
@@ -390,8 +475,8 @@ $ curl -s http://127.0.0.1:<port>/api/config
 $ grep 策略已装载 <核心日志>
 策略已装载 policy_id=console-check version=3 checksum=8a0913a613594bb2db72f6428a385524359d638441ab359ebe6f5d6353948771 规则=2 条 灰度=0%
 
-$ go test ./core/internal/control/ -run Snapshot -v   # 3 条全 PASS
-$ go test ./console/cmd/console/ -run Config -v       # 2 条全 PASS
+$ go test ./common/core/internal/control/ -run Snapshot -v   # 3 条全 PASS
+$ go test ./modules/console/cmd/console/ -run Config -v       # 2 条全 PASS
 ```
 
 **没做 / 遗留**：① **AI 生成批次 / 护栏拒绝明细**未展示（等适配器，ADR-0026 未解决 1）；
@@ -598,7 +683,7 @@ $ grep -n SHEN_PROXY_INJECT_CONTENT edge/proxy/cmd/proxy/main.go:114
   InjectContent: envBool("SHEN_PROXY_INJECT_CONTENT", false)   ← 默认 false
 $ grep -n 'Inject.* = "' edge/proxy/content.go
   30: applied   31: disabled   32: no_content   33: off      ← 四个值（初稿只列了三个，自检改正）
-$ grep -n "AI 内容已装载" core/cmd/core/main.go:480
+$ grep -n "AI 内容已装载" common/core/cmd/core/main.go:480
   AI 内容已装载：%s（内容版本 v%d · 变体 %d · 资源 %d · 内容 %d 条）
 $ grep -n "return 0\|return 1\|return 2" analysis/aicap/__main__.py
   70/75/78/81: 2（入参非法 或 启动断言失败）  117: 1  136: 0
@@ -838,7 +923,7 @@ $ make dev
 
 **做了什么**：`make archcheck` 的「清单里有、代码尚未实现的模块目录」提示先前把 **9 个**模块全列进去了 ——
 因为 `go list` 只看得到 Go 包，L4 的 Python（`analysis/aicap` · `intent` · `chain` · `strategy` · `llm`）、
-L3 声明式（`deception/netpolicy`）、纯配置（`edge/dns`）与控制台（`console/`）在它眼里不存在。
+L3 声明式（`modules/deception/netpolicy`）、纯配置（`edge/dns`）与控制台（`modules/console/`）在它眼里不存在。
 现在对这类模块改用**「目录存在且含文件」**判定，并把剩下的分两类说清：
 「目录尚未创建」vs「目录已建但里面没有文件」（排查方向不同）。提示从 **9 条降到 1 条真事实**：只剩 `honeypot-shell`（模块 15，用户裁定推迟）的目录未建。
 
@@ -873,7 +958,7 @@ $ go run ./scripts/archcheck
 不打开时行为与以前**逐字节一致**。
 新增规则 **`AR-33`**（生成必须经护栏出口，判据 = 门禁结构检查 + 单测）与 [ADR-0023](background/decisions/0023-deception-content-injection.md)。
 
-**改了哪些文件**：新增 `analysis/aicap/`（service / model / content / tasks / guardrail / resources）· `analysis/tests/test_aicap_guardrail.py` · `analysis/tests/test_aicap_content.py` · `core/internal/contract/content.go` · `core/internal/policy/ai.go` · `core/internal/policy/ai_test.go` · `edge/proxy/content.go` · `edge/proxy/content_test.go` · `scripts/dev/ai-inject-check.py` · `docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/background/decisions/0023-deception-content-injection.md`；修改 `analysis/llm/limits.py` · `analysis/pyproject.toml` · `core/internal/policy/policy.go` · `core/internal/policy/server.go` · `core/cmd/core/main.go` · `edge/proxy/policy.go` · `edge/proxy/handler.go` · `edge/proxy/cmd/proxy/main.go` · `console/internal/topology/topology.go` · `scripts/archcheck/main.go` · `scripts/traffic/send.py` · `Makefile` · `api/telemetry/v1/testdata/request_judged_event.json` · `deploy/config/config.example.yaml` · `docs/design/`（modules / structure / architecture / README）· `docs/spec/`（policy-payload / events / config / README）· `docs/modules/`（adapter-proxy / policy / store / console / llm-components）· `docs/kb/capabilities.md` · `docs/kb/quick-tour.md` · `docs/progress.md` · `docs/modules/_map.md` · `docs/modules/README.md` · `docs/README.md` · `.pi/devloop.md` · `docs/background/decisions/README.md`
+**改了哪些文件**：新增 `analysis/aicap/`（service / model / content / tasks / guardrail / resources）· `analysis/tests/test_aicap_guardrail.py` · `analysis/tests/test_aicap_content.py` · `common/core/internal/contract/content.go` · `common/core/internal/policy/ai.go` · `common/core/internal/policy/ai_test.go` · `edge/proxy/content.go` · `edge/proxy/content_test.go` · `scripts/dev/ai-inject-check.py` · `docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/background/decisions/0023-deception-content-injection.md`；修改 `analysis/llm/limits.py` · `analysis/pyproject.toml` · `common/core/internal/policy/policy.go` · `common/core/internal/policy/server.go` · `common/core/cmd/core/main.go` · `edge/proxy/policy.go` · `edge/proxy/handler.go` · `edge/proxy/cmd/proxy/main.go` · `modules/console/internal/topology/topology.go` · `scripts/archcheck/main.go` · `scripts/traffic/send.py` · `Makefile` · `common/api/telemetry/v1/testdata/request_judged_event.json` · `deploy/config/config.example.yaml` · `docs/design/`（modules / structure / architecture / README）· `docs/spec/`（policy-payload / events / config / README）· `docs/modules/`（adapter-proxy / policy / store / console / llm-components）· `docs/kb/capabilities.md` · `docs/kb/quick-tour.md` · `docs/progress.md` · `docs/modules/_map.md` · `docs/modules/README.md` · `docs/README.md` · `.pi/devloop.md` · `docs/background/decisions/README.md`
 
 **对应文档**：`docs/plans/2026-09-20-ai-capability-guardrail.md`（含追溯矩阵与审视 15 条）· `docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/design/architecture.md` §5 的 `AR-33`
 
@@ -933,7 +1018,7 @@ $ go run ./scripts/archcheck
 
 **做了什么**：用户要"检查 plans 里的功能设计是否已实现，已实现的把 plan 删掉"，并整理其他文档（含 kb）。
 ① **先定判定方法**（不靠计划自称的状态）：**带目录前缀的仓库路径是否全部存在** + **是否有对应日志条目与门禁记录** + 实现位置能否在 modules/spec/代码里查到。
-初版审计用"计划状态行"判定（53/53 都写已验证）→ 判为不可靠；换用上面两条可核证据后：41 份直接判定，12 份逐条人工确认（都是**正文里的反例路径**如 core/internal/xxx/、已改名文件（docs/modules/map.md → _map.md）、已删除文件（manual-test.md 已并入 ops）、或设计里明确"待建"的 docs/analytics/）。
+初版审计用"计划状态行"判定（53/53 都写已验证）→ 判为不可靠；换用上面两条可核证据后：41 份直接判定，12 份逐条人工确认（都是**正文里的反例路径**如 common/core/internal/xxx/、已改名文件（docs/modules/map.md → _map.md）、已删除文件（manual-test.md 已并入 ops）、或设计里明确"待建"的 docs/analytics/）。
 ② **归档并删除 53 份计划**：新增 docs/plans/ARCHIVE.md（一行一份：日期 · 原文件 · 主题 · 状态 · 追溯入口 + 判定依据 + **原文取回方式** git show），随后 git rm 53 份；目录 55 → 3（README · 模板 · 归档表）。
 ③ **kb 合并**：`removed-skills.md`（历史：第三方技能为什么移除、怎么恢复）并入 `known-issues.md` 的 `H-1`，删除原文件；引用者（kb/README · dev-workflow · AGENTS.md）改指 `known-issues.md` 的 H-1；kb 6 → 5 份。
 ④ **索引改准**：docs/plans/README 写明目录策略（已实现即归档删除）；docs/README 的 plans 行（现行 0 份 / 归档 53 份）与 kb 行（5 份）同步。
@@ -1001,7 +1086,7 @@ $ go run ./scripts/archcheck
 ③ **信息不丢**：冗长的失败原因（gRPC 原文）在方框里压成短标签（如"判定超时（DeadlineExceeded）"），**完整原文拼回该跳的「响应」段** —— 复核时发现短标签替换后原文一度只剩悬停里有，已补回。
 ④ 文档补"文字不会溢出"的说明（折行 / 横向滚动 / 悬停 / 三段全文）。
 
-**改了哪些文件**：console/web/index.html · console/internal/topology/topology.go · docs/integrate/observability.md
+**改了哪些文件**：modules/console/web/index.html · modules/console/internal/topology/topology.go · docs/integrate/observability.md
 
 **对应文档**：docs/plans/2026-09-20-dag-text-fitting.md（含审视 3 条）
 
@@ -1056,8 +1141,8 @@ HTTP 实测 403。**至此 `executed` 七值全部实测**（origin · cache · 
 ⑥ **实测结论**（验证配置下）：核心侧改道意图 `route_mirage` + 后端名、以及 `origin_fallback`（NI-5 回落，链路多一跳"幻境不可用"，代理日志 `dial tcp 127.0.0.1:19080: connection refused`）**均端到端验证**；`origin` / `cache` / `failopen` 也已实测。**`executed=mirage` 与 `whitelist` 未观测到**（本机没有可达的蜜罐后端；whitelist 仅单测），已在文档与变更包中如实标注。
 ⑦ 验完已**恢复默认（影子）栈**，避免危险配置留在运行环境。
 
-**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/wire_test.go` · `api/telemetry/v1/testdata/request_judged_event.json` ·
-`console/internal/topology/topology.go` · `console/internal/topology/topology_test.go` · `console/cmd/console/main.go` ·
+**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/wire_test.go` · `common/api/telemetry/v1/testdata/request_judged_event.json` ·
+`modules/console/internal/topology/topology.go` · `modules/console/internal/topology/topology_test.go` · `modules/console/cmd/console/main.go` ·
 `deploy/config/config.verify-mirage.yaml`（新增）· `deploy/docker/compose.verify-mirage.yaml`（新增）·
 `docs/spec/events.md` · `docs/modules/adapter-proxy.md` · `docs/integrate/observability.md` · `docs/ops/functional-verification.md`
 
@@ -1091,7 +1176,7 @@ HTTP 实测 403。**至此 `executed` 七值全部实测**（origin · cache · 
 ② **页面**：链路里每个方框可点（`stopPropagation`，不与整卡详情冲突）→ 出「第 N 步」面板显示三段；三段随接口一起下发，**点开不再发请求**（一屏几十条逐步排查不会 N+1）。
 ③ **文档**：观测文档补"逐步可点"的使用说明（含"哪儿需要优化"的定位入口），控制台模块文档补逐步详情一行。
 
-**改了哪些文件**：console/internal/topology/topology.go · console/web/index.html · docs/integrate/observability.md · docs/modules/console.md
+**改了哪些文件**：modules/console/internal/topology/topology.go · modules/console/web/index.html · docs/integrate/observability.md · docs/modules/console.md
 
 **对应文档**：docs/plans/2026-09-20-step-clickable-dag.md（含追溯矩阵与审视 4 条）· docs/integrate/observability.md §5
 
@@ -1104,7 +1189,7 @@ HTTP 实测 403。**至此 `executed` 七值全部实测**（origin · cache · 
 | 判定步的为什么 | 写明规则匹配与截断 | ✅ "命中 2 条规则（ua-headless,path-probe）" |
 | 源站步的为什么 | 区分放行/影子/未判定 | ✅ "也可能是改道/拦截但影子模式不执行（INT-11）" |
 | 交互 | 步点击不触发整卡详情 | ✅ 已用 stopPropagation |
-| 既有单测 | 不回归 | ✅ go test ./console/... |
+| 既有单测 | 不回归 | ✅ go test ./modules/console/... |
 
 **没做 / 遗留**：① `BuildRequests` 仍无单测（含新增三段字段）—— 下一轮补；② 阈值没进"为什么"（控制台拿不到配置阈值），所以"为什么改道/没改道"缺一个精确数字；③ `--check-graph` 一致性断言仍未实现；④ 未在真实改道下核对过幻境与回落两步的文案。
 
@@ -1120,7 +1205,7 @@ HTTP 实测 403。**至此 `executed` 七值全部实测**（origin · cache · 
 ⑤ **聚合视图**：接口 GET /api/topology 保留（程序化统计仍可用），页面不再用它。
 ⑥ 顺手把 `joinSignals`/`joinNonEmpty` 改用 `strings.Builder`（静态检查提示）。
 
-**改了哪些文件**：`console/internal/topology/topology.go` · `console/cmd/console/main.go` · `console/web/index.html` · `docs/integrate/observability.md` · `docs/modules/console.md`
+**改了哪些文件**：`modules/console/internal/topology/topology.go` · `modules/console/cmd/console/main.go` · `modules/console/web/index.html` · `docs/integrate/observability.md` · `docs/modules/console.md`
 
 **对应文档**：[`docs/plans/2026-09-20-per-request-dag.md`](docs/plans/2026-09-20-per-request-dag.md)（含追溯矩阵与审视 3 条）· [`docs/integrate/observability.md`](docs/integrate/observability.md) §5
 
@@ -1143,13 +1228,13 @@ HTTP 实测 403。**至此 `executed` 七值全部实测**（origin · cache · 
 **做了什么**：用户要看清"流量进来后实际走到哪"——是后段业务服务，还是进了我们设的幻境/蜜罐，并要求图上带请求与返回信息、告警也在图里。落地：
 ① **契约扩展**（用户选定）：适配器的 `request_judged` 事件新增 `executed`（**实际落点**）+ `backend` + `status` + `bytes` + `duration_ms`。`executed` 七值有**唯一权威定义**：`whitelist` / `cache` / `failopen` / `origin` / `origin_fallback`（NI-5 回落）/ `mirage` / `block`。文档 + 夹具 + Go 契约测试三处同步。
 ② **适配器**：`headerSanitizer` 顺带观测状态码与字节数（不新增包装层，不影响延迟预算 AR-29）；`ServeHTTP` 统一收尾到 `reportRoute`（**白名单命中与缓存命中此前根本不上报事件**，图上会缺分支 —— 一并修掉）；纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定落点，**7 值穷举单测**。
-③ **控制台聚合**（新增纯函数包 `console/internal/topology`）：按 `decision_id` join「核心判定（意图）」与「适配器执行（实际）」与 L4 结论；输出节点/边计数 + 汇总 + `notes`；**告警两段式**——真实告警（`block` 或 `severity≠none`，口径不变）+「高风险」显示标记（`score ≥ SHEN_CONSOLE_ALERT_SCORE`，默认 0.9，**仅显示**）。
+③ **控制台聚合**（新增纯函数包 `modules/console/internal/topology`）：按 `decision_id` join「核心判定（意图）」与「适配器执行（实际）」与 L4 结论；输出节点/边计数 + 汇总 + `notes`；**告警两段式**——真实告警（`block` 或 `severity≠none`，口径不变）+「高风险」显示标记（`score ≥ SHEN_CONSOLE_ALERT_SCORE`，默认 0.9，**仅显示**）。
 ④ **两个只读接口**（`AR-10`）：`GET /api/topology`（聚合图）· `GET /api/trace?decision_id=…`（单请求四段：请求 / 判定 / 执行与返回 / 告警）。
 ⑤ **页面**：新增「流量调度图（DAG）」区块 —— 内联 SVG 分层布局（固定列、边宽∝计数、回落画虚线）、图例、点击节点/边过滤请求、点请求看四段详情；全页仍是 DOM + `textContent`（路径与 UA 是攻击者可控字符串，`innerHTML` 只出现在注释里）。
 ⑥ **如实标注**：影子模式提示（意图已判、执行仍在源站）、无幻境后端提示、判定失败计数与原因，都写进图的 `notes`，避免把缺口看成没问题。
 
-**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/wire_test.go`（新增）· `api/telemetry/v1/testdata/request_judged_event.json`（新增）·
-`console/internal/topology/topology.go`（新增）· `console/internal/topology/topology_test.go`（新增）· `console/cmd/console/main.go` · `console/web/index.html` ·
+**改了哪些文件**：`edge/proxy/handler.go` · `edge/proxy/wire_test.go`（新增）· `common/api/telemetry/v1/testdata/request_judged_event.json`（新增）·
+`modules/console/internal/topology/topology.go`（新增）· `modules/console/internal/topology/topology_test.go`（新增）· `modules/console/cmd/console/main.go` · `modules/console/web/index.html` ·
 `docs/spec/events.md` · `docs/spec/metrics.md` · `docs/modules/adapter-proxy.md` · `docs/modules/console.md` · `docs/integrate/observability.md` · `docs/kb/quick-tour.md` · `docs/kb/faq.md`
 
 **对应文档**：[`docs/plans/2026-09-20-traffic-dag-view.md`](docs/plans/2026-09-20-traffic-dag-view.md)（含追溯矩阵与审视 5 条）· [`docs/spec/events.md`](docs/spec/events.md) §2.2 · [`docs/integrate/observability.md`](docs/integrate/observability.md) §5
@@ -1266,7 +1351,7 @@ docs/spec/README.md（新增）· `docs/README.md`
 ⑤ **日志字典成文**：新增 `docs/spec/logs.md`（三条原则 · 组件→日志点表 · 逐判定字段表 · 开关 · 落在哪 · **与事件的区别** · 定位手法 · 未决），并把 `docs/README.md` 里仍标"待建"的两行改准。
 ⑥ **真缺陷（本轮最有价值）**：`scripts/shen.sh restart` 原先只 `--force-recreate` —— **它不重建镜像**。加完日志跑验证时一行 `msg=decision` 都没有，正是这个原因（差点误判成"日志没生效"）。已改为 `up -d --build --force-recreate`，并写进日志规格与运行手册：**改了代码必须重建镜像**。
 
-**改了哪些文件**：`core/cmd/core/main.go` · `edge/proxy/handler.go` · `edge/proxy/cmd/proxy/main.go` · `edge/proxy/proxy_test.go` ·
+**改了哪些文件**：`common/core/cmd/core/main.go` · `edge/proxy/handler.go` · `edge/proxy/cmd/proxy/main.go` · `edge/proxy/proxy_test.go` ·
 `deploy/docker/compose.yaml` · `scripts/shen.sh` · `scripts/traffic/send.py` · `scripts/traffic/README.md` ·
 `docs/spec/logs.md`（新增）· `docs/ops/runbook.md` · `docs/README.md`
 
@@ -1325,7 +1410,7 @@ docs/spec/README.md（新增）· `docs/README.md`
 
 **做了什么**：用户要求「让我知道每个目录是做什么的、每个模块在哪个目录、对应什么能力、怎么和其他模块接入」。
 ① **新增索引文档 `docs/modules/_map.md`**（六节）：**分层 → 顶层目录**（十个目录逐个一句话 + 语言 + 是否源码，并指出白名单与产物形态）· **模块总表**（22 个模块按平面分四张表：目录 / 能力一句话 / **对外接口名** / 依赖 → 被谁用）· **进程与接缝**（3 个 Go 二进制 + L4 worker + 控制台；接缝表 7 条含"不存在的接缝"；请求时序文字图）· **数据与配置落在哪**（配置 · 事件契约 · 策略载荷 · 提示词资源 · 适配器变量）· **一个模块的标准形状**（七条要件，照它加新模块）· **不知道看哪**。
-② **事实一律取自实测**：清单取 `docs/design/modules.md` §1.1；接口名由脚本从各模块 `iface.go` 抽取（不凭记忆）；进程边界与依赖方向引 `docs/design/structure.md` §1.6 的实测结论；rpc 取自 `api/` 下的 `.proto`。
+② **事实一律取自实测**：清单取 `docs/design/modules.md` §1.1；接口名由脚本从各模块 `iface.go` 抽取（不凭记忆）；进程边界与依赖方向引 `docs/design/structure.md` §1.6 的实测结论；rpc 取自 `common/api/` 下的 `.proto`。
 ③ **不重复权威**：完成度不写进地图（`docs/progress.md` 是唯一维护处），只给"源码/配置/声明式/第三方"的产物形态；规则正文仍只在 `docs/design/`。
 ④ **导航接通**：`README.md` §5、`docs/README.md` 导航、`docs/modules/README.md` 顶部三处都能点到地图。
 
@@ -1360,7 +1445,7 @@ docs/spec/README.md（新增）· `docs/README.md`
 ⑧ 文档同步：运行手册新增 §2.1（伪造流量验证 + 两个必须知道的语义）与故障表两条；人工测试文档改为指向脚本。
 
 **改了哪些文件**：`scripts/traffic/scenarios.json`（新增）· `scripts/traffic/send.py`（新增）· `scripts/traffic/README.md`（新增）·
-`scripts/shen.sh` · `Makefile` · `console/cmd/console/main.go` · `docs/ops/runbook.md` · `docs/integrate/manual-test.md`
+`scripts/shen.sh` · `Makefile` · `modules/console/cmd/console/main.go` · `docs/ops/runbook.md` · `docs/integrate/manual-test.md`
 
 **对应文档**：[`docs/plans/2026-09-19-traffic-verification-script.md`](docs/plans/2026-09-19-traffic-verification-script.md)（含追溯矩阵与审视 5 条）· [`scripts/traffic/README.md`](scripts/traffic/README.md)
 
@@ -1388,7 +1473,7 @@ docs/spec/README.md（新增）· `docs/README.md`
 ③ **产物卫生**：临时产物统一落在 `${TMPDIR:-/tmp}/shen-<uid>/`（脚本的 `RUNDIR`），仓库里**不留**二进制/日志/pid；`scripts/demo/run.sh` 也从硬编码 /tmp/shen-demo-* 改到同一目录（并处理 `TMPDIR` 尾斜杠）。启动与验证后 `git status --short` 保持为空。
 ④ **顺手修掉两个真缺陷**：控制台 /api/flow?limit=N 原先的 limit 作用在**全部事件**上（含 `request_judged`），过滤后行数远少于 N —— 页面像是"记录变少"，实为被别的类型挤掉；脚本 `smoke` 里内联 python 用 `\"` 转义被当成字面反斜杠（改用 here-doc 传参）。
 
-**改了哪些文件**：`scripts/shen.sh`（新增）· `docs/ops/runbook.md`（新增）· `scripts/demo/run.sh` · `Makefile` · `console/cmd/console/main.go` · `README.md` · `docs/README.md`
+**改了哪些文件**：`scripts/shen.sh`（新增）· `docs/ops/runbook.md`（新增）· `scripts/demo/run.sh` · `Makefile` · `modules/console/cmd/console/main.go` · `README.md` · `docs/README.md`
 
 **对应文档**：[`docs/plans/2026-09-19-runbook-and-start-script.md`](docs/plans/2026-09-19-runbook-and-start-script.md)（含追溯矩阵与审视 5 条）· [`docs/ops/runbook.md`](docs/ops/runbook.md)
 
@@ -1478,8 +1563,8 @@ docs/spec/README.md（新增）· `docs/README.md`
 
 **做了什么**：上一轮交付的 L4 只有库与单测 —— 设计里它是链路一环，运行时却**无人调用**。本轮把它**真接上**，并在接的过程中抓到一处**真缺陷**。
 ① **真缺陷（最重要）**：L4 按**自造字段名**解析事件（`event_id` / `source`），而核心写出的载荷是 Go 字段名（`DecisionID` / `SourceIP`）—— 第一次真接就出现「取到 26 条事件、**0 条可分析**」。测试自洽、真实形状不符，属"自洽但错"的典型。
-② **统一契约**：判定事件的 JSON 键名统一为 **snake_case**（`core/internal/control/observer.go` 加 JSON 标签），Python 侧 L4 与控制台同键；契约正文写入 `docs/spec/events.md`。
-③ **防复发**：新增**跨语言契约夹具** `api/telemetry/v1/testdata/decision_event.json`（由 Go 结构体**直接生成**），Go 侧 `observer_contract_test.go` 与 Python 侧 `test_event_contract.py` **读同一夹具** —— 任何一方改键即红。
+② **统一契约**：判定事件的 JSON 键名统一为 **snake_case**（`common/core/internal/control/observer.go` 加 JSON 标签），Python 侧 L4 与控制台同键；契约正文写入 `docs/spec/events.md`。
+③ **防复发**：新增**跨语言契约夹具** `common/api/telemetry/v1/testdata/decision_event.json`（由 Go 结构体**直接生成**），Go 侧 `observer_contract_test.go` 与 Python 侧 `test_event_contract.py` **读同一夹具** —— 任何一方改键即红。
 ④ **运行时链路（近线 worker，[ADR-0022](docs/background/decisions/0022-l4-near-line-worker.md)）**：`analysis/telemetry.py`（遥测端口 + gRPC 适配器 + 内存替身）与 `analysis/worker.py`（取事件 → `AR-14` 态势去重 → 意图 → 攻击链（`AR-12` 证据校验）→ 策略 → 结论**作为事件**上报）。三条硬边界：**不在业务路径**（近线，挂了不影响请求，`NI-1`）· **无执行能力**（`AR-32`）· **不写存储**（`MD-20`）。
 ⑤ **结论可见**：控制台新增 `分析结论（L4）` 块与 /api/analysis，概览加 `l4_conclusions` 计数；页面渲染仍**一律 `textContent`**（攻击者可控字符串，16 处，无 `innerHTML` 拼接）。
 ⑥ **门禁与开发循环**：`make pygen`（生成 Python gRPC 桩）· `make analysis`（跑一轮 L4）· `make dev` 第 6 步跑一轮并打印结论；修掉一处 Make 陷阱 —— 目标名 `analysis` 与同名目录冲突，Make 认为"已是最新"（`.PHONY` 里原先那条是多行续行，早先的替换没生效）。
@@ -1488,8 +1573,8 @@ docs/spec/README.md（新增）· `docs/README.md`
 **改了哪些文件**：`analysis/telemetry.py` · `analysis/worker.py` · `analysis/events.py` · `analysis/proto/` ·
 `analysis/llm/__init__.py` · `analysis/llm/*.py` · `analysis/chain/*.py` · `analysis/intent/recognize.py` · `analysis/strategy/*.py` ·
 `analysis/tests/test_worker.py` · `analysis/tests/test_event_contract.py` · `analysis/tests/test_llm_contract.py` · `analysis/tests/test_llm_discipline.py` · `analysis/tests/test_l4_modules.py` ·
-`core/internal/control/observer.go` · `core/internal/control/observer_contract_test.go` · `core/cmd/core/main.go` ·
-`api/telemetry/v1/testdata/decision_event.json` · `console/cmd/console/main.go` · `console/web/index.html` ·
+`common/core/internal/control/observer.go` · `common/core/internal/control/observer_contract_test.go` · `common/core/cmd/core/main.go` ·
+`common/api/telemetry/v1/testdata/decision_event.json` · `modules/console/cmd/console/main.go` · `modules/console/web/index.html` ·
 `pyproject.toml` · `requirements.txt` · `requirements-dev.txt` · `pyrightconfig.json` · `Makefile` · `scripts/dev/smoke.sh` · `scripts/demo/business.py` ·
 `docs/spec/events.md` · `docs/background/decisions/0022-l4-near-line-worker.md` · `docs/background/decisions/README.md` ·
 `docs/integrate/observability.md` · `docs/integrate/manual-test.md` · `docs/modules/llm-components.md` · `docs/modules/intent.md` · `docs/modules/chain.md` · `docs/modules/strategy.md`
@@ -1528,7 +1613,7 @@ docs/spec/README.md（新增）· `docs/README.md`
 `chain`（阶段有序还原 + 四类识破信号 + **写入前校验证据引用** `AR-12`）· `strategy`（策略**数据**：灰度 ≤20%、阈值有下界；诱饵轮换决策）。
 ④ **去重**：`AR-14` 态势去重 —— 同一态势 1000 条事件只触发 **1 次** L4（防 LLM 调用量随事件量线性增长）。
 ⑤ **门禁**：新增 `pyenv` / `pyfmt-check` / `pylint` / `pytest` 四个目标并接进 `make lint` 与 `make test`；**缺环境时报错退出**，不静默跳过。
-⑥ 同步：`ADR-0021` · 四份 L4 模块文档状态 · `docs/design/structure.md`（原来写着 `analysis/`/`console/` 「当前不存在」，已改准）· `docs/progress.md` 第 17–20 行 · 决策索引。
+⑥ 同步：`ADR-0021` · 四份 L4 模块文档状态 · `docs/design/structure.md`（原来写着 `analysis/`/`modules/console/` 「当前不存在」，已改准）· `docs/progress.md` 第 17–20 行 · 决策索引。
 
 **改了哪些文件**：`analysis/__init__.py` · `analysis/events.py` · `analysis/dedupe.py` ·
 `analysis/llm/__init__.py` · `analysis/llm/envelope.py` · `analysis/llm/extract.py` · `analysis/llm/contract.py` · `analysis/llm/limits.py` ·
@@ -1573,8 +1658,8 @@ docs/spec/README.md（新增）· `docs/README.md`
 ③ **`console`**：模块文档补状态/测试方式/偏离登记；新增 [ADR-0020](docs/background/decisions/0020-console-minimal-static-ui.md) 记录「Go 进程 + 静态页（无前端构建）」的取舍与**失效条件**（页面复杂化 / 需要写能力 / 前端门禁被引入时重开），并写明 `language.md` 的控制台行在本记录生效期内**暂缓**（长期仍是 TypeScript）。
 ④ 同步：决策索引 · `docs/progress.md` 三行（13/16/21）· 根 `README.md` 增四个入口（起环境 / 看观测 / 接入 / 人工测试）。
 
-**改了哪些文件**：`edge/dns/README.md` · `deception/netpolicy/README.md`（新增）· `deception/netpolicy/config/microsegmentation.example.yaml`（新增）·
-`deception/netpolicy/config/fake-topology.example.yaml`（新增）· `deception/netpolicy/config/runtime-detect.example.yaml`（新增）·
+**改了哪些文件**：`edge/dns/README.md` · `modules/deception/netpolicy/README.md`（新增）· `modules/deception/netpolicy/config/microsegmentation.example.yaml`（新增）·
+`modules/deception/netpolicy/config/fake-topology.example.yaml`（新增）· `modules/deception/netpolicy/config/runtime-detect.example.yaml`（新增）·
 `docs/modules/adapter-dns.md` · `docs/modules/netpolicy.md` · `docs/modules/console.md` ·
 `docs/background/decisions/0020-console-minimal-static-ui.md`（新增）· `docs/background/decisions/README.md` · `docs/progress.md` · `README.md`
 
@@ -1599,16 +1684,16 @@ docs/spec/README.md（新增）· `docs/README.md`
 **做了什么**：先把「看不见」的**根因**查清并修掉，再交付「能看」的环境与文档。
 ① **根因三处**：`store.EventStore` **只写不读**、`telemetry.proto` **没有查询 RPC** ⇒ 观测面没读路径；
 `DecisionStore.Archive` **从未被调用** ⇒ 判定（分值/命中信号/去向）没落库；示例配置 `rules: []` ⇒ **分数恒 0**，人工测试什么都看不见。
-② **读路径**：`store` 新增 `EventQuery首页 /DecisionQuery首页 /List`（有界缓冲、newest first、按时间与类型过滤，内存实现就位）；`api/telemetry/v1` 新增 **`ListEvents`** 读侧 RPC 并重新生成。
+② **读路径**：`store` 新增 `EventQuery首页 /DecisionQuery首页 /List`（有界缓冲、newest first、按时间与类型过滤，内存实现就位）；`common/api/telemetry/v1` 新增 **`ListEvents`** 读侧 RPC 并重新生成。
 ③ **记录**：`control` 新增观测面契约（`DecisionRecord首页 /DecisionRecorder首页 /EventLister`，**接口由消费方定义**），服务面每次判定记一笔（事件 + `DecisionStore.Archive`），**失败只记日志**（`NI-1`）；判定细节**只进观测面**（`ST-7` 仍禁止回显给客户端）。
-④ **控制台**（`console/`，**新实现**）：Go 进程 + 静态页（`go:embed`，**无前端构建步骤**），提供 首页 /、/api/summary、/api/flow、/api/events、/healthz；页面四块＝概览 / 告警 / 流量访问与流动（含**分值**与**命中信号**）/ 原始事件。渲染**一律用 DOM + `textContent`** —— 页面显示的是攻击者可控的 UA/路径，拼 `innerHTML` 就是存储型 XSS（初版被静态检查抓到 12 处，已全改）。
+④ **控制台**（`modules/console/`，**新实现**）：Go 进程 + 静态页（`go:embed`，**无前端构建步骤**），提供 首页 /、/api/summary、/api/flow、/api/events、/healthz；页面四块＝概览 / 告警 / 流量访问与流动（含**分值**与**命中信号**）/ 原始事件。渲染**一律用 DOM + `textContent`** —— 页面显示的是攻击者可控的 UA/路径，拼 `innerHTML` 就是存储型 XSS（初版被静态检查抓到 12 处，已全改）。
 ⑤ **一键环境**：`scripts/demo/run.sh` 起核心 + 假业务站 + 反向代理 + 控制台并打印地址，`make demo` / `make console` 两个入口。
 ⑥ **示例配置**启用两条**可观察**规则（`ua-headless` 0.6 / `path-probe` 0.3）——否则分数恒 0。
 ⑦ **文档五份**（目标明确要求）：`docs/integrate/` 的 README · quickstart（5 分钟上手）· business-onboarding（业务怎么接）· observability（怎么看告警/流量/流动）· manual-test（人工测试步骤，含故障注入）。
 
-**改了哪些文件**：`core/internal/store/iface.go` · `core/internal/store/memory.go` · `api/telemetry/v1/telemetry.proto`（+ 生成物）·
-`core/internal/control/observer.go`（新增）· `core/internal/control/service.go` · `core/internal/control/telemetry.go` · `core/cmd/core/main.go` ·
-`console/cmd/console/main.go`（新增）· `console/web/assets.go`（新增）· `console/web/index.html`（新增）·
+**改了哪些文件**：`common/core/internal/store/iface.go` · `common/core/internal/store/memory.go` · `common/api/telemetry/v1/telemetry.proto`（+ 生成物）·
+`common/core/internal/control/observer.go`（新增）· `common/core/internal/control/service.go` · `common/core/internal/control/telemetry.go` · `common/core/cmd/core/main.go` ·
+`modules/console/cmd/console/main.go`（新增）· `modules/console/web/assets.go`（新增）· `modules/console/web/index.html`（新增）·
 `scripts/demo/run.sh` · `scripts/demo/business.py`（新增）· `deploy/config/config.example.yaml` · `Makefile` ·
 `docs/integrate/README.md` · `docs/integrate/quickstart.md` · `docs/integrate/business-onboarding.md` · `docs/integrate/observability.md` · `docs/integrate/manual-test.md`
 
@@ -1838,21 +1923,21 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 
 ## 2026-09-19 · L2 第一批：`honeypot-protocol` 框架落地
 
-**做了什么**：实现 `deception/` 下的第一个模块（此前只有设计文档），交付**契约 + 确定性框架**，
+**做了什么**：实现 `modules/deception/` 下的第一个模块（此前只有设计文档），交付**契约 + 确定性框架**，
 把「真实协议栈」留作**核心逻辑接缝**（这正是你说的「只留下后续要设计的核心逻辑」）：
-① **契约**（`deception/honeypot/iface.go`）：`Protocol`（适配器）· `Session`（会话录制口，会话 ID **一等字段**，`AR-25`）·
-`SessionFactory`（由消费方提供，生产实现将来接 `api/telemetry/v1`）· `Registry`（名字唯一：重名必须报错，
+① **契约**（`modules/deception/honeypot/iface.go`）：`Protocol`（适配器）· `Session`（会话录制口，会话 ID **一等字段**，`AR-25`）·
+`SessionFactory`（由消费方提供，生产实现将来接 `common/api/telemetry/v1`）· `Registry`（名字唯一：重名必须报错，
 否则「哪个实现生效」取决于注册顺序）。
 ② **运行框架**（`runner.go`）：`Start` · `Stop` · `Addr` · `Stats`；**并发上限必须存在且超限即拒并计数**（`MD-16`）；
 **停止时对称回收**（`MD-15`）：停收新连接 → 等宽限期 → 强制关闭在途连接 → 等 goroutine 退出。
 ③ **最小真实适配器**（`banner.go`）：问候 + 双向录制 —— 它既让框架可跑可测，本身就是可用的协议门牌仿真。
 ④ **显式接缝**（`errors.go`）：`NotImplemented(what)` 返回「尚未实现」错误 —— **故意失败**，不静默返回空结果。
 ⑤ **7 例单测**：注册表三态 · banner 双向录制 · 超限拒绝与计数 · 未知协议/重复启动 · `Stop` 对称性与监听关闭 · 未接缝错误。
-⑥ 同步文档：模块文档（状态/§7 测试拆分/§8 未决 3·4/§9）· `docs/design/structure.md` §1.5（`deception/honeypot/` 拆成 ✅）·
+⑥ 同步文档：模块文档（状态/§7 测试拆分/§8 未决 3·4/§9）· `docs/design/structure.md` §1.5（`modules/deception/honeypot/` 拆成 ✅）·
 `docs/progress.md` 第 14 行 · 根 `README.md`（阶段 3 「已起步」+ 计数 14→15 包 / 196→203 测试）。
 
-**改了哪些文件**：`deception/honeypot/iface.go` · `deception/honeypot/errors.go` · `deception/honeypot/runner.go` ·
-`deception/honeypot/banner.go` · `deception/honeypot/protocol_test.go`（均为新增）· `docs/modules/honeypot-protocol.md` ·
+**改了哪些文件**：`modules/deception/honeypot/iface.go` · `modules/deception/honeypot/errors.go` · `modules/deception/honeypot/runner.go` ·
+`modules/deception/honeypot/banner.go` · `modules/deception/honeypot/protocol_test.go`（均为新增）· `docs/modules/honeypot-protocol.md` ·
 `docs/design/structure.md` · `docs/progress.md` · `README.md`
 
 **对应文档**：[`docs/plans/2026-09-19-deception-l2-l3-frameworks.md`](docs/plans/2026-09-19-deception-l2-l3-frameworks.md)
@@ -1867,14 +1952,14 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 | banner 会话 | 问候 + 我方发与对手写的**都被录制**，会话 ID 非空 | ✅ `TestBannerServesAndRecordsBothDirections` |
 | 并发上限（`MD-16`） | 超限连接被立即关闭且计数 | ✅ `TestRunnerRejectsConnectionsOverLimit`（`Rejected=1`） |
 | 对称回收（`MD-15`） | 宽限期内返回、监听关闭 | ✅ `TestRunnerStopIsSymmetricAndClosesListener` |
-| 无出站拨号（`SB-6`） | 代码里没有 `net.Dial` | ✅ `grep -n "Dial" deception/honeypot/*.go` → 空 |
-| 分层 import 纪律 | 不 import `core/internal` 与 `api/` | ✅ `make archcheck` |
+| 无出站拨号（`SB-6`） | 代码里没有 `net.Dial` | ✅ `grep -n "Dial" modules/deception/honeypot/*.go` → 空 |
+| 分层 import 纪律 | 不 import `common/core/internal` 与 `common/api/` | ✅ `make archcheck` |
 | 测试与包数 | 196 → 203 · 14 → 15 包 | ✅ `ok shen/deception/honeypot` |
 
 **没做 / 遗留**：① ⚠️ **真实协议栈未实现**（SSH 密钥交换 / MySQL 握手 / Redis RESP / 凭证捕获 / 命令解释）—— 即本模块的核心逻辑接缝；
 ② `honeypot-shell`（命令表 / 内存 FS / 水印）· `netpolicy`（声明式）· `adapter-dns`（配置收口）**属本批剩余三项**，下一轮继续；
 ③ `MD-14` 的**进程组回收**只适用于子进程形态，本框架不是子进程（已在文档写明，不假装做到）；
-④ `Session` 的生产实现（接 `api/telemetry/v1` + 保留期 `NI-13`）未做，单测用的是替身。
+④ `Session` 的生产实现（接 `common/api/telemetry/v1` + 保留期 `NI-13`）未做，单测用的是替身。
 
 ---
 
@@ -1973,8 +2058,8 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 ⑦ 文档同步：配置契约新增 §2.12、模块文档（`policy` / `adapter-proxy` / `edge-injection`）、`docs/design/structure.md` §1.6.4、
 `docs/design/architecture.md` §10.2 缺口 13（按决策只更新现状：**注入规则的归属已定**，仍未定的是「幻境正文由谁产出」）、进度与 README 计数。
 
-**改了哪些文件**：`core/internal/contract/deception.go` · `core/internal/policy/policy.go` · `core/internal/policy/server.go` ·
-`core/internal/policy/server_test.go` · `edge/proxy/policy.go` · `edge/proxy/handler.go` · `edge/proxy/policy_test.go` ·
+**改了哪些文件**：`common/core/internal/contract/deception.go` · `common/core/internal/policy/policy.go` · `common/core/internal/policy/server.go` ·
+`common/core/internal/policy/server_test.go` · `edge/proxy/policy.go` · `edge/proxy/handler.go` · `edge/proxy/policy_test.go` ·
 `edge/proxy/proxy_test.go`（旧注入 transport 用例改到新形态）· `deploy/config/config.example.yaml` ·
 `docs/spec/policy-payload.md` · `docs/spec/config.md` · `docs/modules/policy.md` · `docs/modules/adapter-proxy.md` ·
 `docs/modules/edge-injection.md` · `docs/design/structure.md` · `docs/design/architecture.md` · `docs/progress.md` ·
@@ -2005,10 +2090,10 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 ---
 
 **做了什么**：把上一轮审视上报的两条规则冲突改准（**经用户确认**）。
-`MD-5` 原文说「跨模块共享的类型定义必须收敛到 `api/`」，而现实与设计文档都是：
-**跨进程**契约走 `spec/` + `api/`（proto 生成物），**进程内**共享类型集中在 `core/internal/contract/`（8 个文件，只放类型无逻辑，
+`MD-5` 原文说「跨模块共享的类型定义必须收敛到 `common/api/`」，而现实与设计文档都是：
+**跨进程**契约走 `spec/` + `common/api/`（proto 生成物），**进程内**共享类型集中在 `common/core/internal/contract/`（8 个文件，只放类型无逻辑，
 见 `docs/design/structure.md` §1.2 / §1.6.2）；`scripts/archcheck` 早已把它列入结构性目录白名单并注释「依据 structure.md §1.2」。
-改法：`MD-5` 拆成两类落点；`MD-19` 例外清单加上 `core/internal/contract/`；规则表下方加带日期的措辞修正注记（写明原文与改动，可回退）。
+改法：`MD-5` 拆成两类落点；`MD-19` 例外清单加上 `common/core/internal/contract/`；规则表下方加带日期的措辞修正注记（写明原文与改动，可回退）。
 **规则效力不变**：仍然禁止各自定义同名类型、禁止清单外目录承载业务逻辑。同步了 2 处会「复制粘贴」到新模块文档的引用
 （`docs/modules/_template.md` 与 `docs/modules/policy.md`）；已按现实写作的三份（`docs/modules/decoy.md` / `docs/modules/director.md` / `docs/spec/config.md`）保持不动。
 本轮**代码改动 0 行**。
@@ -2029,7 +2114,7 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 | 旧表述残留 | 活性文档零残留 | ✅ 仅历史条目与注记中引用的原文 |
 
 **没做 / 遗留**：① 未新开 ADR（不是取舍，是消除歧义）；② 未来若出现「proto 表达不了的跨进程共享类型」，
-`api/` 与 `spec/` 的边界需再定义（无当前影响）；③ 本轮无新增测试（只改规则文本）。
+`common/api/` 与 `spec/` 的边界需再定义（无当前影响）；③ 本轮无新增测试（只改规则文本）。
 
 ---
 
@@ -2039,7 +2124,7 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 → **23 个有效模块三方一致**；模块文档九章齐全（缺章 0）；导出符号无孤儿（0 命中）；
 **env 双向核对**；文档里 `make <目标>` 全部存在（幽灵命令 0）；`docs/design/` 无 `P-2` 含糊词。
 ③ **修掉 6 处过期事实**（`docs/design/structure.md` §1.5）：`contract` 文件数 6→8；
-`core/internal/responder` / `core/internal/isolation` / `edge/injection` 标「⏳ 阶段 2b」但它们**已实现并含单测**；
+`common/core/internal/responder` / `common/core/internal/isolation` / `edge/injection` 标「⏳ 阶段 2b」但它们**已实现并含单测**；
 `scripts/*` 行把已实现的 `scripts/check-leak` 写成「仍只有说明」；`edge/proxy` 测试数 30→37；补回已实现却无行的 `decoy` / `honeypot`。
 ④ **删幽灵内容**（四道门槛①：全仓检索 0 引用）：`SHEN_CORE_TLS`（无任何代码读它）与
 `sidecar.example.yaml` 里的存活/就绪探针端点（代码里没有该端点，`grep healthz` 只命中测试夹具）；
@@ -2048,7 +2133,7 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 `SHEN_PROXY_CACHE_MAX` 与 `SHEN_PROXY_INJECT`（代码读、模板没写）进 `edge/proxy/config/front-proxy.example.env`。
 ⑥ **修自相矛盾**：`edge/mirror/README.md` 目录表说「接收端 ✅ 含单测」、下方警示又说「尚未实现」——已统一为「已实现」。
 ⑦ **发现并上报两条规则措辞冲突**（**未擅改** `docs/design/`，`P-3` 要求停下报告）：
-`MD-5` 说「跨模块共享类型必须收敛到 `api/`」，而进程内共享类型实际集中在 `core/internal/contract/`（8 个文件）；
+`MD-5` 说「跨模块共享类型必须收敛到 `common/api/`」，而进程内共享类型实际集中在 `common/core/internal/contract/`（8 个文件）；
 `MD-19` 的例外清单也未包含该目录。两条均不阻塞开发，但按字面读会得出错误结论（详见变更包 §7）。
 
 **改了哪些文件**：`docs/design/structure.md` · `docs/modules/adapter-proxy.md` · `edge/mirror/README.md` ·
@@ -2070,16 +2155,16 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 | `docs/design/` 含糊表述（`P-2`） | 零违规 | ✅ 仅规则定义自身命中（规范允许） |
 | 已实现模块的实际 import ↔ 文档依赖表 | 一致 | ✅ 均只依赖 `contract` + 文档已写的接口 |
 
-**没做 / 遗留**：① **待你确认的两条规则冲突**（`MD-5` / `MD-19` ↔ `core/internal/contract/`）—— 改规则需你拍板，
+**没做 / 遗留**：① **待你确认的两条规则冲突**（`MD-5` / `MD-19` ↔ `common/core/internal/contract/`）—— 改规则需你拍板，
 本轮只上报、不动 `docs/design/`；② `ST-17` 探针未实现（已登记，落地前需先定「探针端点是否开在对外监听上」）；
 ③ `docs/spec/` 的 logs / metrics 两份字典与三个接入面目录（integrate / ops / analytics）仍待建；
 ④ 本轮**代码改动 0 行**，因此无新增测试。
 
 ---
 
-**做了什么**：把 `api/policy/v1` 的**两端**都实现出来，闭合阶段 2b 的结构性断点（此前契约存在但无人实现，
+**做了什么**：把 `common/api/policy/v1` 的**两端**都实现出来，闭合阶段 2b 的结构性断点（此前契约存在但无人实现，
 核心算出的幻境后端池与白名单传不到边缘）：
-① **核心侧服务端**（`core/internal/policy/server.go`）：`Pull` 把当前策略**投影**成边缘文档（改道后端表 + 白名单 CIDR，
+① **核心侧服务端**（`common/core/internal/policy/server.go`）：`Pull` 把当前策略**投影**成边缘文档（改道后端表 + 白名单 CIDR，
 按名排序 ⇒ 字节确定）、`checksum = sha256(payload)`；`Watch` **显式返回 `Unimplemented`**（不挂住调用方）；
 `Ack` 把回执写入 `store.PolicyStore`（按 `(policy_id, version, adapter_id)` 幂等，缺标识拒收）。
 ② **适配器侧客户端**（`edge/proxy/policy.go`）：启动 + 每 60s 拉取（`SHEN_PROXY_POLICY_INTERVAL` 可配，0 = 不拉）；
@@ -2093,10 +2178,10 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 ⑦ 新发现：**判定缓存的键不含 UA** ⇒ 同一 `(IP, 会话, 路径, 60s)` 共享一个决策，
 实测可复现「探针先到 → 真实用户被改道」与「真实用户先到 → 探针漏改道」—— 登记为 `K-20`，**未擅自动 `ST-10`**。
 
-**改了哪些文件**：`api/policy/v1/policy.proto`（+ 重新生成的 `api/policy/v1/policy.pb.go` / `api/policy/v1/policy_grpc.pb.go`）·
-`core/internal/contract/policy.go` · `core/internal/store/iface.go` · `core/internal/store/memory.go` ·
-`core/internal/policy/server.go`（新增）· `core/internal/policy/server_test.go`（新增）· `core/internal/policy/policy_test.go` ·
-`core/cmd/core/main.go` · `edge/proxy/policy.go`（新增）· `edge/proxy/policy_test.go`（新增）· `edge/proxy/handler.go` ·
+**改了哪些文件**：`common/api/policy/v1/policy.proto`（+ 重新生成的 `common/api/policy/v1/policy.pb.go` / `common/api/policy/v1/policy_grpc.pb.go`）·
+`common/core/internal/contract/policy.go` · `common/core/internal/store/iface.go` · `common/core/internal/store/memory.go` ·
+`common/core/internal/policy/server.go`（新增）· `common/core/internal/policy/server_test.go`（新增）· `common/core/internal/policy/policy_test.go` ·
+`common/core/cmd/core/main.go` · `edge/proxy/policy.go`（新增）· `edge/proxy/policy_test.go`（新增）· `edge/proxy/handler.go` ·
 `edge/proxy/cmd/proxy/main.go` · `edge/proxy/README.md` · `edge/proxy/config/front-proxy.example.env` ·
 `docs/spec/policy-payload.md`（新增）· `docs/background/decisions/0018-policy-plane-pull-model.md`（新增）·
 `docs/background/decisions/README.md` · `docs/design/structure.md` · `docs/design/modules.md` ·
@@ -2140,7 +2225,7 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 `edge/proxy` 测试计数 5 处 29 → **30**；`docs/design/modules.md` 头部历史注记补「当时」二字澄清（**规则与 ID 未动**）。
 ③ **补门禁与工具清单**：`docs/README.md` 新增 §1.1（`scripts/` 七项工具 + 各自依据的规则 + 两个未实现工具的显式标注），
 并在开头加「想看项目全貌 → 根 README」的互指。
-④ 顺手把「策略面未实现」改成精确表述 —— `api/policy/v1` **只有契约**（proto + 生成物），**服务端与消费方都未实现**。
+④ 顺手把「策略面未实现」改成精确表述 —— `common/api/policy/v1` **只有契约**（proto + 生成物），**服务端与消费方都未实现**。
 
 **改了哪些文件**：`README.md`（新增，根目录）· `docs/README.md` · `docs/spec/config.md` · `docs/progress.md` ·
 `docs/modules/README.md` · `docs/modules/adapter-proxy.md` · `docs/design/structure.md` · `docs/design/modules.md`
@@ -2152,7 +2237,7 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 **证据**：
 | 场景 | 期望 | 实测 |
 | --- | --- | --- |
-| `whitelist` / `decoys` / `honeypots` 是否被消费 | 文档与代码一致 | ✅ 各 1 处调用（`core/cmd/core/main.go` 与 `director`） |
+| `whitelist` / `decoys` / `honeypots` 是否被消费 | 文档与代码一致 | ✅ 各 1 处调用（`common/core/cmd/core/main.go` 与 `director`） |
 | 示例配置是否已有 `decoys` / `honeypots` | 一致 | ✅ `deploy/config/config.example.yaml` 第 71 / 86 行 |
 | 有效模块数 | 一致 | ✅ `docs/design/modules.md` §1.1 共 24 行、23 个有效 |
 | `edge/proxy` 测试数 | 一致 | ✅ 30（`grep -c '^func Test' edge/proxy/*_test.go`） |
@@ -2170,9 +2255,9 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 新增 `scripts/check-leak`（标准库 + go/ast，**零新依赖**）—— 扫 `OH-1` 禁用清单（大小写不敏感）、
 查响应头与 Cookie 名里的决策类词（`OH-5`），豁免分**三类**且都不是整目录豁免（`OH-4`）：
 规则级（内部日志 / 错误构造 / struct tag，写在 `scripts/check-leak/main.go` 包注释并附 `OH-2` 依据）、
-文件级（`core/internal/responder/blacklist.go` 自己声明 check-leak:filter 标记）、逐条（`scripts/check-leak/allow.txt`，
+文件级（`common/core/internal/responder/blacklist.go` 自己声明 check-leak:filter 标记）、逐条（`scripts/check-leak/allow.txt`，
 精确到**文件 + 字面量**，理由必填，**过期即报**）。扫描范围从 `docs/design/modules.md` §1.1 **解析**，
-模块改名就**直接失败**（拒绝少扫）。同时修掉它查出的真泄漏：`core/internal/decoy/decoy.go` 的投放片段
+模块改名就**直接失败**（拒绝少扫）。同时修掉它查出的真泄漏：`common/core/internal/decoy/decoy.go` 的投放片段
 含「…蜜饵」与 `decoy_accounts` 表名（片段会被投放进客户环境，对手可能读到）、
 `edge/proxy/cmd/proxy/main.go` 启动日志的「引流」措辞（与 `docs/design/terminology.md` §4.1 的三值命名对齐）。
 另登记一致性核查发现的既有缺口（`NI-12` 的 V 系测试、`AR-26` 的两条周期断言、`NI-7` / `ST-17` 的部署物料、
@@ -2180,7 +2265,7 @@ OCSP 装订与证书链形状另有差异。**结论：不可对齐 ⇒ 按 E2 �
 
 **改了哪些文件**：`scripts/check-leak/main.go`（新增）· `scripts/check-leak/allow.txt`（新增）·
 `scripts/check-leak/README.md`（重写：从「尚未实现」改为已实现，含范围与局限）· `Makefile`（新增 `leakcheck`，接进 `lint` / `check` / `gate`）·
-`core/internal/responder/blacklist.go`（文件级过滤器声明）· `core/internal/decoy/decoy.go`（修真实泄漏）·
+`common/core/internal/responder/blacklist.go`（文件级过滤器声明）· `common/core/internal/decoy/decoy.go`（修真实泄漏）·
 `edge/proxy/cmd/proxy/main.go`（日志措辞）· `.pi/devloop.md`（适配面补 `leak_cmd`）·
 `docs/kb/dev-workflow.md`（§3 门禁链路补 `leakcheck`）
 
@@ -2280,11 +2365,11 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 
 ## 2026-09-18 · 代码整理 + 调用链核实 + 文档站完善
 
-**做了什么**：① **整理装配代码** —— `core/cmd/core/main.go` 提取 `assembleDeception` / `deception` / `assertConsistency`，`run()` 从 ~200 行降到 **125 行**，行为不变；
-② **核实模块真实调用链**（`go list` 实测依赖 + 反查每个接口的消费者）：**发现 `decoy` / `responder` / `honeypot` 已装配但不在调用链上**（`Resolve`/`Match`/`Respond` 的调用者只有测试与启动自检），根因是**策略面 S4（`api/policy/v1`）未实现**；
+**做了什么**：① **整理装配代码** —— `common/core/cmd/core/main.go` 提取 `assembleDeception` / `deception` / `assertConsistency`，`run()` 从 ~200 行降到 **125 行**，行为不变；
+② **核实模块真实调用链**（`go list` 实测依赖 + 反查每个接口的消费者）：**发现 `decoy` / `responder` / `honeypot` 已装配但不在调用链上**（`Resolve`/`Match`/`Respond` 的调用者只有测试与启动自检），根因是**策略面 S4（`common/api/policy/v1`）未实现**；
 ③ **完善文档站**：`docs/README.md` 更新现状与计数（21→23 模块）+ 新增调用链导航 + 上手顺序；`docs/design/structure.md` §1.6 **重写**为实测三进程地图（原缺 5 个包、误称「两个二进制」、误称 isolation 无人调用）；`docs/modules/README.md` 新增 **§0.4 运行时调用链**；`decoy`/`responder`/`honeypot` 模块文档各登记一行「未接到请求路径」。
 
-**改了哪些文件**：`core/cmd/core/main.go` · `docs/README.md` · `docs/design/structure.md` · `docs/modules/README.md` · `docs/modules/decoy.md` · `docs/modules/responder.md` · `docs/modules/honeypot.md` · `docs/plans/2026-09-18-docs-wiring-cleanup.md` · `docs/log.md`
+**改了哪些文件**：`common/core/cmd/core/main.go` · `docs/README.md` · `docs/design/structure.md` · `docs/modules/README.md` · `docs/modules/decoy.md` · `docs/modules/responder.md` · `docs/modules/honeypot.md` · `docs/plans/2026-09-18-docs-wiring-cleanup.md` · `docs/log.md`
 
 **对应文档**：[`docs/plans/2026-09-18-docs-wiring-cleanup.md`](docs/plans/2026-09-18-docs-wiring-cleanup.md)（含调用链核实与设计评估）· [`docs/modules/README.md`](docs/modules/README.md) §0.4 · [`docs/design/structure.md`](docs/design/structure.md) §1.6
 
@@ -2299,7 +2384,7 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 | 文档站入口 | 计数与状态不再过期 | ✅ `docs/README.md`（21→23 模块 · 断点提示） |
 | 启动日志 | 装配摘要与自检仍生效 | ✅ 「诱饵面：0 个资产启用 / 幻境后端池：0 个登记」 |
 
-**没做 / 遗留**：⭐ **策略面（`api/policy/v1`）未实现** —— 当前唯一结构性断点，补齐它才能让 `decoy`/`responder`/`honeypot` 到达边缘、消除后端池的两份事实源；本轮只核实与登记，未实现（属新功能，需单独一轮）。
+**没做 / 遗留**：⭐ **策略面（`common/api/policy/v1`）未实现** —— 当前唯一结构性断点，补齐它才能让 `decoy`/`responder`/`honeypot` 到达边缘、消除后端池的两份事实源；本轮只核实与登记，未实现（属新功能，需单独一轮）。
 
 ---
 
@@ -2307,12 +2392,12 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 
 **做了什么**：整理本轮开发的模块代码，消除冗余结构与重复逻辑，为后续「按架构重组模块」做准备：
 ① `honeypot` —— 删掉 `knownTypes()`（每次调用重建切片并排序）与 `typeOrder()`（线性查设计清单序号）两个函数，`known` 改为**按给定顺序**的有序切片 + `slices.Contains` 做成员判断（-15 行）；
-② `core/internal/store/memory.go` —— 三份「超限则清理过期」循环（一份提成方法、两份内联）收敛为一个泛型 `sweepExpiredIfFull`；
+② `common/core/internal/store/memory.go` —— 三份「超限则清理过期」循环（一份提成方法、两份内联）收敛为一个泛型 `sweepExpiredIfFull`；
 ③ `responder` —— `seedOf` 由三次 `Write` 改为一次拼好再写；
 ④ `edge/proxy` —— `injectResponse` 里三条「不注入」判据抽成 `injectable(resp)`（它们本是同一个概念）。
 **刻意保留**：`director.Config.Now` 与 `Engine.now` 当前无读取点，但注释写明是「仅为将来的可观测留口」的**有意预留**，且删它属于改动导出类型形状 —— 按「不改对外契约」保留并登记。
 
-**改了哪些文件**：`core/internal/honeypot/honeypot.go` · `core/internal/store/memory.go` · `core/internal/responder/responder.go` · `edge/proxy/proxy.go` · `docs/plans/2026-09-18-module-cleanup.md` · `docs/log.md`
+**改了哪些文件**：`common/core/internal/honeypot/honeypot.go` · `common/core/internal/store/memory.go` · `common/core/internal/responder/responder.go` · `edge/proxy/proxy.go` · `docs/plans/2026-09-18-module-cleanup.md` · `docs/log.md`
 
 **对应文档**：[`docs/plans/2026-09-18-module-cleanup.md`](docs/plans/2026-09-18-module-cleanup.md) · [`docs/modules/honeypot.md`](docs/modules/honeypot.md) · [`docs/modules/responder.md`](docs/modules/responder.md)
 
@@ -2344,7 +2429,7 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 ⑧ **mirror 调核心无超时** → 加 3s 上限。
 另输出**开源替换评估**（12 项组件，结论：该复用的都已复用，自研的正是设计指定的智能决策层）与**架构稳定性评估**（6 强项 / 6 风险点）。
 
-**改了哪些文件**：`edge/proxy/proxy.go` · `edge/proxy/iface.go` · `edge/proxy/proxy_test.go` · `edge/proxy/cmd/proxy/main.go` · `edge/mirror/receiver.go` · `core/internal/contract/policy.go` · `core/internal/policy/policy.go` · `core/internal/policy/policy_test.go` · `core/internal/director/director.go` · `core/internal/director/director_test.go` · `core/internal/store/memory.go` · `core/cmd/core/main.go` · `docs/plans/2026-09-18-code-review.md` · `docs/log.md`
+**改了哪些文件**：`edge/proxy/proxy.go` · `edge/proxy/iface.go` · `edge/proxy/proxy_test.go` · `edge/proxy/cmd/proxy/main.go` · `edge/mirror/receiver.go` · `common/core/internal/contract/policy.go` · `common/core/internal/policy/policy.go` · `common/core/internal/policy/policy_test.go` · `common/core/internal/director/director.go` · `common/core/internal/director/director_test.go` · `common/core/internal/store/memory.go` · `common/core/cmd/core/main.go` · `docs/plans/2026-09-18-code-review.md` · `docs/log.md`
 
 **对应文档**：[`docs/plans/2026-09-18-code-review.md`](docs/plans/2026-09-18-code-review.md)（审查报告）· [`docs/design/constraints.md`](docs/design/constraints.md)（`NI-1`）· [`docs/design/modules.md`](docs/design/modules.md)（`INT-25` / `MD-25`）
 
@@ -2371,7 +2456,7 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 ③ `decoy`（诱饵面：最长前缀匹配 + 多态 + 投放片段，ADR-0010/0016）；④ `responder`（欺骗响应：确定性模板 + 预生成优先，`AR-30` 一致性不变量）；
 ⑤ `edge-injection`（L1 注入：非 HTML 原样返回，纯变换）；⑥ 补上 `MD-25`（诱饵面 observe-only）的**实现** —— 诱饵前缀集在决策层豁免 block，前缀集由装配层从诱饵资产汇总（单一事实源）。另：`store` 新增 `DecoyStore`/`ContentStore`；`config` 新增 `decoys`/`honeypots` 两段（数据驱动，`ST-24`）；`control` 服务面接隔离短路；`main.go` 装配 + 启动期 `AR-30` 自检；新增**端到端集成测试**。⑦ 把 `edge-injection` **接进适配器**（`ST-5`：被适配器引用，不独立部署）：引流侧的 HTML 响应注入诱饵，业务侧一律不改写（`INT-8`）；⑧ 实现 `AR-22` / `AR-23`（内容黑名单 + 长度上限）：生成内容过三类校验，不合格回落安全模板。
 
-**改了哪些文件**：`core/internal/contract/deception.go` · `core/internal/store/iface.go` · `core/internal/store/memory.go` · `core/internal/isolation/` · `core/internal/honeypot/` · `core/internal/decoy/` · `core/internal/responder/` · `edge/injection/` · `core/internal/control/service.go` · `core/internal/director/director.go` · `core/internal/policy/policy.go` · `core/cmd/core/main.go` · `core/cmd/core/integration_test.go` · `deploy/config/config.example.yaml` · `docs/modules/isolation.md` · `docs/modules/honeypot.md` · `docs/modules/decoy.md` · `docs/modules/responder.md` · `docs/modules/edge-injection.md` · `docs/progress.md` · `docs/plans/2026-09-18-deception-modules-impl.md` · `docs/log.md`
+**改了哪些文件**：`common/core/internal/contract/deception.go` · `common/core/internal/store/iface.go` · `common/core/internal/store/memory.go` · `common/core/internal/isolation/` · `common/core/internal/honeypot/` · `common/core/internal/decoy/` · `common/core/internal/responder/` · `edge/injection/` · `common/core/internal/control/service.go` · `common/core/internal/director/director.go` · `common/core/internal/policy/policy.go` · `common/core/cmd/core/main.go` · `common/core/cmd/core/integration_test.go` · `deploy/config/config.example.yaml` · `docs/modules/isolation.md` · `docs/modules/honeypot.md` · `docs/modules/decoy.md` · `docs/modules/responder.md` · `docs/modules/edge-injection.md` · `docs/progress.md` · `docs/plans/2026-09-18-deception-modules-impl.md` · `docs/log.md`
 
 **对应文档**：[`docs/modules/decoy.md`](docs/modules/decoy.md) · [`docs/modules/honeypot.md`](docs/modules/honeypot.md) · [`docs/modules/responder.md`](docs/modules/responder.md) · [`docs/modules/isolation.md`](docs/modules/isolation.md) · [`docs/modules/edge-injection.md`](docs/modules/edge-injection.md) · [`docs/plans/2026-09-18-deception-modules-impl.md`](docs/plans/2026-09-18-deception-modules-impl.md)
 
@@ -2527,7 +2612,7 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 
 **做了什么**：让引流真正生效 —— 新增 `director` 模块，把 judge 的风险分映射为三值（`route_origin` / `route_mirage` / `block`）+ 后端名，并按 `policy.gray_pct` 做确定性灰度收敛（同 `decision_id` 同结果，`ST-10`）。`block` 默认不产出（Q5）。熔断（`NI-10`）落在 `control` 服务面。`policy` 暴露阈值/灰度/影子开关。装配层按 `shadow` 选决策器：影子用 `ShadowDecider`（恒放行，回归保持），关闭后用 `director`。
 
-**改了哪些文件**：`core/internal/contract/thresholds.go` · `core/internal/director/`（新：iface.go · director.go · director_test.go）· `core/internal/control/breaker.go` + `breaker_test.go` · `core/internal/control/service.go` · `core/internal/policy/policy.go` + `policy_test.go` · `core/cmd/core/main.go` + `main_test.go` · `docs/modules/director.md` · `docs/spec/config.md` · `docs/progress.md` · `docs/modules/README.md` · `docs/design/structure.md` · `docs/plans/2026-09-17-director-2a.md` · `docs/plans/2026-09-18-director-2a.md` · `docs/log.md`
+**改了哪些文件**：`common/core/internal/contract/thresholds.go` · `common/core/internal/director/`（新：iface.go · director.go · director_test.go）· `common/core/internal/control/breaker.go` + `breaker_test.go` · `common/core/internal/control/service.go` · `common/core/internal/policy/policy.go` + `policy_test.go` · `common/core/cmd/core/main.go` + `main_test.go` · `docs/modules/director.md` · `docs/spec/config.md` · `docs/progress.md` · `docs/modules/README.md` · `docs/design/structure.md` · `docs/plans/2026-09-17-director-2a.md` · `docs/plans/2026-09-18-director-2a.md` · `docs/log.md`
 
 **对应文档**：[`docs/modules/director.md`](docs/modules/director.md) · [`docs/plans/2026-09-18-director-2a.md`](docs/plans/2026-09-18-director-2a.md) · [`docs/spec/config.md`](docs/spec/config.md) §2.0
 
@@ -2816,7 +2901,7 @@ Apache-2.0 / MIT / BSD-3-Clause / CC0，无 AGPL/SSPL/BSL）；`make dev` 通过
 
 **做了什么**：判定引擎第一次有了真实规则来源 —— 从配置文件装载策略、严格校验、产出带版本号与校验和的不可变快照、写入版本台账、供 `judge.RuleSource`。同时闭合阶段 1 的「空规则集静默启动」缺口：配置缺失或非法**必须**启动失败。另配一套开发期验证入口（`make check-config` / `replay` / `smoke` / `dev`）。
 
-**改了哪些文件**：`core/internal/policy/`（新增 `iface.go` · `policy.go` · `policy_test.go`）· `core/cmd/core/main.go` · `core/cmd/core/main_test.go` · `core/internal/control/rules.go`（删除，占位规则源被 `policy` 接管）· `deploy/config/config.example.yaml` · `Makefile` · `scripts/devcheck/main.go` · `scripts/dev/smoke.sh` · `docs/spec/config.md` · `docs/modules/policy.md` · `docs/background/decisions/0009-policy-version-source.md` · `docs/plans/2026-09-18-policy-2a.md`
+**改了哪些文件**：`common/core/internal/policy/`（新增 `iface.go` · `policy.go` · `policy_test.go`）· `common/core/cmd/core/main.go` · `common/core/cmd/core/main_test.go` · `common/core/internal/control/rules.go`（删除，占位规则源被 `policy` 接管）· `deploy/config/config.example.yaml` · `Makefile` · `scripts/devcheck/main.go` · `scripts/dev/smoke.sh` · `docs/spec/config.md` · `docs/modules/policy.md` · `docs/background/decisions/0009-policy-version-source.md` · `docs/plans/2026-09-18-policy-2a.md`
 
 **对应文档**：`docs/spec/config.md`（配置全表 + JSON Schema）· `docs/modules/policy.md`（九章）· ADR-0009（版本来源）· `docs/design/structure.md` §1.6（接缝已接）
 

@@ -5,7 +5,7 @@
 | 模块名 | `judge` |
 | 所属层 | 核心 |
 | 实现语言 | Go |
-| 源码目录 | `core/internal/judge/` |
+| 源码目录 | `common/core/internal/judge/` |
 | 负责人 | —— |
 | 状态 | 阶段 1 已实现；阶段 2b 扩充指纹与会话特征 |
 | 最后更新 | 2026-09-17 |
@@ -35,13 +35,13 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 | `RuleSource.Rules` 提供的规则集（数据） | `core/internal/judge/iface.go` |
-| 输入 | `contract.JudgeRequest`（观测 + 会话 + **会话特征** + 幂等键） | `core/internal/contract/` |
+| 输入 | `RuleSource.Rules` 提供的规则集（数据） | `common/core/internal/judge/iface.go` |
+| 输入 | `contract.JudgeRequest`（观测 + 会话 + **会话特征** + 幂等键） | `common/core/internal/contract/` |
 | 输入 | `contract.SessionFeatures`（速度 / 挑战逃逸 / 首末次时间） | 同上（[ADR-0012](../background/decisions/0012-session-level-judgement.md)） |
 | 输入 | 指纹签名库（数据） | [`../spec/config.md`](../spec/config.md) 的 `fingerprints` 段（待建） |
-| 输出 | `contract.Verdict`（分数 + 信号 + 证据 + **指纹**） | `core/internal/contract/` |
+| 输出 | `contract.Verdict`（分数 + 信号 + 证据 + **指纹**） | `common/core/internal/contract/` |
 
-对外（跨进程）契约不在这里 —— 那是 `api/judge/v1` 的 proto。
+对外（跨进程）契约不在这里 —— 那是 `common/api/judge/v1` 的 proto。
 
 ## 3. 依赖
 

@@ -235,7 +235,7 @@
                             │                                │
                             │ 处置执行                        │ [S3 gRPC / Protobuf，带版本号]
                             ▼                                ▼
-                   L1 deception/ 模块（禁独立部署 ST-5）      L4 分析（Python）
+                   L1 modules/deception/ 模块（禁独立部署 ST-5）      L4 分析（Python）
                                                                  │
                             ┌────────────────────────────────────┘
                             ▼
@@ -517,7 +517,7 @@ L4 │      │          │     │       │ Python       │ Python      │ 
 | 7 | LLM 输出经契约层校验；两阶段失败即整体作废 | AR-15 / AR-21 |
 | 8 | 出网默认拒绝：抓取、克隆、回调类能力走目标白名单 | [`constraints.md`](constraints.md) |
 | 9 | 高风险能力不在同一部署单元叠加 | [`constraints.md`](constraints.md) |
-| 10 | 契约以 `api/` 为唯一事实源 | [`structure.md`](structure.md) |
+| 10 | 契约以 `common/api/` 为唯一事实源 | [`structure.md`](structure.md) |
 
 ---
 
@@ -545,6 +545,6 @@ L4 │      │          │     │       │ Python       │ Python      │ 
 | 9 | **本地判定缓存（AR-6）与集中隔离名单（Redis）的失效语义不同**：前者为进程本地 TTL / LRU，后者为 Redis TTL。§6 的“其他适配器隔离生效 ≤ 1s”尚无机制支撑 | AR-6 ↔ §6 · ST-3 |
 | 10 | **`decision_id` 含“时间窗”要素（ST-10）与同会话幂等（INT-21）的关系未定义** —— 同会话、不同时间窗会产生不同 `decision_id`，幂等**必须**由核心的 `session → 后端` 映射保证，而非由 `decision_id` 保证 | ST-10 ↔ INT-21 |
 | 11 | **AR-29 的 5 ms 预算：gRPC 那段已实测下界**（`E1` 空载 P99 **116 µs**，占那 3 ms 的 3.9%）；**真实载荷占比与跨节点可达性仍未验证** | AR-29 / AR-26 · [`../background/notes/pending-experiments.md`](../background/notes/pending-experiments.md) |
-| 12 | ✅ **已结案（2026-09-17）** —— `control` 确认为第 22 个模块，见 [`modules.md`](modules.md) §1.1。原建议理由：§8.1 步骤 3 是真实逻辑（入参映射、`ST-7` 禁止回显的强制点、Telemetry 缓冲重放、Policy 回执对账），塞进 `core/cmd/core/` 会让"进程入口"变成业务代码 | [`modules.md`](modules.md) §1.1 · [ST-1](structure.md) |
+| 12 | ✅ **已结案（2026-09-17）** —— `control` 确认为第 22 个模块，见 [`modules.md`](modules.md) §1.1。原建议理由：§8.1 步骤 3 是真实逻辑（入参映射、`ST-7` 禁止回显的强制点、Telemetry 缓冲重放、Policy 回执对账），塞进 `common/core/cmd/core/` 会让"进程入口"变成业务代码 | [`modules.md`](modules.md) §1.1 · [ST-1](structure.md) |
 | 13 | 🟡 **部分落地（2026-09-19）**：**响应改写规则**的归属已定 —— 由核心配置 `injects` 持有、经策略面下发（`inject_rules`）、由 `edge-injection` 执行（见 [`../spec/policy-payload.md`](../spec/policy-payload.md)）；**仍未定的是「幻境响应正文由谁产出」**：外部幻境后端（现状：转发）还是核心 `responder`（引擎自答）。这决定 L1 ↔ 核心之间一次传多少数据，属**架构级**取舍 | `AR-6` ↔ `INT-8` · [`modules.md`](modules.md) §3 · [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)「未解决」 |
 | 14 | ✅ **已结案（2026-09-19；同日被收窄）** —— **TLS 终结归谁**：**默认交客户 L0**（客户 L0 = 真实站同款栈 ⇒ 指纹构造性一致，且我们收到明文，`INT-22` 成立）；自终结（内嵌 Caddy 的 `manual`/`acme`）保留为「客户没有 L0」时的备选并**启动即警告**。形态 ①② 一直靠客户 L0。同时满足 `AR-3` 与 `AR-4`（请求路径上做七层决策的仍只有一个组件） | [`ADR-0019`](../background/decisions/0019-tls-termination-belongs-to-l0.md)（取代 [0017](../background/decisions/0017-caddy-l1-base.md) 的 TLS 部分）↔ `INT-22` · 实验 `E2` |

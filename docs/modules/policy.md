@@ -5,9 +5,9 @@
 | 模块名 | `policy` |
 | 所属层 | 核心 |
 | 实现语言 | Go |
-| 源码目录 | `core/internal/policy/` |
+| 源码目录 | `common/core/internal/policy/` |
 | 负责人 | —— |
-| 状态 | 阶段 2a —— 策略装载 · 版本 · 校验和 · 规则供给 · **下发与回执**（`api/policy/v1` 的 `Pull` / `Ack`）· 边缘投影（后端表 / 白名单 / **响应改写规则**）；含单测 |
+| 状态 | 阶段 2a —— 策略装载 · 版本 · 校验和 · 规则供给 · **下发与回执**（`common/api/policy/v1` 的 `Pull` / `Ack`）· 边缘投影（后端表 / 白名单 / **响应改写规则**）；含单测 |
 | 最后更新 | 2026-09-19 |
 
 > 权威清单见 [`../design/modules.md`](../design/modules.md) §1.1（第 6 行）。
@@ -40,22 +40,22 @@
 - **不做决策** —— 「去哪儿」是 `director` 的职责；本模块只回答「规则是什么」。
 - **不计算灰度** —— 灰度是**逐请求**的函数，属 `director`；本模块只携带比例。
 - **不做热重载** —— 不监听文件、不响应信号（无运行时可变状态，`AR-9`）；版本变更 = 新进程 + 新版本号。
-- **不做流式下发** —— `api/policy/v1` 的 `Watch` **未实现**，显式返回 `Unimplemented`（[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)：本轮用 `Pull` 轮询）。
+- **不做流式下发** —— `common/api/policy/v1` 的 `Watch` **未实现**，显式返回 `Unimplemented`（[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)：本轮用 `Pull` 轮询）。
 - **不写业务存储** —— 只经 `store.PolicyStore` 落版本台账；**禁止**直连 PostgreSQL / Redis / ClickHouse（`MD-20`）。
 
 ## 2. 输入 / 输出契约
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
 | 输入 | 配置文件（YAML） | [`../spec/config.md`](../spec/config.md)（接缝 **S4**） |
-| 输出 | `contract.PolicySnapshot`（进程内共享类型） | `core/internal/contract/policy.go` |
-| 输出（跨进程） | `api/policy/v1` 的 `PolicySnapshot`（`Pull`）+ `PolicyAck`（回执）—— **消费者是 L1 适配器**（`deception/proxy`） | `api/policy/v1/policy.proto` · 载荷格式见 [`../spec/policy-payload.md`](../spec/policy-payload.md) |
-| 消费方契约 | `judge.RuleSource` —— 由**消费方**定义，本模块实现它 | `core/internal/judge/iface.go` |
-| 台账契约 | `store.PolicyStore`（`Current` / `Publish` / `RecordAck` / `Acks`） | `core/internal/store/iface.go` |
+| 输出 | `contract.PolicySnapshot`（进程内共享类型） | `common/core/internal/contract/policy.go` |
+| 输出（跨进程） | `common/api/policy/v1` 的 `PolicySnapshot`（`Pull`）+ `PolicyAck`（回执）—— **消费者是 L1 适配器**（`modules/deception/proxy`） | `common/api/policy/v1/policy.proto` · 载荷格式见 [`../spec/policy-payload.md`](../spec/policy-payload.md) |
+| 消费方契约 | `judge.RuleSource` —— 由**消费方**定义，本模块实现它 | `common/core/internal/judge/iface.go` |
+| 台账契约 | `store.PolicyStore`（`Current` / `Publish` / `RecordAck` / `Acks`） | `common/core/internal/store/iface.go` |
 
 本模块内部的数据结构：
 
 - `Loader` —— 装载结果：持有不可变快照；`Rules` / `Snapshot` 从它读取。
-- 配置文档的解析结构（未导出）—— 只在 `policy.go` 内使用，**禁止**外泄（`MD-5`：跨模块共享类型收敛到 `contract`；跨进程契约才放 `api/`）。
+- 配置文档的解析结构（未导出）—— 只在 `policy.go` 内使用，**禁止**外泄（`MD-5`：跨模块共享类型收敛到 `contract`；跨进程契约才放 `common/api/`）。
 
 ## 3. 依赖
 
@@ -64,7 +64,7 @@
 | `contract` | 共享类型（`Rule` / `PolicySnapshot`） |
 | `store`（仅 `PolicyStore` 接口） | 版本台账与**回执台账**都是核心的 I/O，必须经 `store`（`MD-20`） |
 | `contract` | 进程内共享类型：`PolicyAck` · `InjectRule`（按 `MD-5` 收敛到 `contract/`） |
-| `api/policy/v1` + `google.golang.org/grpc` | 下发面的服务端（`Server`）；**只被动接收**调用，不主动外呼 |
+| `common/api/policy/v1` + `google.golang.org/grpc` | 下发面的服务端（`Server`）；**只被动接收**调用，不主动外呼 |
 | YAML 解析库（`gopkg.in/yaml.v3`） | `S4` 规定策略为 YAML；许可为宽松（见 [`../spec/dependencies.md`](../spec/dependencies.md)） |
 
 | 禁止依赖 | 原因 |
@@ -127,7 +127,7 @@
 | 单元 · 不可变性 | 改写 `Rules()` 返回值不影响后续调用 | 同上 |
 | 单元 · 并发 | 多 goroutine 并发 `Rules()` / `Snapshot()`，在 `-race` 下无竞争 | 同上 |
 | 单元 · 漂移守卫 | 仓库内 `deploy/config/config.example.yaml` **必须**能通过装载校验 | 同上 |
-| 装配层 | 配置 → 策略 → 判定 → 决策的接线，含「影子模式恒放行」的回归与合法性/非法性配置的装载 | `core/cmd/core/main_test.go`（装配层允许依赖具体实现） |
+| 装配层 | 配置 → 策略 → 判定 → 决策的接线，含「影子模式恒放行」的回归与合法性/非法性配置的装载 | `common/core/cmd/core/main_test.go`（装配层允许依赖具体实现） |
 | 开发期工具 | `make check-config`（干跑）· `make replay`（规则回放）· `make smoke`（在线冒烟）· `make dev`（一键全跑） | `Makefile` · `scripts/devcheck/` · `scripts/dev/smoke.sh` |
 | 单元 · 下发 | `Pull` 的投影（schema 版本 / 三段数据 / 校验和覆盖 payload / 确定性）· 未知 `policy_id` → `NotFound` · `Watch` → `Unimplemented` | `server_test.go` |
 | 单元 · 回执 | `Ack` 落账 · 同适配器同版本幂等（覆盖不新增）· 缺 `adapter_id` → `InvalidArgument` · `applied=false` 必须带原因 | 同上 |

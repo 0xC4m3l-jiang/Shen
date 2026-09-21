@@ -3,7 +3,7 @@
 # 原文件 —— 仅占位符；真实密钥禁止入库。
 #
 # 字段全表、约束与规范性 JSON Schema 见 docs/spec/config.md。
-# 本文件必须始终通过那里的全部校验（有单测守着：core/internal/policy 的 TestExampleConfigLoads）。
+# 本文件必须始终通过那里的全部校验（有单测守着：common/core/internal/policy 的 TestExampleConfigLoads）。
 # 策略是数据：规则随配置下发，不编译进代码（ST-24）。
 #
 # 用法：SHEN_CONFIG=deploy/config/config.example.yaml make run

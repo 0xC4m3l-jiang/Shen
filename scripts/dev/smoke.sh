@@ -101,11 +101,11 @@ sed 's/weight: 0.3/weight: 1.5/' "$CFG" >"$BAD"
 echo "配置：${CFG}（临时） · 判定面：${ADDR}"
 echo
 echo "== 1/6 配置干跑：合法配置 =="
-SHEN_CONFIG="$CFG" go run ./core/cmd/core -check-config || fail "合法配置装载失败"
+SHEN_CONFIG="$CFG" go run ./common/core/cmd/core -check-config || fail "合法配置装载失败"
 
 echo
 echo "== 2/6 配置干跑：非法配置必须被拒 =="
-if SHEN_CONFIG="$BAD" go run ./core/cmd/core -check-config >"$BAD_LOG" 2>&1; then
+if SHEN_CONFIG="$BAD" go run ./common/core/cmd/core -check-config >"$BAD_LOG" 2>&1; then
 	fail "非法配置竟然通过校验（配置校验形同虚设）"
 fi
 if ! grep -q "weight" "$BAD_LOG"; then
@@ -117,7 +117,7 @@ grep "weight" "$BAD_LOG" | head -1
 
 echo
 echo "== 3/6 起核心（影子模式）：$ADDR =="
-SHEN_CONFIG="$CFG" SHEN_LISTEN="$ADDR" go run ./core/cmd/core >"$LOG" 2>&1 &
+SHEN_CONFIG="$CFG" SHEN_LISTEN="$ADDR" go run ./common/core/cmd/core >"$LOG" 2>&1 &
 CORE_PID=$!
 for _ in $(seq 1 60); do
 	if grep -q "核心已启动" "$LOG"; then
@@ -134,7 +134,7 @@ echo "== 4/6 在线冒烟（判定面形状 + 幂等） =="
 go run ./scripts/devcheck -addr "$ADDR" || fail "在线冒烟失败"
 echo
 echo "== 5/6 规则回放（离线，打印命中明细） =="
-go test -count=1 -run TestRuleReplay -v ./core/cmd/core || fail "规则回放失败"
+go test -count=1 -run TestRuleReplay -v ./common/core/cmd/core || fail "规则回放失败"
 
 echo
 echo

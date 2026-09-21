@@ -22,9 +22,9 @@ echo "构建（core / proxy / console）…"
 _TMPBASE=${TMPDIR:-/tmp}
 RUNDIR=${SHEN_RUNDIR:-${_TMPBASE%/}/shen-$(id -u)}
 mkdir -p "$RUNDIR"
-go build -o "$RUNDIR/core" ./core/cmd/core
-go build -o "$RUNDIR/proxy" ./deception/proxy/cmd/proxy
-go build -o "$RUNDIR/console" ./console/cmd/console
+go build -o "$RUNDIR/core" ./common/core/cmd/core
+go build -o "$RUNDIR/proxy" ./modules/deception/proxy/cmd/proxy
+go build -o "$RUNDIR/console" ./modules/console/cmd/console
 
 pids=()
 cleanup() {

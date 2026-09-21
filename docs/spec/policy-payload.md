@@ -1,16 +1,16 @@
 # 策略载荷契约（边缘策略文档）
 
 > 本文件是**跨进程契约**（接缝 **S4**，见 [`../design/structure.md`](../design/structure.md) §2.2）：
-> 核心经 `api/policy/v1` 的 `PolicySnapshot.payload` 下发、L1 适配器消费。
+> 核心经 `common/api/policy/v1` 的 `PolicySnapshot.payload` 下发、L1 适配器消费。
 > 依据：[`../design/architecture.md`](../design/architecture.md) 的 `AR-13`、
 > [`../design/structure.md`](../design/structure.md) 的 `ST-8` / `ST-24`、[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)。
 >
 > **本文件不是规则文档** —— 它规定「下发的字节长什么样、什么算非法」。
 > 与 [`../design/`](../design/README.md) 冲突时以 `design/` 为准。
 >
-> ⚠️ **两处实现必须同时改**：核心侧 `core/internal/policy/server.go` 的 `edgeDoc` 与
-> 适配器侧 `deception/proxy/policy.go` 的 `edgePolicy`。两者**不能共享 Go 类型** ——
-> 适配器**禁止** import `core/internal/`（`ST-3`，编译期强制），跨平面只允许 wire format（`TB-24`）。
+> ⚠️ **两处实现必须同时改**：核心侧 `common/core/internal/policy/server.go` 的 `edgeDoc` 与
+> 适配器侧 `modules/deception/proxy/policy.go` 的 `edgePolicy`。两者**不能共享 Go 类型** ——
+> 适配器**禁止** import `common/core/internal/`（`ST-3`，编译期强制），跨平面只允许 wire format（`TB-24`）。
 
 ---
 
@@ -21,7 +21,7 @@
 | 载体 | `PolicySnapshot.payload`（`bytes`，内容是 UTF-8 JSON 对象） |
 | 版本号 | 载荷内的 `schema_version`（整数）**与** `PolicySnapshot.version`（策略版本，单调递增） |
 | 完整性 | `PolicySnapshot.checksum` = 对 **payload 字节**的 SHA-256（十六进制小写） |
-| 拉取 | `Pull`（`api/policy/v1`）；适配器启动拉一次 + 按 `SHEN_PROXY_POLICY_INTERVAL` 轮询 |
+| 拉取 | `Pull`（`common/api/policy/v1`）；适配器启动拉一次 + 按 `SHEN_PROXY_POLICY_INTERVAL` 轮询 |
 | 回执 | `Ack{policy_id, version, adapter_id, applied, reason}`（`applied=false` 时 `reason` **必须**非空） |
 
 **适配器必须先验校验和再应用**：不匹配时**禁止**应用，并回执 `applied=false`、`reason="校验和不匹配"`。

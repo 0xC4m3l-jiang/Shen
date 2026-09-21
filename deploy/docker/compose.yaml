@@ -27,7 +27,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/go.Dockerfile
-      args: {SERVICE: ./core/cmd/core}
+      args: {SERVICE: ./common/core/cmd/core}
     environment:
       SHEN_CONFIG: /etc/shen/config.yaml
       SHEN_LISTEN: 127.0.0.1:9443
@@ -45,7 +45,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/go.Dockerfile
-      args: {SERVICE: ./deception/proxy/cmd/proxy}
+      args: {SERVICE: ./modules/deception/proxy/cmd/proxy}
     network_mode: service:core
     depends_on: [core]
     environment:
@@ -63,7 +63,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/go.Dockerfile
-      args: {SERVICE: ./console/cmd/console}
+      args: {SERVICE: ./modules/console/cmd/console}
     network_mode: service:core
     depends_on: [core]
     environment:

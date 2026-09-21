@@ -37,13 +37,13 @@
 | **输入**（读核心） | 核心 gRPC 读面：`ListEvents`（历史）· `GetCoreSnapshot`（当前态） | ✅ 已实现（快照 2026-09-21 新增） |
 | **输入**（订阅核心） | 核心 gRPC 流：`WatchEvents`（事件推送，`ADR-0027`） | ✅ 已实现（2026-09-21） |
 | **输出**（页 / HTTP） | 控制台 11 个**只读** HTTP 接口（含 `/api/config` 与 SSE 的 `/api/stream`） | ✅ 已实现 |
-| 输入 / 输出（**设计意图**） | 策略平面（`api/policy/v1`）的 `Pull` / `Ack` —— 策略编排所需的**写能力** | ❌ **未实现**：控制台当前只读（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md) 决定 2）；要做得先重开它 |
+| 输入 / 输出（**设计意图**） | 策略平面（`common/api/policy/v1`）的 `Pull` / `Ack` —— 策略编排所需的**写能力** | ❌ **未实现**：控制台当前只读（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md) 决定 2）；要做得先重开它 |
 
 ## 3. 依赖
 
 | 允许依赖 | 原因 |
 | --- | --- |
-| 策略平面（`api/policy/v1`） | 唯一的写入通道 |
+| 策略平面（`common/api/policy/v1`） | 唯一的写入通道 |
 | 只读查询接口 | 展示 |
 
 | 禁止依赖 | 原因 |
@@ -81,12 +81,12 @@
 | --- | --- | --- |
 | 集成（人工） | 起核心 + 控制台 → 经引擎发流量 → 页面/`api` 能看到**分值 + 命中信号** | [`../ops/functional-verification.md`](../ops/functional-verification.md) §7 |
 | 接口（形状） | `/api/summary` · `/api/flow` · `/api/events` · `healthz` 的返回形状 | 实跑（`scripts/demo/run.sh`） |
-| 单元 | **`/api/config` 的键名与失败语义**：snake_case 键齐备；核心未装配快照时**返回错误而不是全零配置** | [`../../console/cmd/console/config_test.go`](../../console/cmd/console/config_test.go) |
-| 单元 | 核心侧快照 RPC：未装配 ⇒ `Unimplemented` · 逐字段映射 · 提供方报错 ⇒ `Internal` | [`../../core/internal/control/telemetry_test.go`](../../core/internal/control/telemetry_test.go)（`TestTelemetryService_Snapshot*`） |
-| 单元 | 广播中心三条纪律：**不阻塞**（慢订阅者拖不死上报）· **丢最旧并计数** · 无订阅者零成本；并发 Publish×Close（`-race`） | [`../../core/internal/telemetry/hub_test.go`](../../core/internal/telemetry/hub_test.go) |
+| 单元 | **`/api/config` 的键名与失败语义**：snake_case 键齐备；核心未装配快照时**返回错误而不是全零配置** | [`../../modules/console/cmd/console/config_test.go`](../../modules/console/cmd/console/config_test.go) |
+| 单元 | 核心侧快照 RPC：未装配 ⇒ `Unimplemented` · 逐字段映射 · 提供方报错 ⇒ `Internal` | [`../../common/core/internal/control/telemetry_test.go`](../../common/core/internal/control/telemetry_test.go)（`TestTelemetryService_Snapshot*`） |
+| 单元 | 广播中心三条纪律：**不阻塞**（慢订阅者拖不死上报）· **丢最旧并计数** · 无订阅者零成本；并发 Publish×Close（`-race`） | [`../../common/core/internal/telemetry/hub_test.go`](../../common/core/internal/telemetry/hub_test.go) |
 | 单元 | **幂等命中不重复推**（同 id 第二次上报不产生第二条流消息） | 同上（`TestCollector_DoesNotPublishDuplicates`） |
 | 集成（实测） | 端到端时效：核心记录 → 页面 SSE 收到，**3 ms**（回环）；带 `since` 重连能补到历史 | 变更包 [`../plans/2026-09-21-observability-push.md`](../plans/2026-09-21-observability-push.md) §6 |
-| 安全 | 页面渲染攻击者可控字符串用 DOM + `textContent`（**禁止** `innerHTML` 拼接） | [`../../console/web/index.html`](../../console/web/index.html) 顶部注释 |
+| 安全 | 页面渲染攻击者可控字符串用 DOM + `textContent`（**禁止** `innerHTML` 拼接） | [`../../modules/console/web/index.html`](../../modules/console/web/index.html) 顶部注释 |
 
 > ⚠️ **语言偏离设计**：设计写 TypeScript，本轮实现为 Go + 静态页（按用户裁定不引入前端工具链）——
 > 见 [`../background/decisions/0020-console-minimal-static-ui.md`](../background/decisions/0020-console-minimal-static-ui.md)。
@@ -94,9 +94,9 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 实跑 | 页面与全部只读接口（个数与参数以 [`../spec/console-api.md`](../spec/console-api.md) §2 为准，本节不重复计数） | `console/web/index.html` + `scripts/demo/run.sh`（见 [`../ops/functional-verification.md`](../ops/functional-verification.md) §7） |
+| 实跑 | 页面与全部只读接口（个数与参数以 [`../spec/console-api.md`](../spec/console-api.md) §2 为准，本节不重复计数） | `modules/console/web/index.html` + `scripts/demo/run.sh`（见 [`../ops/functional-verification.md`](../ops/functional-verification.md) §7） |
 | 集成 | 策略发布 → 回执对账 | 同上 |
-| 契约 | 与 `api/policy/v1` 的一致性测试（`ST-6`：文档由 proto 生成） | 同上 |
+| 契约 | 与 `common/api/policy/v1` 的一致性测试（`ST-6`：文档由 proto 生成） | 同上 |
 
 ## 8. 未决项
 
@@ -118,7 +118,7 @@
 | 项 | 内容 |
 | --- | --- |
 | 接口 | **`GET /api/graphs?limit=N`（逐请求链路，页面主视图）** · `GET /api/topology?limit=N`（聚合视图，程序化用）· `GET /api/trace?decision_id=...`（单请求四段详情） |
-| 聚合逻辑 | [`../../console/internal/topology/`](../../console/internal/topology/)（纯函数 + 单测；join 键 = `decision_id`） |
+| 聚合逻辑 | [`../../modules/console/internal/topology/`](../../modules/console/internal/topology/)（纯函数 + 单测；join 键 = `decision_id`） |
 | 逐步详情 | 链路里**每一步可点**：显示该步的「请求 / 响应 / 为什么执行」三段（数据随 `/api/graphs` 一起返回，点开无需再请求） |
 | 页面 | **每条请求一张横向小图**（客户端 → 适配器 → 分支/核心判定 → 决策 → 实际落点 → **内容注入**），每跳写该请求自己的值；5 秒刷新（新流量在最上）；筛选：告警/高风险/幻境/源站；点卡片看四段详情；**禁止 `innerHTML`** |
 | 内容注入跳 | 仅当逐请求事件的 `inject=applied` 且 `content_id` 非空时出现（`ADR-0023`）；没注入时**不编出一跳** —— 实情留在 `inject` 字段（`disabled` / `no_content` / `off`）里（单测：`TestInjectionHopAppearsOnlyWhenApplied`） |

@@ -12,12 +12,12 @@
 
 | 项 | 内容 |
 | --- | --- |
-| 代码 | [`deception/proxy/`](../../deception/proxy)（14 个 Go 文件 · **58 个测试函数**） |
+| 代码 | [`modules/deception/proxy/`](../../modules/deception/proxy)（14 个 Go 文件 · **58 个测试函数**） |
 | 技术点 | 内嵌 Caddy 承担转发与 TLS（`ADR-0017`），本模块实现 Caddy 中间件 `http.handlers.shen_proxy`；上游为 `SHEN_PROXY_UPSTREAM` |
 | 已实现的行为 | 白名单先于判定（`INT-25`）· 本地判定缓存（`ST-10`）· 调核心判定（gRPC `S1`，deadline 3ms `AR-29`）· 三值处置 · 异步上报（`AR-6`）· 失败放行（`NI-3`/`NI-4`）· 响应头卫生（`OH-2`）· 建连预热（`K-24`） |
-| 形态覆盖 | ③ 反向代理前置 与 ④ Sidecar 是**同一份实现**；① 旁路镜像在 [`deception/mirror/`](../../deception/mirror)；② DNS 引流是**纯配置**（[`deception/dns/`](../../deception/dns)） |
-| 怎么验 | `scripts/shen.sh up` → 开控制台看 DAG；`make docker-log S=proxy`（看「路由：… 落点=…」）；`go test ./deception/proxy/` |
-| 边界已锁 | WebSocket 101 · SSE 不缓冲 · 2 MiB 响应不注入 · 8 MiB 上传不丢字节（见 [`forwarding_test.go`](../../deception/proxy/forwarding_test.go)） |
+| 形态覆盖 | ③ 反向代理前置 与 ④ Sidecar 是**同一份实现**；① 旁路镜像在 [`modules/deception/mirror/`](../../modules/deception/mirror)；② DNS 引流是**纯配置**（[`modules/deception/dns/`](../../modules/deception/dns)） |
+| 怎么验 | `scripts/shen.sh up` → 开控制台看 DAG；`make docker-log S=proxy`（看「路由：… 落点=…」）；`go test ./modules/deception/proxy/` |
+| 边界已锁 | WebSocket 101 · SSE 不缓冲 · 2 MiB 响应不注入 · 8 MiB 上传不丢字节（见 [`forwarding_test.go`](../../modules/deception/proxy/forwarding_test.go)） |
 
 ### 1.2 流量转发 ✅ 已实现
 
@@ -50,9 +50,9 @@
 | 项 | 内容 |
 | --- | --- |
 | 核心配置 | [`deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml)（153 行）+ 字段全表与约束 [`../spec/config.md`](../spec/config.md)（429 行） |
-| 校验 | **严格拒绝未知键**；示例配置有**漂移守卫单测**（`core/internal/policy` 的 `TestExampleConfigLoads`）；`make check-config` 可干跑 |
+| 校验 | **严格拒绝未知键**；示例配置有**漂移守卫单测**（`common/core/internal/policy` 的 `TestExampleConfigLoads`）；`make check-config` 可干跑 |
 | 策略面（S4） | 改道后端表 / 白名单 / 注入规则经 `Pull` + `Ack` 下发（`ADR-0018`），载荷契约 [`../spec/policy-payload.md`](../spec/policy-payload.md)；远端优先、本地兜底 |
-| 适配器/控制台/L4 | 适配器的全量环境变量示例：[`../../deception/proxy/config/front-proxy.example.env`](../../deception/proxy/config/front-proxy.example.env)（含 `SHEN_PROXY_INJECT_CONTENT`）；部署入口的变量在 [`../../deploy/docker/README.md`](../../deploy/docker/README.md) 与 [`deploy/docker/compose.yaml`](../../deploy/docker/compose.yaml)；本地进程起法见 [`../ops/runbook.md`](../ops/runbook.md) §1.2 |
+| 适配器/控制台/L4 | 适配器的全量环境变量示例：[`../../modules/deception/proxy/config/front-proxy.example.env`](../../modules/deception/proxy/config/front-proxy.example.env)（含 `SHEN_PROXY_INJECT_CONTENT`）；部署入口的变量在 [`../../deploy/docker/README.md`](../../deploy/docker/README.md) 与 [`deploy/docker/compose.yaml`](../../deploy/docker/compose.yaml)；本地进程起法见 [`../ops/runbook.md`](../ops/runbook.md) §1.2 |
 | 部署 | `deploy/docker/`（3 镜像 + compose + README）；验证配方 `deploy/config/config.verify-mirage.yaml` + `deploy/docker/compose.verify-mirage.yaml` |
 | 怎么验 | `make check-config` · `scripts/shen.sh status` · `scripts/shen.sh doctor` |
 
@@ -63,12 +63,12 @@
 
 | 层 | 状态 | 说明 |
 | --- | --- | --- |
-| **注入机制** | ✅ 已实现 | [`deception/injection/`](../../deception/injection)：只改**改道侧** HTML 响应（`INT-8`），按 `marker` 定位、找不到就跳过（不阻断响应）；规则由策略面 `inject_rules` 下发（`injects[]` 为 `[]` 表示显式关闭） |
+| **注入机制** | ✅ 已实现 | [`modules/deception/injection/`](../../modules/deception/injection)：只改**改道侧** HTML 响应（`INT-8`），按 `marker` 定位、找不到就跳过（不阻断响应）；规则由策略面 `inject_rules` 下发（`injects[]` 为 `[]` 表示显式关闭） |
 | **AI 能力服务**（生成出口） | ✅ **已实现（阶段 A）** | [`analysis/aicap/`](../../analysis/aicap)：唯一出口 `generate(TaskSpec) → Envelope`，**内部强制走护栏**（前置三段式提示词 + 后置四关）——未登记的 kind 必拒、缺护栏档案**启动期就失败**（`AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)）。**已解耦**（[ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md)）：内核不认识「内容」，接一个新消费方 = 加 `produce`/`build` + 一条登记（[`../spec/ai-contract.md`](../spec/ai-contract.md) §6），内核零改动；「独立」由 `make archcheck` 的 `MD-4` 项保证 |
 | **欺骗内容通路** | ✅ **已实现（阶段 A）** | 离线生成 → 过护栏 → 清单（[`../spec/ai-contract.md`](../spec/ai-contract.md)）→ 核心装载进 `store.ContentStore` → 策略面 `content_manifest` 下发 → 适配器按（资源 + 会话哈希）**确定性命中**并注入改道侧；DAG 上多一跳「内容注入」 |
 | **三层开关** | ✅ 已实现（默认全关） | `ai.enabled`（能力）· `inject_enabled`（下发）· `SHEN_PROXY_INJECT_CONTENT`（适配器兜底，默认 `false`）——取**与**；不打开时行为与以前逐字节一致 |
-| 诱饵资产 | 🟡 定义与多态已实现 | [`core/internal/decoy/`](../../core/internal/decoy)（`MD-25` observe-only）；**资产内容 → 边缘的执行通路未接通**（设计登记的未接通项） |
-| 欺骗响应一致性 | ✅ 已实现 | [`core/internal/responder/`](../../core/internal/responder)：同 `(会话, 资源)` 命中同一内容（`AR-30`，禁非确定性） |
+| 诱饵资产 | 🟡 定义与多态已实现 | [`common/core/internal/decoy/`](../../common/core/internal/decoy)（`MD-25` observe-only）；**资产内容 → 边缘的执行通路未接通**（设计登记的未接通项） |
+| 欺骗响应一致性 | ✅ 已实现 | [`common/core/internal/responder/`](../../common/core/internal/responder)：同 `(会话, 资源)` 命中同一内容（`AR-30`，禁非确定性） |
 | LLM 契约纪律 | ✅ 已实现 | [`analysis/llm/`](../../analysis/llm)：契约校验（`AR-15`）· 信封（`AR-16`）· 三段式解析（`AR-17`）· 双阶段收尾（`AR-19`…`AR-21`）· 黑名单（`AR-22`）· 提示词资源化（`AR-24`）· 注入防护（`AR-31`/`AR-32`） |
 | L4 分析链路 | ✅ 已实现（近线） | [`analysis/worker.py`](../../analysis/worker.py)：读事件 → 去重（`AR-14`）→ 意图/攻击链/策略 → 结论事件；**不持有执行能力**（`AR-32`） |
 | **真实模型后端** | ❌ **未接入（阶段 B）** | 阶段 A 的生成器是**确定性模板生成器**（证明通路 + 保证**生成期**可复现 —— 那是阶段 A 的工程性质，**不是** `AR-30` 的要求）；接模型时 `UnconfiguredClient` **显式失败**（`AR-15`：禁止用模板冒充模型输出） |
@@ -88,14 +88,14 @@
 
 | 能力 | 状态 | 代码 | 怎么验 |
 | --- | --- | --- | --- |
-| 判定打分（规则求值） | ✅ | [`core/internal/judge/`](../../core/internal/judge) | `make replay` |
-| 三值决策 + 灰度 | ✅ | [`core/internal/director/`](../../core/internal/director) | DAG「决策」跳 · 验证配方 |
-| 会话身份 / 隔离短路 | ✅ | [`core/internal/session/`](../../core/internal/session) · [`isolation/`](../../core/internal/isolation) | 单测 + `doctor` ③ |
-| 策略装载 / 下发 / 回执 | ✅ | [`core/internal/policy/`](../../core/internal/policy) | `make docker-log S=proxy`（已应用策略 …） |
-| 事件上报 / 读侧 | ✅ | [`core/internal/telemetry/`](../../core/internal/telemetry) · `/api/events` | `scripts/shen.sh verify` |
-| 存储（内存实现） | 🟡 | [`core/internal/store/`](../../core/internal/store) | 重启丢数据 —— 真实存储待接（`NI-13`） |
-| 蜜罐**接入架构** | 🟡 | [`honeypot/protocol/`](../../honeypot/protocol) · [`core/internal/honeypot/`](../../core/internal/honeypot) | 协议注册/运行框架/最小适配器已就绪；**协议栈内容待专项调研**（用户裁定） |
-| L3 网络欺骗（声明式） | 🟡 | [`deception/netpolicy/`](../../deception/netpolicy) | 三份 Cilium/Tetragon 模板；需集群侧加载 |
+| 判定打分（规则求值） | ✅ | [`common/core/internal/judge/`](../../common/core/internal/judge) | `make replay` |
+| 三值决策 + 灰度 | ✅ | [`common/core/internal/director/`](../../common/core/internal/director) | DAG「决策」跳 · 验证配方 |
+| 会话身份 / 隔离短路 | ✅ | [`common/core/internal/session/`](../../common/core/internal/session) · [`isolation/`](../../common/core/internal/isolation) | 单测 + `doctor` ③ |
+| 策略装载 / 下发 / 回执 | ✅ | [`common/core/internal/policy/`](../../common/core/internal/policy) | `make docker-log S=proxy`（已应用策略 …） |
+| 事件上报 / 读侧 | ✅ | [`common/core/internal/telemetry/`](../../common/core/internal/telemetry) · `/api/events` | `scripts/shen.sh verify` |
+| 存储（内存实现） | 🟡 | [`common/core/internal/store/`](../../common/core/internal/store) | 重启丢数据 —— 真实存储待接（`NI-13`） |
+| 蜜罐**接入架构** | 🟡 | [`modules/honeypot/protocol/`](../../modules/honeypot/protocol) · [`common/core/internal/honeypot/`](../../common/core/internal/honeypot) | 协议注册/运行框架/最小适配器已就绪；**协议栈内容待专项调研**（用户裁定） |
+| L3 网络欺骗（声明式） | 🟡 | [`modules/deception/netpolicy/`](../../modules/deception/netpolicy) | 三份 Cilium/Tetragon 模板；需集群侧加载 |
 | 伪造流量与验证 | ✅ | [`scripts/traffic/`](../../scripts/traffic) | `scripts/shen.sh traffic --check-graph --check-l4` |
 
 ---

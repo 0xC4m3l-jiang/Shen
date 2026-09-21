@@ -1,6 +1,6 @@
 """遥测面端口（L4 的**唯一**外部 I/O）。
 
-契约来自 `api/telemetry/v1/telemetry.proto`：
+契约来自 `common/api/telemetry/v1/telemetry.proto`：
 - 读：`ListEvents`（拉最近事件）；
 - 写：`Report`（上报**结论事件**，幂等键 `event_id`）。
 

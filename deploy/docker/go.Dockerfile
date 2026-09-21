@@ -4,7 +4,7 @@
 # 拆成三份只会让「依赖升级」变成三处修改。
 #
 # 用法（compose 已接好，一般不用手敲）：
-#   docker build -f deploy/docker/go.Dockerfile --build-arg SERVICE=./core/cmd/core -t shen-core .
+#   docker build -f deploy/docker/go.Dockerfile --build-arg SERVICE=./common/core/cmd/core -t shen-core .
 #
 # syntax=docker/dockerfile:1
 
@@ -18,10 +18,10 @@ WORKDIR /src
 # 先拷依赖清单与 vendor：只改源码时这一层仍命中缓存，后续构建快得多。
 COPY go.mod go.sum ./
 COPY vendor/ ./vendor/
-COPY api/ ./api/
-COPY core/ ./core/
-COPY deception/ ./deception/
-COPY console/ ./console/
+COPY common/api/ ./common/api/
+COPY common/core/ ./common/core/
+COPY modules/deception/ ./modules/deception/
+COPY modules/console/ ./modules/console/
 COPY scripts/ ./scripts/
 # CGO_ENABLED=0：静态二进制，运行镜像不需要 libc。
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app "${SERVICE}"

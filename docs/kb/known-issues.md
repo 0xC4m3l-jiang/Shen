@@ -43,7 +43,7 @@ pattern ./...: directory prefix . does not contain main module or its selected d
 
 **原因**：`go.mod` 在 `src/` 里 —— Go 工具链、编辑器、任何默认配置都按「仓库根 = 模块根」的约定工作，多一层就全部要特判。
 
-**结论**：**代码不放 `src/`**，按架构平面扁平放（`core/` `deception/` `deception/` `analysis/` `console/`）。
+**结论**：**代码不放 `src/`**，按架构平面扁平放（`common/core/` `modules/deception/` `modules/deception/` `analysis/` `modules/console/`）。
 代价是顶层目录多几个，换来的是工具链零摩擦。见 ADR-0007。
 
 ---
@@ -89,7 +89,7 @@ method Memory.Get already declared
 
 ## K-6 · protoc 生成 Go 代码会多套一层目录
 
-**症状**：生成了 `api/judge/v1/shen/api/judge/v1/judge.pb.go` 这类嵌套路径。
+**症状**：生成了 `common/api/judge/v1/shen/common/api/judge/v1/judge.pb.go` 这类嵌套路径。
 
 **原因**：没有告诉 protoc 模块根在哪，它把 `go_package` 里的完整路径当成了相对路径。
 
@@ -99,7 +99,7 @@ method Memory.Get already declared
 protoc -I api \
   --go_out=. --go_opt=module=shen \
   --go-grpc_out=. --go-grpc_opt=module=shen \
-  api/judge/v1/judge.proto
+  common/api/judge/v1/judge.proto
 ```
 
 `make generate` 已经封好了这个命令。
@@ -342,14 +342,14 @@ L[n-1] = new          # 行号定位，不猜缩进
 **症状**：把形态①（旁路镜像）的接收端逻辑照搬给形态③（反向代理）时，
 业务侧收到的请求体变成空 —— 因为复制端「读观测」时把 `r.Body` 读空了。
 
-**原因**：`deception/mirror` 处理的是流量**副本**，读 body 没有任何副作用，
+**原因**：`modules/deception/mirror` 处理的是流量**副本**，读 body 没有任何副作用，
 所以它把 body 塞进了 `headers["x-observed-body-prefix"]`。
 但代理要**继续转发**同一个请求，读掉 body 就没得转了；
 若改成「读进来再回填」还要全量缓冲，大文件上传会同时拖垮延迟与内存。
 
 **结论**：**路径上的组件只读头与路径，不碰 body。**
 
-而且判定面契约本来就支持这个结论 —— `api/judge/v1` 的 `Observation`
+而且判定面契约本来就支持这个结论 —— `common/api/judge/v1` 的 `Observation`
 **根本没有 body 字段**，是接收端自己往里塞了一个非契约的头。
 契约已经给出了正确答案，是实现时多做了。
 

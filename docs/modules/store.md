@@ -5,7 +5,7 @@
 | 模块名 | `store` |
 | 所属层 | 核心 |
 | 实现语言 | Go |
-| 源码目录 | `core/internal/store/` |
+| 源码目录 | `common/core/internal/store/` |
 | 负责人 | —— |
 | 状态 | 阶段 1（内存实现） 已实现（含单测） |
 | 最后更新 | 2026-09-17 |
@@ -31,8 +31,8 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 / 输出 | `SessionStore` / `IsolationStore` / `DecisionStore` / `EventStore` / `PolicyStore` / `DecoyStore` / `ContentStore` | `core/internal/store/iface.go` |
-| 阶段 1 实现 | `Memory` 系列（每个实体一个类型） | `core/internal/store/memory.go` |
+| 输入 / 输出 | `SessionStore` / `IsolationStore` / `DecisionStore` / `EventStore` / `PolicyStore` / `DecoyStore` / `ContentStore` | `common/core/internal/store/iface.go` |
+| 阶段 1 实现 | `Memory` 系列（每个实体一个类型） | `common/core/internal/store/memory.go` |
 
 > 为什么按实体拆：Go 不支持方法重载，一个结构体无法同时实现两个都有 `Get`/`Put` 的接口。
 > 拆开还让单测替身只需实现它用到的那一两个方法。

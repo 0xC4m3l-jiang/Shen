@@ -30,7 +30,7 @@
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
 | 输入 | 声明式网络策略（来自 `policy`） | [`../spec/config.md`](../spec/config.md) |
-| 输出 | 隔离 / 阻断动作 + 运行时事件 | `api/telemetry/v1` |
+| 输出 | 隔离 / 阻断动作 + 运行时事件 | `common/api/telemetry/v1` |
 
 ## 3. 依赖
 
@@ -72,12 +72,12 @@
 ## 7. 测试
 
 > **本模块无源码**，产物是声明式策略：验证靠**集群侧校验**（`kubectl apply --dry-run=server` / `cilium policy` / `tetragon` 加载），
-> 以及运行时事件是否经适配器回流到遥测面。当前为**文档级约定**（见 [`../../deception/netpolicy/README.md`](../../deception/netpolicy/README.md)）。
+> 以及运行时事件是否经适配器回流到遥测面。当前为**文档级约定**（见 [`../../modules/deception/netpolicy/README.md`](../../modules/deception/netpolicy/README.md)）。
 
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 语法 | 三份声明式产物可被 YAML 解析、`kind` 正确 | `deception/netpolicy/config/`（已交付） |
+| 语法 | 三份声明式产物可被 YAML 解析、`kind` 正确 | `modules/deception/netpolicy/config/`（已交付） |
 | 集群校验 | `kubectl apply --dry-run=server` / `cilium policy` / Tetragon 加载 | 接入演练（需真实集群） |
 | 失效路径 | eBPF 加载失败 → **降级为无隔离，绝不阻断业务** | Cilium/Tetragon 自身行为（`NI-1`） |
 | 事件回流 | 运行时事件经适配器进遥测面 | 未接（文档级约定） |

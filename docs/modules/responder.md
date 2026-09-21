@@ -51,7 +51,7 @@
 | --- | --- |
 | **任何 LLM 运行时 / 外呼** | `MD-6`：核心禁止外呼；热路径不放 LLM（[ADR-0014](../background/decisions/0014-generative-deceptive-response.md)） |
 | `judge` / `director` | 依赖方向单向（`MD-4`） |
-| 适配器（`deception/`） | 适配器 → 核心单向；**注入执行**在 `edge-injection` |
+| 适配器（`modules/deception/`） | 适配器 → 核心单向；**注入执行**在 `edge-injection` |
 
 ## 4. 关键规则
 
@@ -89,7 +89,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 黑名单（`AR-22`：泄露/自曝/超长）· 长度上限（`AR-23`）· 模板自身必须合规 | `core/internal/responder/responder_test.go` · `blacklist.go` |
+| 单元 | 黑名单（`AR-22`：泄露/自曝/超长）· 长度上限（`AR-23`）· 模板自身必须合规 | `common/core/internal/responder/responder_test.go` · `blacklist.go` |
 | 单元 | 黑名单（`AR-22`）三类各一例 | 同上 |
 | 单元 | 模板缺失 → 回落业务 | 同上 |
 | 重放测试 | 同会话翻页 / 重试得到同答案（`AR-30`） | 同上 |

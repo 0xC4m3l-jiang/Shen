@@ -5,7 +5,7 @@
 | 模块名 | `control` |
 | 所属层 | 核心 |
 | 实现语言 | Go |
-| 源码目录 | `core/internal/control/` |
+| 源码目录 | `common/core/internal/control/` |
 | 负责人 | —— |
 | 状态 | 阶段 1（判定面 + 遥测面） 已实现（含单测） |
 | 最后更新 | 2026-09-17 |
@@ -34,18 +34,18 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 | `api/judge/v1` 的 `JudgeRequest` | `api/judge/v1/judge.proto` |
-| 输出 | `api/judge/v1` 的 `JudgeResponse`（只含 action / severity / backend） | 同上 |
-| 输入 / 输出 | `api/telemetry/v1` 的 `TelemetryEvent` / `ReportAck` | `api/telemetry/v1/telemetry.proto` |
-| 输入 / 输出 | `api/policy/v1`（**阶段 2 未实现**） | `api/policy/v1/policy.proto` |
+| 输入 | `common/api/judge/v1` 的 `JudgeRequest` | `common/api/judge/v1/judge.proto` |
+| 输出 | `common/api/judge/v1` 的 `JudgeResponse`（只含 action / severity / backend） | 同上 |
+| 输入 / 输出 | `common/api/telemetry/v1` 的 `TelemetryEvent` / `ReportAck` | `common/api/telemetry/v1/telemetry.proto` |
+| 输入 / 输出 | `common/api/policy/v1`（**阶段 2 未实现**） | `common/api/policy/v1/policy.proto` |
 
 ## 3. 依赖
 
 | 允许依赖 | 原因 |
 | --- | --- |
-| `api/*` 生成的 stub | 跨进程契约 |
+| `common/api/*` 生成的 stub | 跨进程契约 |
 | `contract` | 内部共享类型 |
-| `judge` / `session` / `telemetry` | 都在 `core/` 内，是它的下游 |
+| `judge` / `session` / `telemetry` | 都在 `common/core/` 内，是它的下游 |
 
 | 禁止依赖 | 原因 |
 | --- | --- |
@@ -92,7 +92,7 @@
 
 | # | 未决 | 阻塞什么 | 去向 |
 | --- | --- | --- | --- |
-| 1 | **本模块是否为独立模块**（若否，服务面需挪进 `core/cmd/core/`） | 清单与代码的一致性 | `architecture.md` §10.2 缺口 12 |
+| 1 | **本模块是否为独立模块**（若否，服务面需挪进 `common/core/cmd/core/`） | 清单与代码的一致性 | `architecture.md` §10.2 缺口 12 |
 | 2 | 策略面（`Pull` / `Watch` / `Ack`）未实现 | 阶段 2 的策略下发 | 阶段 2 |
 | 3 | gRPC 的 mTLS —— 阶段 1 用本机明文 | 跨节点部署 | `structure.md` §4 |
 

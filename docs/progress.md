@@ -23,31 +23,31 @@
 
 | # | 模块 | 介绍（做什么） | 层 | 语言 | 源码目录 | 文档 | 代码 | 阶段 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `judge` | **判定**：观测 → 风险分 + 信号 + 证据；含 Agent 指纹（置信度/证据链）与消费会话特征 | 核心 | Go | `core/internal/judge/` | ✅ [`modules/judge.md`](modules/judge.md) | ✅ 2 文件 + 1 单测 | 1 |
-| 2 | `director` | **决策**：风险分 → 三值（放行/改道/拦截）+ 后端名，按灰度确定性收敛 | 核心 | Go | `core/internal/director/` | ✅ [`modules/director.md`](modules/director.md) | ✅ 2 文件 + 1 单测 | 2a |
-| 3 | `responder` | **响应生成**：产出「像真实业务」的响应（快模板 + 慢预生成）；同会话同资源同答案（`AR-30`） | 核心 | Go | `core/internal/responder/` | ✅ [`modules/responder.md`](modules/responder.md) | ✅ 2 文件 + 1 单测 | 2b |
-| 4 | `session` | **会话**：三级优先级提取身份 + 会话状态（速度/挑战逃逸）+ 归因令牌（蜜标/水印） | 核心 | Go | `core/internal/session/` | ✅ [`modules/session.md`](modules/session.md) | ✅ 2 文件 + 1 单测 | 1 |
-| 5 | `isolation` | **隔离**：隔离记录 / TTL 过期 / 查询短路（命中则不调核心，客户端**不可见**） | 核心 | Go | `core/internal/isolation/` | ✅ [`modules/isolation.md`](modules/isolation.md) | ✅ 2 文件 + 1 单测 | 2b |
-| 6 | `policy` | **策略**：规则与阈值的版本化装载 + 灰度比例 + **下发与回执**（`api/policy/v1` 的 `Pull` / `Ack`）+ 边缘投影（后端表 / 白名单 / **响应改写规则**） | 核心 | Go | `core/internal/policy/` | ✅ [`modules/policy.md`](modules/policy.md) | ✅ 3 文件 + 2 单测（22 例；`Watch` 未实现，见 [ADR-0018](background/decisions/0018-policy-plane-pull-model.md)） | 2a |
-| 7 | `telemetry` | **遥测**：事件归一化 + 批量异步上报 + 失败缓冲重放 | 核心 | Go | `core/internal/telemetry/` | ✅ [`modules/telemetry.md`](modules/telemetry.md) | ✅ 2 文件 + 1 单测 | 1 |
-| 8 | `store` | **存储**：Redis / ClickHouse / PostgreSQL 访问层 —— **核心唯一的 I/O 出口** | 核心 | Go | `core/internal/store/` | ✅ [`modules/store.md`](modules/store.md) | ✅ 2 文件 + 1 单测 | 1 |
-| 9 | `edge-injection` | **投毒改写 / 假路径 / 蜜饵注入**（被适配器引用，**不独立部署** `ST-5`） | L1 | Go | `deception/injection/` | ✅ [`modules/edge-injection.md`](modules/edge-injection.md) | ✅ 2 文件 + 1 单测 | 2b |
-| 10 | `adapter-mirror` | **① 旁路镜像**接收端：只读采集，**不处置**（不在请求路径上） | L1 | 配置 + Go | `deception/mirror/` | ✅ [`modules/adapter-mirror.md`](modules/adapter-mirror.md) | ✅ 接收端 + 单测；`config/` 三份模板 | 1 |
-| 11 | **`adapter-proxy`**（③前置 + ④边车） | **同一实现**：拦截 → 调核心 → 按决策选 upstream → 异步上报；转发与 TLS 终结用内嵌 Caddy（[ADR-0017](background/decisions/0017-caddy-l1-base.md)）；改道后端表与白名单可经**策略面**下发（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)） | L1 | Go | `deception/proxy/` | ✅ [`modules/adapter-proxy.md`](modules/adapter-proxy.md) | ✅ 39 测试（含 `-race`、内嵌 Caddy 端到端与策略应用语义） | 2a |
+| 1 | `judge` | **判定**：观测 → 风险分 + 信号 + 证据；含 Agent 指纹（置信度/证据链）与消费会话特征 | 核心 | Go | `common/core/internal/judge/` | ✅ [`modules/judge.md`](modules/judge.md) | ✅ 2 文件 + 1 单测 | 1 |
+| 2 | `director` | **决策**：风险分 → 三值（放行/改道/拦截）+ 后端名，按灰度确定性收敛 | 核心 | Go | `common/core/internal/director/` | ✅ [`modules/director.md`](modules/director.md) | ✅ 2 文件 + 1 单测 | 2a |
+| 3 | `responder` | **响应生成**：产出「像真实业务」的响应（快模板 + 慢预生成）；同会话同资源同答案（`AR-30`） | 核心 | Go | `common/core/internal/responder/` | ✅ [`modules/responder.md`](modules/responder.md) | ✅ 2 文件 + 1 单测 | 2b |
+| 4 | `session` | **会话**：三级优先级提取身份 + 会话状态（速度/挑战逃逸）+ 归因令牌（蜜标/水印） | 核心 | Go | `common/core/internal/session/` | ✅ [`modules/session.md`](modules/session.md) | ✅ 2 文件 + 1 单测 | 1 |
+| 5 | `isolation` | **隔离**：隔离记录 / TTL 过期 / 查询短路（命中则不调核心，客户端**不可见**） | 核心 | Go | `common/core/internal/isolation/` | ✅ [`modules/isolation.md`](modules/isolation.md) | ✅ 2 文件 + 1 单测 | 2b |
+| 6 | `policy` | **策略**：规则与阈值的版本化装载 + 灰度比例 + **下发与回执**（`common/api/policy/v1` 的 `Pull` / `Ack`）+ 边缘投影（后端表 / 白名单 / **响应改写规则**） | 核心 | Go | `common/core/internal/policy/` | ✅ [`modules/policy.md`](modules/policy.md) | ✅ 3 文件 + 2 单测（22 例；`Watch` 未实现，见 [ADR-0018](background/decisions/0018-policy-plane-pull-model.md)） | 2a |
+| 7 | `telemetry` | **遥测**：事件归一化 + 批量异步上报 + 失败缓冲重放 | 核心 | Go | `common/core/internal/telemetry/` | ✅ [`modules/telemetry.md`](modules/telemetry.md) | ✅ 2 文件 + 1 单测 | 1 |
+| 8 | `store` | **存储**：Redis / ClickHouse / PostgreSQL 访问层 —— **核心唯一的 I/O 出口** | 核心 | Go | `common/core/internal/store/` | ✅ [`modules/store.md`](modules/store.md) | ✅ 2 文件 + 1 单测 | 1 |
+| 9 | `edge-injection` | **投毒改写 / 假路径 / 蜜饵注入**（被适配器引用，**不独立部署** `ST-5`） | L1 | Go | `modules/deception/injection/` | ✅ [`modules/edge-injection.md`](modules/edge-injection.md) | ✅ 2 文件 + 1 单测 | 2b |
+| 10 | `adapter-mirror` | **① 旁路镜像**接收端：只读采集，**不处置**（不在请求路径上） | L1 | 配置 + Go | `modules/deception/mirror/` | ✅ [`modules/adapter-mirror.md`](modules/adapter-mirror.md) | ✅ 接收端 + 单测；`config/` 三份模板 | 1 |
+| 11 | **`adapter-proxy`**（③前置 + ④边车） | **同一实现**：拦截 → 调核心 → 按决策选 upstream → 异步上报；转发与 TLS 终结用内嵌 Caddy（[ADR-0017](background/decisions/0017-caddy-l1-base.md)）；改道后端表与白名单可经**策略面**下发（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)） | L1 | Go | `modules/deception/proxy/` | ✅ [`modules/adapter-proxy.md`](modules/adapter-proxy.md) | ✅ 39 测试（含 `-race`、内嵌 Caddy 端到端与策略应用语义） | 2a |
 | ~~12~~ | ~~`adapter-sidecar`~~ | ❌ 已合并入第 11 行（同一份代码的另一种部署形态） | —— | —— | ❌ 已合并入第 11 行 | —— | —— | —— |
-| 13 | `adapter-dns` | **② DNS 引流**：按来源解析到引擎或真实服务（**纯配置，无源码**） | L1 | 配置 | `deception/dns/` | ✅ [`modules/adapter-dns.md`](modules/adapter-dns.md) | ✅ **配置已就绪**（Corefile + 生效校验/回退说明，验证靠两条 `dig`） | 2a |
-| 14 | `honeypot-protocol` | 协议仿真（SSH / MySQL / Redis / FTP…）+ 交互捕获；**可选自研** | L2 | Go / Rust | `honeypot/protocol/` | ✅ [`modules/honeypot-protocol.md`](modules/honeypot-protocol.md) | ✅ **框架 + 7 例单测**（协议栈待设计，见模块文档 §8） | 3 |
-| 15 | `honeypot-shell` | 命令表分发 + 内存文件系统 + 文件投递（含会话水印）；**可选自研** | L2 | Go / Rust | `honeypot/shell/` | ✅ [`modules/honeypot-shell.md`](modules/honeypot-shell.md) | ⏸ **推迟**（先交付接入架构；内容层待调研） | 3 |
-| 16 | `netpolicy` | 微隔离 + 假拓扑 + 运行时检测（复用 Cilium / Tetragon） | L3 | 声明式 + eBPF | `deception/netpolicy/` | ✅ [`modules/netpolicy.md`](modules/netpolicy.md) | 🟡 **声明式产物已就绪**（三份模板，无源码） | 3 |
+| 13 | `adapter-dns` | **② DNS 引流**：按来源解析到引擎或真实服务（**纯配置，无源码**） | L1 | 配置 | `modules/deception/dns/` | ✅ [`modules/adapter-dns.md`](modules/adapter-dns.md) | ✅ **配置已就绪**（Corefile + 生效校验/回退说明，验证靠两条 `dig`） | 2a |
+| 14 | `honeypot-protocol` | 协议仿真（SSH / MySQL / Redis / FTP…）+ 交互捕获；**可选自研** | L2 | Go / Rust | `modules/honeypot/protocol/` | ✅ [`modules/honeypot-protocol.md`](modules/honeypot-protocol.md) | ✅ **框架 + 7 例单测**（协议栈待设计，见模块文档 §8） | 3 |
+| 15 | `honeypot-shell` | 命令表分发 + 内存文件系统 + 文件投递（含会话水印）；**可选自研** | L2 | Go / Rust | `modules/honeypot/shell/` | ✅ [`modules/honeypot-shell.md`](modules/honeypot-shell.md) | ⏸ **推迟**（先交付接入架构；内容层待调研） | 3 |
+| 16 | `netpolicy` | 微隔离 + 假拓扑 + 运行时检测（复用 Cilium / Tetragon） | L3 | 声明式 + eBPF | `modules/deception/netpolicy/` | ✅ [`modules/netpolicy.md`](modules/netpolicy.md) | 🟡 **声明式产物已就绪**（三份模板，无源码） | 3 |
 | 17 | `intent` | **意图识别**（侦察 / 利用 / 横向 / 窃取） | L4 | Python | `analysis/intent/` | ✅ [`modules/intent.md`](modules/intent.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 18 | `chain` | **攻击链还原** + **识破信号识别**（触发诱饵再生成） | L4 | Python | `analysis/chain/` | ✅ [`modules/chain.md`](modules/chain.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 19 | `strategy` | **策略生成** + 诱饵再生成决策（经 `policy` 下发） | L4 | Python | `analysis/strategy/` | ✅ [`modules/strategy.md`](modules/strategy.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 20 | `llm-components` | LLM 契约纪律（`AR-15`…`AR-27`）+ **间接注入防护** + 内容预生成 | L4 | Python | `analysis/llm/` | ✅ [`modules/llm-components.md`](modules/llm-components.md)（设计） | ✅ **已实现（框架 + 确定性部分）**（Python，24 项测试） | 3 |
 | 25 | `ai-capability` | **AI 能力服务**：可开关的生成出口（强制护栏）—— 阶段 A 产出欺骗内容 + 内容清单，经策略面下发到改道侧 | L4 | Python | `analysis/aicap/` | ✅ [`modules/ai-capability.md`](modules/ai-capability.md) | ✅ **已实现（阶段 A：通路 + 开关 + 护栏）** | 3 |
-| 21 | `console` | 控制台：**观测（只读）** —— 告警 · 逐判定日志 · 请求流动 · **配置快照** · **观测新鲜度** · **实时流** | 控制台 | **Go + 静态页**（[ADR-0020](background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | `console/` | ✅ [`modules/console.md`](modules/console.md) | ✅ **已实现（最小可用）**（页面 + **11 个**只读接口，清单见 [`spec/console-api.md`](spec/console-api.md) §2） | 2b |
-| 22 | `control` | **服务面**：gRPC 入参映射 · 会话身份提取 · 熔断（`NI-10`）· **禁止回显的强制点** | 核心 | Go | `core/internal/control/` | ✅ [`modules/control.md`](modules/control.md) | ✅ 3 文件 + 1 单测 | 1 |
-| 23 | `decoy` | **诱饵面**：五类（Developer API / 指令文件 / MCP / 数据集 / 蜜饵）+ 多态轮换 | 核心 | Go | `core/internal/decoy/` | ✅ [`modules/decoy.md`](modules/decoy.md) | ✅ 2 文件 + 1 单测 | 2b |
-| 24 | `honeypot` | **蜜罐入口**：类型注册 + `config` 开关 + 后端池解析；**不实现具体蜜罐**（接第三方） | 核心 | Go | `core/internal/honeypot/` | ✅ [`modules/honeypot.md`](modules/honeypot.md) | ✅ 2 文件 + 1 单测 | 2b |
+| 21 | `console` | 控制台：**观测（只读）** —— 告警 · 逐判定日志 · 请求流动 · **配置快照** · **观测新鲜度** · **实时流** | 控制台 | **Go + 静态页**（[ADR-0020](background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | `modules/console/` | ✅ [`modules/console.md`](modules/console.md) | ✅ **已实现（最小可用）**（页面 + **11 个**只读接口，清单见 [`spec/console-api.md`](spec/console-api.md) §2） | 2b |
+| 22 | `control` | **服务面**：gRPC 入参映射 · 会话身份提取 · 熔断（`NI-10`）· **禁止回显的强制点** | 核心 | Go | `common/core/internal/control/` | ✅ [`modules/control.md`](modules/control.md) | ✅ 3 文件 + 1 单测 | 1 |
+| 23 | `decoy` | **诱饵面**：五类（Developer API / 指令文件 / MCP / 数据集 / 蜜饵）+ 多态轮换 | 核心 | Go | `common/core/internal/decoy/` | ✅ [`modules/decoy.md`](modules/decoy.md) | ✅ 2 文件 + 1 单测 | 2b |
+| 24 | `honeypot` | **蜜罐入口**：类型注册 + `config` 开关 + 后端池解析；**不实现具体蜜罐**（接第三方） | 核心 | Go | `common/core/internal/honeypot/` | ✅ [`modules/honeypot.md`](modules/honeypot.md) | ✅ 2 文件 + 1 单测 | 2b |
 
 > ✅ 第 12 行 `adapter-sidecar` **已合并入第 11 行 `adapter-proxy`**（同一份代码的另一种部署形态）。
 > 编号保留不重排 —— 编号是引用句柄（同 `D-6` 精神）。因此共 **25 行**（含已合并行），其中 **24 个有效模块**。

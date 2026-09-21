@@ -5,7 +5,7 @@
 | 模块名 | `session` |
 | 所属层 | 核心 |
 | 实现语言 | Go |
-| 源码目录 | `core/internal/session/` |
+| 源码目录 | `common/core/internal/session/` |
 | 负责人 | —— |
 | 状态 | 阶段 1 已实现；阶段 2b 扩充会话状态与归因令牌 |
 | 最后更新 | 2026-09-17 |
@@ -34,7 +34,7 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 | `contract.Observation`（首跳可用信息） | `core/internal/contract/` |
+| 输入 | `contract.Observation`（首跳可用信息） | `common/core/internal/contract/` |
 | 输出 | `contract.SessionKey`（键 + 来源 + 归因） | 同上 |
 | 输出 | `contract.SessionFeatures`（速度 / 挑战逃逸 / 首末次时间，[ADR-0012](../background/decisions/0012-session-level-judgement.md)） | 同上 |
 | 输出 | 归因令牌（蜜标 HMAC + 凭证水印，[ADR-0013](../background/decisions/0013-attribution-token.md)） | 同上 |

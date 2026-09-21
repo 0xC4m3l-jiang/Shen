@@ -17,7 +17,7 @@
 **未接通的**：诱饵资产到边缘的通路；蜜罐只做接入架构（内容待专项调研）；真实模型后端（阶段 B）。
 **能力缺口清单**（查询串不参与判定等）见 [`ops/functional-verification.md`](ops/functional-verification.md) §2。
 
-> ✅ **策略面（`api/policy/v1`）已落地（2026-09-19）**：`Pull` 轮询 + `Ack` 回执，下发改道后端表与白名单（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)）。
+> ✅ **策略面（`common/api/policy/v1`）已落地（2026-09-19）**：`Pull` 轮询 + `Ack` 回执，下发改道后端表与白名单（[ADR-0018](background/decisions/0018-policy-plane-pull-model.md)）。
 > ✅ **AI 欺骗内容注入已落地（2026-09-20，阶段 A）**：`ai-capability` 离线生成（强制过护栏）→ 清单 → 核心装载 →
 > 策略面 `content_manifest` → 适配器注入改道侧（[ADR-0023](background/decisions/0023-deception-content-injection.md)）。
 > 🟡 **仍未接通的是诱饵资产**（`decoy`）—— 需先在核心侧定下它的来源与归属。

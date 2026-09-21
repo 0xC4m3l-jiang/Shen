@@ -24,9 +24,9 @@
 
 ---
 
-## 1. 核心 gRPC 读面（`api/telemetry/v1`）
+## 1. 核心 gRPC 读面（`common/api/telemetry/v1`）
 
-`shen/api/telemetry/v1/telemetry.proto` 的 `DeceptionTelemetry` 服务承载两个读方法：
+`shen/common/api/telemetry/v1/telemetry.proto` 的 `DeceptionTelemetry` 服务承载两个读方法：
 
 | 方法 | 回答什么 | 有「时序」吗 |
 | --- | --- | --- |
@@ -68,14 +68,14 @@
 
 只有两类字段允许进快照：
 
-1. **已经允许离开核心的** —— 策略版本 / 校验和 / AI 配置，它们本就在 `api/policy/v1` 的策略载荷或适配器回执里；
+1. **已经允许离开核心的** —— 策略版本 / 校验和 / AI 配置，它们本就在 `common/api/policy/v1` 的策略载荷或适配器回执里；
 2. **比第一类更弱的描述性信息** —— 例如白名单**条数**（载荷里本来就有全量 CIDR 列表）。
 
 因此**显式不含**：
 
 | 不含 | 为什么 |
 | --- | --- |
-| 判定阈值（`thresholds.*`） | 核心运行参数。`core/internal/contract/thresholds.go` 明确禁止写进 `api/*.proto` 的对外响应；要看它们读 [`config.md`](config.md) |
+| 判定阈值（`thresholds.*`） | 核心运行参数。`common/core/internal/contract/thresholds.go` 明确禁止写进 `common/api/*.proto` 的对外响应；要看它们读 [`config.md`](config.md) |
 | 灰度比例 / 误调度预算 | 同上（运行参数，且不在策略载荷里） |
 | 影子模式标志 | 同上（它是模式，不是配置路径；但它决定了「现在有没有真的在处置」—— 见 §1.4 未解决） |
 | 白名单 / 隔离名单的**内容** | 接入方的资产面；观测只需知道「有几条」 |
@@ -180,13 +180,13 @@
 改任何字段名都**必须**同时做到这三处，否则页面会静默显示 `—`（编译期看不出 JSON 键漂移）：
 
 1. 改本文件；
-2. 改提供方（核心 `core/internal/control/telemetry.go` 的映射 / `core/internal/contract/snapshot.go`）；
-3. 改消费方（控制台 `console/cmd/console/main.go` 的 `*View` 结构 + `console/web/index.html` 的取键），
-   并跑 `go test ./console/cmd/console/`（那里有一条键名测试钉住 snake_case）。
+2. 改提供方（核心 `common/core/internal/control/telemetry.go` 的映射 / `common/core/internal/contract/snapshot.go`）；
+3. 改消费方（控制台 `modules/console/cmd/console/main.go` 的 `*View` 结构 + `modules/console/web/index.html` 的取键），
+   并跑 `go test ./modules/console/cmd/console/`（那里有一条键名测试钉住 snake_case）。
 
 加**快照字段**前先过 §1.2 的两条规矩；过不了就不加，改由配置文档承载。
 
 改**流上的帧形状**（`WatchEvent` / SSE 帧）时额外注意：它同时被
-核心（`core/internal/control/telemetry.go`）、控制台（`console/cmd/console/main.go` 的 `sseFrame`）
-与页面（`console/web/index.html` 的 `onFrame`）三处消费 —— 三处都要改，且页面的插入路径
+核心（`common/core/internal/control/telemetry.go`）、控制台（`modules/console/cmd/console/main.go` 的 `sseFrame`）
+与页面（`modules/console/web/index.html` 的 `onFrame`）三处消费 —— 三处都要改，且页面的插入路径
 **必须**复用整块刷新那套列定义（`eventCells` / `flowCells` / `alertCells`）。

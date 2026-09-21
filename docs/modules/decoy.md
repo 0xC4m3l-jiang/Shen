@@ -67,7 +67,7 @@
 | --- | --- |
 | `judge` / `director` | 依赖方向单向（`MD-4`）；诱饵面不参与判定与决策 |
 | `honeypot` | 诱饵面与幻境后端是两个独立关注点 |
-| 适配器（`deception/`） | 适配器 → 核心单向；诱饵的**注入执行**在 `edge-injection` |
+| 适配器（`modules/deception/`） | 适配器 → 核心单向；诱饵的**注入执行**在 `edge-injection` |
 
 > 规则 `MD-6`：核心模块禁止外呼、禁止写业务存储、禁止依赖系统时钟做判定。
 
@@ -111,7 +111,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 诱饵匹配（最长前缀）· 多态确定性 · 投放片段 · 存储错误传播 | `core/internal/decoy/decoy_test.go` |
+| 单元 | 诱饵匹配（最长前缀）· 多态确定性 · 投放片段 · 存储错误传播 | `common/core/internal/decoy/decoy_test.go` |
 | 集成 | 诱饵命中 → 事件 → 归因链 | `make dev` 扩展 |
 | 故障注入 | 存储不可用 → 不投放且不影响业务 | 单元（替身） |
 | 属性测试 | 投放片段对同一资产幂等 | —— |
@@ -128,7 +128,7 @@
 | 3 | 诱饵可信度度量 | 「看起来像真的」需可测标准 | `sentinel`（差异哨兵）改造 |
 | 4 | MCP 诱饵的协议版本与工具集 | 实现 | 实现期定 |
 | 5 | 「会话结束」的判据（变体冻结到何时） | 多态生命周期 | [ADR-0016](../background/decisions/0016-decoy-polymorphism.md) |
-| 6 | ⚠️ **未接到请求路径** —— 诱饵定义要到边缘才有用，而**策略面（`api/policy/v1`）未实现** | 诱饵面在生产中不生效（当前只在启动装配与日志里出现） | [`../design/structure.md`](../design/structure.md) §1.6.4 · [`README.md`](README.md) §0.4 |
+| 6 | ⚠️ **未接到请求路径** —— 诱饵定义要到边缘才有用，而**策略面（`common/api/policy/v1`）未实现** | 诱饵面在生产中不生效（当前只在启动装配与日志里出现） | [`../design/structure.md`](../design/structure.md) §1.6.4 · [`README.md`](README.md) §0.4 |
 
 ## 9. 变更记录
 

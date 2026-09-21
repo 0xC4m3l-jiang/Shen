@@ -33,10 +33,10 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 | `contract.JudgeRequest` | [`../../core/internal/contract/observation.go`](../../core/internal/contract/observation.go) |
-| 输入 | `contract.Thresholds` | [`../../core/internal/contract/thresholds.go`](../../core/internal/contract/thresholds.go) |
-| 输入 | `contract.PolicySnapshot`（取 `GrayPct`） | [`../../core/internal/contract/policy.go`](../../core/internal/contract/policy.go) |
-| 输出 | `contract.Decision` | [`../../core/internal/contract/decision.go`](../../core/internal/contract/decision.go) |
+| 输入 | `contract.JudgeRequest` | [`../../common/core/internal/contract/observation.go`](../../common/core/internal/contract/observation.go) |
+| 输入 | `contract.Thresholds` | [`../../common/core/internal/contract/thresholds.go`](../../common/core/internal/contract/thresholds.go) |
+| 输入 | `contract.PolicySnapshot`（取 `GrayPct`） | [`../../common/core/internal/contract/policy.go`](../../common/core/internal/contract/policy.go) |
+| 输出 | `contract.Decision` | [`../../common/core/internal/contract/decision.go`](../../common/core/internal/contract/decision.go) |
 
 本模块内部的数据结构：`Engine`（`judge.Judge` + `ThresholdSource` + `GraySource` + `Config`）。
 
@@ -54,7 +54,7 @@
 | --- | --- |
 | `store` | 本模块不做 I/O（`MD-6`）；核心的 I/O 出口只有一个 |
 | `policy` 具体类型 | 只依赖接口，依赖方向单向（消费方定义接口） |
-| 适配器（`deception/`） | 依赖方向单向：适配器 → 核心 |
+| 适配器（`modules/deception/`） | 依赖方向单向：适配器 → 核心 |
 
 > 规则 `MD-4`：依赖方向必须单向。核心模块禁止外呼、禁止写业务存储、禁止依赖系统时钟做判定。
 
@@ -102,8 +102,8 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 三值 × 阈值边界 · 灰度确定性 · `NI-5` 回落 · 参数校验 | [`../../core/internal/director/director_test.go`](../../core/internal/director/director_test.go) |
-| 集成 | 端到端改道（配蜜罐后端 + 阈值降至 0，经 `deception/proxy` 观察） | `make dev` |
+| 单元 | 三值 × 阈值边界 · 灰度确定性 · `NI-5` 回落 · 参数校验 | [`../../common/core/internal/director/director_test.go`](../../common/core/internal/director/director_test.go) |
+| 集成 | 端到端改道（配蜜罐后端 + 阈值降至 0，经 `modules/deception/proxy` 观察） | `make dev` |
 | 故障注入 | `judge` 出错 / 超时 → 放行 | 单元（替身注入错误） |
 | 属性测试 | 不适用（决策是有限分支的纯函数） | —— |
 | 分支穷尽性 | 三值分支全覆盖 | `MD-8` |
@@ -122,7 +122,7 @@
 
 ## 8.1 拦截开关（`BlockEnabled`）
 
-`director.Config.BlockEnabled` 决定是否允许产出 `block`（默认**关**，依据 `Q5`）。装配层（`core/cmd/core`）用
+`director.Config.BlockEnabled` 决定是否允许产出 `block`（默认**关**，依据 `Q5`）。装配层（`common/core/cmd/core`）用
 环境变量 `SHEN_BLOCK_ENABLED` 显式打开（`1/true/yes/on` 为真，其余为假）。
 
 为什么需要它：`block` 是三值决策之一，若没有运行时开关，**拦截路径既验不了、也无法在灰度放开时逐级启用**（`INT-12`）。

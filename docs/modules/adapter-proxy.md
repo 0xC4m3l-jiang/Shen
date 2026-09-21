@@ -6,7 +6,7 @@
 | 所属层 | `L1` |
 | 实现语言 | `Go`（[ADR-0008](../background/decisions/0008-edge-language-go.md)） |
 | 负责人 | —— |
-| 状态 | ✅ `deception/proxy/` 已实现（**39 测试**，含 `-race`、内嵌 Caddy 端到端与策略面应用语义：后端表 / 白名单 / 响应改写规则）；⏳ 端到端接管仍需真实接入演练 |
+| 状态 | ✅ `modules/deception/proxy/` 已实现（**39 测试**，含 `-race`、内嵌 Caddy 端到端与策略面应用语义：后端表 / 白名单 / 响应改写规则）；⏳ 端到端接管仍需真实接入演练 |
 | 底座 | **内嵌 Caddy**（Apache-2.0）承担转发与 TLS 终结 · [ADR-0017](../background/decisions/0017-caddy-l1-base.md) |
 | 最后更新 | 2026-09-19 |
 
@@ -30,11 +30,11 @@
 严格按 `AR-6` 只做**四件事**：
 
 1. **拦截请求** —— 收下客户端请求，不转发直到拿到决策（或超时降级）；
-2. **查本地判定缓存**，未命中才调核心的判定面（`api/judge/v1`）；
+2. **查本地判定缓存**，未命中才调核心的判定面（`common/api/judge/v1`）；
 3. **按结果执行** —— `route_origin` 透传到业务 · `route_mirage` 引流到指定后端 · `block` 拦截；
-4. **异步上报遥测**（`api/telemetry/v1`），不阻塞请求。
+4. **异步上报遥测**（`common/api/telemetry/v1`），不阻塞请求。
 
-**另外消费策略面**（接缝 `S4`）：从核心拉取**改道后端表 · 白名单 · 响应改写规则 · AI 内容开关与清单**（`api/policy/v1` 的 `Pull`），
+**另外消费策略面**（接缝 `S4`）：从核心拉取**改道后端表 · 白名单 · 响应改写规则 · AI 内容开关与清单**（`common/api/policy/v1` 的 `Pull`），
 按「远端覆盖本地、白名单取并集」应用，并把结果回执给核心（`Ack`）。
 拉不到就继续用本地 env —— 策略面**不是**请求路径上的依赖（`NI-1`）。契约见 [`../spec/policy-payload.md`](../spec/policy-payload.md) 与 [ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)。
 
@@ -76,8 +76,8 @@
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
 | 输入（HTTP） | 客户端的原始 HTTP 请求；来源 IP 由 L0 透传或 `X-Forwarded-For` | `../design/integration.md` 的 `INT-23` |
-| 输入（gRPC） | `DeceptionJudge.Judge` | [`../../api/judge/v1/judge.proto`](../../api/judge/v1/judge.proto) |
-| 输出（gRPC） | `DeceptionTelemetry.Report` | [`../../api/telemetry/v1/telemetry.proto`](../../api/telemetry/v1/telemetry.proto) |
+| 输入（gRPC） | `DeceptionJudge.Judge` | [`../../common/api/judge/v1/judge.proto`](../../common/api/judge/v1/judge.proto) |
+| 输出（gRPC） | `DeceptionTelemetry.Report` | [`../../common/api/telemetry/v1/telemetry.proto`](../../common/api/telemetry/v1/telemetry.proto) |
 | 输出（HTTP） | 转发到 upstream（业务真实地址或引流后端） | —— |
 
 本模块内部的数据结构（**不跨模块共享**，依 `MD-5`）：
@@ -98,15 +98,15 @@
 
 | 允许依赖 | 原因 |
 | --- | --- |
-| `api/judge/v1` · `api/telemetry/v1` · `api/policy/v1` | `ST-3` 规定的**唯一**调核心方式（判定 / 遥测 / 策略三个面） |
+| `common/api/judge/v1` · `common/api/telemetry/v1` · `common/api/policy/v1` | `ST-3` 规定的**唯一**调核心方式（判定 / 遥测 / 策略三个面） |
 | `github.com/caddyserver/caddy/v2`（Apache-2.0） | **转发与 TLS 终结的底座**（`AR-3`：复用现成组件）；台账见 [`../spec/dependencies.md`](../spec/dependencies.md)。**耦合面与升级检查表见 §3.1** |
-| `deception/injection` | L1 处置模块，`ST-5` 要求它**被适配器引用、不独立部署**；`handler.go` 的 `Provision` 用它建注入器。**不是**适配器之间的依赖（`MD-4` 禁止的是 `adapter-*` 互依） |
+| `modules/deception/injection` | L1 处置模块，`ST-5` 要求它**被适配器引用、不独立部署**；`handler.go` 的 `Provision` 用它建注入器。**不是**适配器之间的依赖（`MD-4` 禁止的是 `adapter-*` 互依） |
 | Go 标准库 `net/http` / `net` / `time` | 判定胶水、观测构造、超时 |
 | `google.golang.org/grpc` | 生成 stub 的运行时（间接依赖，非新增） |
 
 | 禁止依赖 | 原因 |
 | --- | --- |
-| `core/internal/*` | `ST-3`，**编译期强制**（Go 的 `internal/` 规则） |
+| `common/core/internal/*` | `ST-3`，**编译期强制**（Go 的 `internal/` 规则） |
 | 任何数据库驱动（Redis / ClickHouse / PostgreSQL） | `MD-20` 规定核心唯一的 I/O 出口是 `store`；适配器更不得直连 |
 | 任何判定 / 规则引擎库 | `AR-7` 禁止在适配器实现判定 |
 
@@ -128,17 +128,17 @@
 ```sh
 make caddy-surface     # ① 先看耦合面：对着 Caddy 的 changelog 逐条核
 go get github.com/caddyserver/caddy/v2@<新版本>
-make gate              # ② 兼容锁在 deception/proxy/caddy_compat_test.go —— 红了会直接告诉你哪条假设变了
+make gate              # ② 兼容锁在 modules/deception/proxy/caddy_compat_test.go —— 红了会直接告诉你哪条假设变了
 make bench             # ③ AR-29 空载下界不能明显退化
 make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 ```
 
 > **禁止**只跑 `go build` 就宣布升级完成：上表里带「不会编译失败」的三类正是升级最容易静默坏的地方，
 > 其中「默认 `Server` 头」直接关系 `OH-2`（对手可见面不得暴露我们的栈）。
-> 安全网位置：[`../../deception/proxy/caddy_compat_test.go`](../../deception/proxy/caddy_compat_test.go)（编译期断言 + 四类假设断言）。
+> 安全网位置：[`../../modules/deception/proxy/caddy_compat_test.go`](../../modules/deception/proxy/caddy_compat_test.go)（编译期断言 + 四类假设断言）。
 
 > 规则 `MD-4`：依赖方向**必须**单向（适配器 → 核心 → 数据面）。
-> 本模块**禁止**被核心反向依赖，**禁止**依赖其他适配器（`deception/mirror` · `deception/dns`）。
+> 本模块**禁止**被核心反向依赖，**禁止**依赖其他适配器（`modules/deception/mirror` · `modules/deception/dns`）。
 
 ## 4. 关键规则
 
@@ -163,7 +163,7 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 | `NI-1` | 总则：引擎完全故障时业务不受影响 |
 | `NI-3` / `NI-4` / `NI-5` | 失败放行 · 硬超时 · 不确定状态回落 `route_origin` |
 | `NI-10` | 熔断后自动纯放行 |
-| `ST-3` | 只能经 `api/` 调核心 |
+| `ST-3` | 只能经 `common/api/` 调核心 |
 | `ST-10` | `decision_id` 按（来源标识, 会话, 路径, 时间窗）派生并随请求传入 |
 | `ST-11` | 未命中缓存才调核心；适配器侧**必须**实现超时降级 |
 | `TB-20` | 本层语言为 Go（`ADR-0008`） |
@@ -227,22 +227,22 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | `decision_id` 派生（同输入同 ID、跨时间窗不同 ID）；`Action` → upstream 映射；白名单**先于**判定；配置校验 | `deception/proxy/*_test.go` |
+| 单元 | `decision_id` 派生（同输入同 ID、跨时间窗不同 ID）；`Action` → upstream 映射；白名单**先于**判定；配置校验 | `modules/deception/proxy/*_test.go` |
 | 单元（替身） | 核心返回三种 `action` + 非法 `action` 时的路由行为（`MD-22`：**禁止**依赖核心真实实例） | 同上 |
-| 单元（配置） | `TLSConfig.Validate` 三取值 + 非法值；`BuildConfig` 拒绝空监听 / 非法模式；`upstreamAddr` 拒绝非法地址 | `deception/proxy/embed_test.go` |
-| 集成（内嵌 Caddy） | **真 Caddy + 真 `reverse_proxy` + 真 gRPC**：TLS 握手 · 三值路由 · 引流侧注入 · 引流失败回落 · block 短路 —— 即换底座的 go/no-go | `deception/proxy/embed_test.go`（`TestEmbeddedCaddyEndToEnd`） |
+| 单元（配置） | `TLSConfig.Validate` 三取值 + 非法值；`BuildConfig` 拒绝空监听 / 非法模式；`upstreamAddr` 拒绝非法地址 | `modules/deception/proxy/embed_test.go` |
+| 集成（内嵌 Caddy） | **真 Caddy + 真 `reverse_proxy` + 真 gRPC**：TLS 握手 · 三值路由 · 引流侧注入 · 引流失败回落 · block 短路 —— 即换底座的 go/no-go | `modules/deception/proxy/embed_test.go`（`TestEmbeddedCaddyEndToEnd`） |
 | 集成 | 与真实核心的 gRPC 往返；`decision_id` 原样回传（`ST-10`） | 待接入演练 |
-| 故障注入（**`NI-1` 的 `V-1…V-4`**） | `V-1` 杀死核心 · `V-2` 决策延迟超预算 · `V-3` malformed protobuf（裸 TCP 回垃圾）· `V-4` 非法决策值（UNSPECIFIED 与越界 99）—— 每条都连打 20 次，**要求 100% 正常** | `deception/proxy/failopen_test.go`（真 Caddy + 真 gRPC + 真业务后端） |
+| 故障注入（**`NI-1` 的 `V-1…V-4`**） | `V-1` 杀死核心 · `V-2` 决策延迟超预算 · `V-3` malformed protobuf（裸 TCP 回垃圾）· `V-4` 非法决策值（UNSPECIFIED 与越界 99）—— 每条都连打 20 次，**要求 100% 正常** | `modules/deception/proxy/failopen_test.go`（真 Caddy + 真 gRPC + 真业务后端） |
 | 故障注入（`V-5`） | CPU 饱和下业务 P99 不劣化 —— 需基线 P99 与真实负载 | 待补：**属接入演练**（实验 `E3`），见 [`../background/notes/pending-experiments.md`](../background/notes/pending-experiments.md) |
-| 基准（`AR-29` 空载下界） | 直连 vs 经引擎的额外延迟；本机实测 ≈ **+48 µs**（85.7 − 37.7），约为 5 ms 预算的 1% | `deception/proxy/latency_test.go`（`make bench`） |
+| 基准（`AR-29` 空载下界） | 直连 vs 经引擎的额外延迟；本机实测 ≈ **+48 µs**（85.7 − 37.7），约为 5 ms 预算的 1% | `modules/deception/proxy/latency_test.go`（`make bench`） |
 | 属性测试 | 对任意请求，**未识别状态一律 `route_origin`** | 待补 |
 | 分支穷尽性 | `Action` 三个取值 + 非法值，四个分支全覆盖 | `MD-8` |
-| 单元（策略应用） | 远端后端按名覆盖 + 本地保留 · `enabled=false` 不入表 · 坏地址只丢一条 · schema 读不懂整份拒绝 · 白名单并集 | `deception/proxy/policy_test.go` |
+| 单元（策略应用） | 远端后端按名覆盖 + 本地保留 · `enabled=false` 不入表 · 坏地址只丢一条 · schema 读不懂整份拒绝 · 白名单并集 | `modules/deception/proxy/policy_test.go` |
 | 单元（策略失败路径） | 拉取失败沿用当前策略且不产生回执 · 校验和不匹配拒绝应用并回执 `applied=false` · 成功应用回执 `applied=true` 且同版本不重复回执 | 同上 |
 | 单元（响应改写规则） | 字段缺省 → 保留本地规则 · 显式空数组 → 关掉注入 · 非空 → 远端规则接管且本地规则不再注入 · 远端规则真的改写改道侧响应 | 同上（`TestApplyEdgePolicyInjectSemantics` · `TestRemoteInjectRuleRewritesDivertedResponse`） |
-| 单元（可见面卫生） | `Via` 一律删除 · `Server` 为 Caddy 默认值时删除、为上游值（含大小写/空白差异）时保留 · 业务响应头与状态码**不得**被改写 | `deception/proxy/proxy_test.go`（`TestHeaderSanitizer*`） |
-| 集成（错误路径指纹） | 上游不可达 → 502 且无 `Server` / `Via` | `deception/proxy/embed_test.go`（`TestNoProxyFingerprintOnErrorPath`） |
-| 集成（转发边界） | **协议升级**（101 后仍可双向收发）· **流式不被全量缓冲**（首块到达时间）· **大响应（2 MiB）不注入不截断** · **大上传（8 MiB）完整送达** · **观测不含 body** · **h2 下行 / h1.1 上行** | `deception/proxy/forwarding_test.go` |
+| 单元（可见面卫生） | `Via` 一律删除 · `Server` 为 Caddy 默认值时删除、为上游值（含大小写/空白差异）时保留 · 业务响应头与状态码**不得**被改写 | `modules/deception/proxy/proxy_test.go`（`TestHeaderSanitizer*`） |
+| 集成（错误路径指纹） | 上游不可达 → 502 且无 `Server` / `Via` | `modules/deception/proxy/embed_test.go`（`TestNoProxyFingerprintOnErrorPath`） |
+| 集成（转发边界） | **协议升级**（101 后仍可双向收发）· **流式不被全量缓冲**（首块到达时间）· **大响应（2 MiB）不注入不截断** · **大上传（8 MiB）完整送达** · **观测不含 body** · **h2 下行 / h1.1 上行** | `modules/deception/proxy/forwarding_test.go` |
 
 > `MD-22`：本模块的测试**必须独立可运行**，用替身实现 `JudgeClient` / `TelemetryClient`，
 > **禁止**依赖真实核心或真实存储。
@@ -283,9 +283,9 @@ make dev               # ④ 端到端（核心 + 冒烟 + 回放）
 
 每次请求结束都会异步上报一条 `request_judged`（见 [`../spec/events.md`](../spec/events.md) §2.2），其中：
 
-- `executed`：**实际落点**，由纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定 —— 穷举测试在 `deception/proxy/wire_test.go`；
+- `executed`：**实际落点**，由纯函数 `executedFor(shadow, action, mirageFound, mirageFellBack)` 决定 —— 穷举测试在 `modules/deception/proxy/wire_test.go`；
 - `inject` / `content_id`：**注入结果**与内容标识（`applied` / `disabled` / `no_content` / `off`）——
-  四个取值各由一例单测锁定（`deception/proxy/content_test.go`）；只有 `applied` + 非空 `content_id` 才在图上多一跳「内容注入」（`ADR-0023`）；
+  四个取值各由一例单测锁定（`modules/deception/proxy/content_test.go`）；只有 `applied` + 非空 `content_id` 才在图上多一跳「内容注入」（`ADR-0023`）；
 - 事件信封的 `event_id` 是**逐请求唯一**（`judged:<decision_id>:<序>`），`decision_id` 放在**载荷里**：
   判定缓存命中的多条请求共享同一 `decision_id`，若用它当事件 id 会被遥测幂等键（`AR-11`）折叠成一条 —— 图上就看不到"每条流量"了（实测踩过）；
 - `status` / `bytes` / `duration_ms`：由 `headerSanitizer` 顺带观测（它本就包住整个请求的 `ResponseWriter`，不再加一层包装）；

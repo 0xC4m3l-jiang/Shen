@@ -484,9 +484,9 @@ def main() -> int:
 
     print("构建（core / proxy / console）…")
     for binary, pkg in (
-        ("core", "./core/cmd/core"),
-        ("proxy", "./deception/proxy/cmd/proxy"),
-        ("console", "./console/cmd/console"),
+        ("core", "./common/core/cmd/core"),
+        ("proxy", "./modules/deception/proxy/cmd/proxy"),
+        ("console", "./modules/console/cmd/console"),
     ):
         subprocess.run(
             ["go", "build", "-o", str(RUNDIR / binary), pkg],

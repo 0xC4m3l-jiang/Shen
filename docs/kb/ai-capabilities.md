@@ -21,7 +21,7 @@
 
 | # | 能力 | 代码位置 | 今天靠什么产出 | 模型接了吗 | 产物 | 消费者 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | **欺骗内容生成** | [`analysis/aicap/`](../../analysis/aicap) | 确定性模板生成器 | ❌ 待接（阶段 B） | 内容对象 + 内容清单 | 核心 `policy` → 适配器 `deception/proxy` | ✅ 阶段 A（通路已通） |
+| 1 | **欺骗内容生成** | [`analysis/aicap/`](../../analysis/aicap) | 确定性模板生成器 | ❌ 待接（阶段 B） | 内容对象 + 内容清单 | 核心 `policy` → 适配器 `modules/deception/proxy` | ✅ 阶段 A（通路已通） |
 | 2 | **意图识别** | [`analysis/intent/`](../../analysis/intent) | 正则规则表（`rule_hits`） | ❌ **未接** | `Envelope{category, confidence, evidence_ids, rationale}` | `chain` / `strategy` / 遥测结论 | ✅ 确定性版 |
 | 3 | **攻击链还原** | [`analysis/chain/`](../../analysis/chain) | 阶段排序 + 证据校验 | ❌ **未接** | `{stages[], broken_decoy_signals[]}` | `strategy` | ✅ 确定性版 |
 | 4 | **策略生成** | [`analysis/strategy/`](../../analysis/strategy) | 阈值下界 + 灰度上限 | ❌ **未接** | `{decoy_selection[], gray_pct, threshold_suggestions{}}` | 核心 `policy`（经版本化下发） | ✅ 确定性版 |
@@ -420,7 +420,7 @@ class AnalysisClient(Protocol):
 | 角色 | 是谁 | 必须做 | **不要**做 |
 | --- | --- | --- | --- |
 | **生成侧调用方** | 离线任务 · 未来第二个消费方 | 启动时 `startup_assert()`；给 `TaskSpec`；给一个 `Sink` | 不要跳过护栏、不要自己 import 模型客户端（门禁会拦，`AR-33`） |
-| **下游消费方** | 核心 `policy` · 适配器 `deception/proxy` · 未来的其它语言侧 | 只读产物字节、**独立校验**；**不调** `startup_assert()`（那是生成侧的事） | 不要重复实现护栏（`AR-33`）、不要改写业务侧（`INT-8`） |
+| **下游消费方** | 核心 `policy` · 适配器 `modules/deception/proxy` · 未来的其它语言侧 | 只读产物字节、**独立校验**；**不调** `startup_assert()`（那是生成侧的事） | 不要重复实现护栏（`AR-33`）、不要改写业务侧（`INT-8`） |
 | **部署方** | 运维 / 交付 | 配三层开关、注入真实业务标识、装载清单 | 不要把清单当成可热改的运行时配置（核心只在启动时装载） |
 
 ### 13.2 生成侧：两种用法

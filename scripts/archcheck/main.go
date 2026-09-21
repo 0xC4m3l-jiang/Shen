@@ -86,6 +86,10 @@ func main() {
 	if err != nil {
 		fatal("解析 structure.md §1.1 的顶层目录失败：%v", err)
 	}
+	children, err := parseContainerChildren(filepath.Join(root, "docs/design/structure.md"))
+	if err != nil {
+		fatal("解析 structure.md §1.1 的容器子目录失败：%v", err)
+	}
 	mods, err := parseModules(filepath.Join(root, "docs/design/modules.md"))
 	if err != nil {
 		fatal("解析 modules.md §1.1 的模块清单失败：%v", err)
@@ -95,17 +99,27 @@ func main() {
 		fatal("go list 失败：%v", err)
 	}
 
+	// 自检：一个平面都解析不出来，说明 modulePath 与 go.mod 的 module 名已经不一致 ——
+	// 那样 ST-2 / ST-3 / MD-20 会**静默全过**（项目名仍可能变，ADR-0004）。拒绝静默放行。
+	if unknown := countUnknownPlanes(pkgs); len(pkgs) > 0 && unknown == len(pkgs) {
+		fatal("所有包都解析不出平面（modulePath=%q）—— 与 go.mod 的 module 名不一致？", modulePath)
+	}
+
 	if *dump {
 		fmt.Printf("顶层目录（structure.md §1.1，%d 个）：%s\n", len(tops), strings.Join(tops, " "))
 		fmt.Printf("模块清单（modules.md §1.1，%d 行）：\n", len(mods))
 		for _, m := range mods {
 			fmt.Printf("  %-24s %-8s %-14s %s\n", m.Name, m.Stage, m.Langs, m.SrcDir)
 		}
+		for c, kids := range children {
+			fmt.Printf("容器 %s/ 下的平面：%s\n", c, strings.Join(kids, " "))
+		}
 		return
 	}
 
 	var findings []finding
 	findings = append(findings, checkTopLevel(root, tops)...)
+	findings = append(findings, checkContainerChildren(root, children)...)
 	findings = append(findings, checkCrossPlane(pkgs)...)
 	findings = append(findings, checkInternalRule(pkgs)...)
 	findings = append(findings, checkStoreIsSoleIO(pkgs)...)
@@ -166,19 +180,107 @@ func isToolDir(name string) bool {
 	}
 }
 
+// 容器行下面的平面行，如 `│   ├── deception/`（也接受写全路径的 `│   ├── modules/deception/`）。
+var nestedDirLine = regexp.MustCompile(`^[│ ]+[├└]── ([A-Za-z0-9_./-]+)/`)
+
+// parseContainerChildren 解析 §1.1 里**容器**（`modules/` · `common/`）下面列出的子目录。
+//
+// 为什么需要它：顶层白名单只管仓库根一层 —— 容器一旦建立，`modules/` 下的新目录就脱出了 `ST-1` 的覆盖
+// （搬迁前任何新平面都是新顶层目录，必被拦下）。这里把容器子目录也纳入白名单。
+// 顺带堵住一个同名碰撞：`modules/core/` 这样的名字会与 `common/core` 混成同一个平面，
+// 而白名单只允许 `content/` 下是 `core`，因此它会在这一层被拦下。
+func parseContainerChildren(path string) (map[string][]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	sec := section(string(b), "### 1.1 顶层", "### 1.2")
+	if sec == "" {
+		return nil, errors.New("找不到 §1.1 顶层 小节")
+	}
+	out := map[string][]string{}
+	current := ""
+	for _, line := range strings.Split(sec, "\n") {
+		if m := topDirLine.FindStringSubmatch(line); m != nil {
+			current = m[1]
+			continue
+		}
+		if m := nestedDirLine.FindStringSubmatch(line); m != nil && current != "" {
+			// 取最后一段：写入的写法可能是相对名，也可能是全路径，两种都认。
+			out[current] = append(out[current], filepath.Base(m[1]))
+		}
+	}
+	return out, nil
+}
+
+// countUnknownPlanes 数出解析不出平面的包（即 modulePath 前缀不匹配的）。
+func countUnknownPlanes(pkgs []pkg) int {
+	n := 0
+	for _, p := range pkgs {
+		if planeOf(p.ImportPath) == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// checkContainerChildren 核对容器的实际子目录都在 §1.1 里列着。
+func checkContainerChildren(root string, children map[string][]string) []finding {
+	var out []finding
+	for container, allowed := range children {
+		set := map[string]bool{}
+		for _, a := range allowed {
+			set[a] = true
+		}
+		entries, err := os.ReadDir(filepath.Join(root, container))
+		if err != nil {
+			continue // 容器本身没建：那是顶层检查的事
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".egg-info") || isToolDir(name) {
+				continue
+			}
+			if !set[name] {
+				out = append(out, finding{
+					ID: "ST-1",
+					Human: fmt.Sprintf("%s/ 下的子目录不在 structure.md §1.1 的清单内；"+
+						"容器里新增平面必须先更新该节的目录树", container),
+					Where: container + "/" + name + "/",
+				})
+			}
+		}
+	}
+	return out
+}
+
 // 检查 2 · ST-2 / ST-4 禁止跨顶层目录 import
 // ─────────────────────────────────────────────────────────────────────────────
 
 // planeOf 取一个包所属的顶层目录（平面），如 core / deception / api。
+// planeOf 返回包所属的**平面**（= 代码真正归属的那一层）。
+//
+// 顶层是「容器 + 平面」两级结构（structure.md §1.1）：`modules/<平面>/…` 与 `common/<平面>/…`
+// 的第一段是**容器**（modules = 产品功能模块，common = 公用代码），第二段才是平面；
+// `analysis/` 等则直接以平面作顶层目录。契约因此归 `api`、内核归 `core`。
 func planeOf(importPath string) string {
 	if !strings.HasPrefix(importPath, modulePath+"/") {
 		return "" // 外部依赖或标准库
 	}
 	rest := strings.TrimPrefix(importPath, modulePath+"/")
-	if i := strings.IndexByte(rest, '/'); i >= 0 {
-		return rest[:i]
+	first, tail, _ := strings.Cut(rest, "/")
+	switch first {
+	case "modules", "common":
+		if tail == "" {
+			return first // 容器自身（没包任何包）
+		}
+		plane, _, _ := strings.Cut(tail, "/")
+		return plane
 	}
-	return rest
+	return first
 }
 
 func checkCrossPlane(pkgs []pkg) []finding {
@@ -222,7 +324,7 @@ func checkCrossPlane(pkgs []pkg) []finding {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func checkInternalRule(pkgs []pkg) []finding {
-	const forbidden = modulePath + "/core/internal"
+	const forbidden = modulePath + "/common/core/internal"
 	var out []finding
 	for _, p := range pkgs {
 		from := planeOf(p.ImportPath)
@@ -261,7 +363,7 @@ var storageDrivers = []string{
 }
 
 func checkStoreIsSoleIO(pkgs []pkg) []finding {
-	const coreInternal = modulePath + "/core/internal/"
+	const coreInternal = modulePath + "/common/core/internal/"
 	var out []finding
 	for _, p := range pkgs {
 		if !strings.HasPrefix(p.ImportPath, coreInternal) {
@@ -313,8 +415,19 @@ func checkStoreIsSoleIO(pkgs []pkg) []finding {
 // 也没有自己的职责边界。进程入口（*/cmd/<name>）在收集阶段就已跳过，同样不是模块。
 //
 // 这个豁免名单是**刻意写死的少数几项**，且会在输出里打印 —— 不允许它悄悄变长。
+// planeRoot 是每个平面的**源码根前缀**（与 modules.md §1.1「源码目录」列同一坐标系）。
+// 顶层是「容器 + 平面」两级（structure.md §1.1）：modules = 产品功能模块，common = 公用代码。
+var planeRoot = map[string]string{
+	"core":      "common/core/",
+	"api":       "common/api/",
+	"deception": "modules/deception/",
+	"honeypot":  "modules/honeypot/",
+	"console":   "modules/console/",
+	"analysis":  "analysis/",
+}
+
 var structuralDirs = map[string]bool{
-	"core/internal/contract": true,
+	"common/core/internal/contract": true,
 }
 
 func checkModulesAgainstList(root string, pkgs []pkg, mods []module) []finding {
@@ -331,8 +444,8 @@ func checkModulesAgainstList(root string, pkgs []pkg, mods []module) []finding {
 		plane := planeOf(p.ImportPath)
 		switch plane {
 		case "core":
-			// core/internal/<module> 或 core/cmd/<name>（进程入口，不是模块）
-			rest := strings.TrimPrefix(p.ImportPath, modulePath+"/core/")
+			// common/core/internal/<module> 或 common/core/cmd/<name>（进程入口，不是模块）
+			rest := strings.TrimPrefix(p.ImportPath, modulePath+"/"+planeRoot["core"])
 			if strings.HasPrefix(rest, "cmd/") || rest == "internal" {
 				continue
 			}
@@ -341,15 +454,16 @@ func checkModulesAgainstList(root string, pkgs []pkg, mods []module) []finding {
 				if i := strings.IndexByte(r, '/'); i >= 0 {
 					r = r[:i]
 				}
-				found["core/internal/"+r] = true
+				found[planeRoot["core"]+"internal/"+r] = true
 			}
 		case "deception", "honeypot", "analysis":
-			rest := strings.TrimPrefix(p.ImportPath, modulePath+"/"+plane+"/")
-			// 去掉子目录（如 deception/proxy/cmd/proxy）
+			base := planeRoot[plane]
+			rest := strings.TrimPrefix(p.ImportPath, modulePath+"/"+base)
+			// 去掉子目录（如 modules/deception/proxy/cmd/proxy）
 			if i := strings.IndexByte(rest, '/'); i >= 0 {
 				rest = rest[:i]
 			}
-			found[plane+"/"+rest] = true
+			found[base+rest] = true
 		}
 	}
 

@@ -24,9 +24,9 @@ import re
 import sys
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
-PROTO_ROOT = REPO_ROOT / "api"
+PROTO_ROOT = REPO_ROOT / "common" / "api"
 OUT_DIR = REPO_ROOT / "analysis" / "proto"
-PROTO_FILES = ("api/telemetry/v1/telemetry.proto",)
+PROTO_FILES = ("common/api/telemetry/v1/telemetry.proto",)
 
 # 生成物里的绝对导入 → 包内绝对导入（保持"绝对"是为了可读性与工具兼容）
 PREFIX = "analysis.proto."

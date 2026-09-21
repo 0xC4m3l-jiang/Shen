@@ -13,7 +13,7 @@
 客户端
   │  ① L0（客户自己的 LB / nginx / Envoy）：TLS 终结 · 路由        ← 复用现成组件（AR-3），TLS 默认交 L0（ADR-0019）
   ▼
-适配器 L1（deception/proxy；③ 前置 / ④ 边车同一实现，① ② 形态见下文）
+适配器 L1（modules/deception/proxy；③ 前置 / ④ 边车同一实现，① ② 形态见下文）
   │  ② 白名单？ ──命中──▶ 直接透传业务（不判定，INT-25）
   │  ③ 判定缓存？ ─命中─▶ 复用同窗判定（不调核心，ST-10）
   │  ④ 派生 decision_id（来源+会话+方法+路径+时间窗；幂等键）
@@ -48,22 +48,22 @@
 
 | # | 逻辑要点 | 技术点 | 实现位置 | 规则 / 取舍 | 怎么验 |
 | --- | --- | --- | --- | --- | --- |
-| ① | 接入与 TLS | 四种形态：① 旁路镜像（不在请求路径）② DNS 引流 ③ 反代前置 ④ 边车；**TLS 默认由客户 L0 终结**（指纹天然一致） | `deception/proxy` · `deception/mirror` · `deception/dns` · `deploy/docker/` | `AR-3`（不自研 L0）· `ADR-0019` · `INT-1…INT-10` | `scripts/shen.sh doctor`（② TLS 终结方式） |
-| ② | 白名单先于判定 | 本地（env）与远端（策略面）白名单取**并集**；命中即不调核心 | `deception/proxy/handler.go`（`ServeHTTP` ⓪–①） | `INT-25`（护栏只增不减） | 链路里出现「白名单命中」跳（`SHEN_VERIFY_WHITELIST` 配方见 [`integrate/observability.md`](integrate/observability.md) §6） |
-| ③ | 判定缓存 | 键 = `(来源, 会话, 方法, 路径)` + 时间窗；**同窗谁先到谁定调** | `deception/proxy/glue.go`（`decisionCache` / `decisionID`） | `ST-10` · 取舍 `K-20` | 同路径连发两条 → 第二条 `executed=cache` |
-| ④ | 幂等键 | `decision_id` 由适配器派生、核心原样回显；事件 id 逐请求唯一（`judged:<id>:<序>`） | `deception/proxy/handler.go` · `docs/spec/events.md` §2.2 | `AR-11`（幂等） | `scripts/shen.sh traffic --check-graph` |
-| ⑤ | 调核心判定 | gRPC 明文**仅回环**；判定预算 3 ms；建连在启动时**预热**（否则首请求超时后放行） | `deception/proxy/handler.go`（`decide` / `warmUp`） | `AR-29` · `NI-3`/`NI-4` · 取舍 `K-24` | 重建后首请求应 `失败=nil`；`doctor` ⑤ |
-| ⑥ | 规则求值 | 字段 `user_agent`/`path`/`method`/`source_ip`/`tls_fingerprint`；算子 `equals`/`prefix`/`contains`；分值**1.0 截断**；⚠️ `path` **不含查询串**、按原始字符串匹配 | `core/internal/judge/` · `core/internal/policy/policy.go` | `ST-24`（规则是数据）· 缺口见 [`ops/functional-verification.md`](ops/functional-verification.md) §2 | `make replay`（离线回放）· DAG 第三步「响应」列 |
-| ⑦ | 三值决策 | 阈值 `thresholds.route_mirage` / `thresholds.block`；**灰度**按 decision_id 哈希（0% 时改道会被降级为放行）；诱饵面**禁止 block**；`severity` 档位未定恒 `none` | `core/internal/director/director.go`（`classify` / `grayAllows`） | `MD-12` · `MD-25` · `INT-12` · 未决项见 [`spec/metrics.md`](spec/metrics.md) §2 | 验证覆盖（`SHEN_BLOCK_ENABLED=true` + `gray_pct: 100`）下看 DAG「决策」跳 |
-| ⑧ | 处置执行 | 放行=原样透传；改道=查表→转发（可注入）；后端不可用**回落业务**；拦截=403 | `deception/proxy/handler.go`（`dispatch` / `forwardMirage`）· `deception/injection/` | `INT-8` · `NI-5` · `ADR-0002` | `executed` 七值实测（见 DAG 与 [`ops/functional-verification.md`](ops/functional-verification.md) §7.2） |
-| ⑨ | 响应卫生 | 删 `Via`、删 Caddy 默认 `Server`；错误路由同样删 | `deception/proxy/handler.go`（`headerSanitizer`）· `embed.go`（`server.Errors`） | `OH-2` / `OH-5` | `scripts/traffic/send.py` 的响应头/响应体卫生检查（每场景都查） |
-| ⑩ | 遥测上报 | 异步、批量、幂等；载荷带**实际落点与返回信息** | `deception/proxy/handler.go`（`reportRoute`）· [`spec/events.md`](spec/events.md) §2.2 | `AR-11` · `AR-6` | `make docker-log S=proxy`，看「路由：… 落点=…」 |
-| ⑪ | 观测面记录 | 判定同时落成**事件**与**判定归档**；`store` 是核心唯一 I/O 出口 | `core/cmd/core/main.go`（观测面适配器）· `core/internal/store/` · `core/internal/control/` | `MD-20` · `ST-7`（细节只进观测面） | `make docker-log S=core`（`msg=decision` 逐判定） |
-| ⑫ | 控制台读侧 | 只读接口：概览/流动/结论/**逐请求链路**/单请求详情；页面全 `textContent` | `console/cmd/console/` · `console/internal/topology/` · `console/web/` | `AR-10`（不参与判定） | `scripts/shen.sh verify` |
+| ① | 接入与 TLS | 四种形态：① 旁路镜像（不在请求路径）② DNS 引流 ③ 反代前置 ④ 边车；**TLS 默认由客户 L0 终结**（指纹天然一致） | `modules/deception/proxy` · `modules/deception/mirror` · `modules/deception/dns` · `deploy/docker/` | `AR-3`（不自研 L0）· `ADR-0019` · `INT-1…INT-10` | `scripts/shen.sh doctor`（② TLS 终结方式） |
+| ② | 白名单先于判定 | 本地（env）与远端（策略面）白名单取**并集**；命中即不调核心 | `modules/deception/proxy/handler.go`（`ServeHTTP` ⓪–①） | `INT-25`（护栏只增不减） | 链路里出现「白名单命中」跳（`SHEN_VERIFY_WHITELIST` 配方见 [`integrate/observability.md`](integrate/observability.md) §6） |
+| ③ | 判定缓存 | 键 = `(来源, 会话, 方法, 路径)` + 时间窗；**同窗谁先到谁定调** | `modules/deception/proxy/glue.go`（`decisionCache` / `decisionID`） | `ST-10` · 取舍 `K-20` | 同路径连发两条 → 第二条 `executed=cache` |
+| ④ | 幂等键 | `decision_id` 由适配器派生、核心原样回显；事件 id 逐请求唯一（`judged:<id>:<序>`） | `modules/deception/proxy/handler.go` · `docs/spec/events.md` §2.2 | `AR-11`（幂等） | `scripts/shen.sh traffic --check-graph` |
+| ⑤ | 调核心判定 | gRPC 明文**仅回环**；判定预算 3 ms；建连在启动时**预热**（否则首请求超时后放行） | `modules/deception/proxy/handler.go`（`decide` / `warmUp`） | `AR-29` · `NI-3`/`NI-4` · 取舍 `K-24` | 重建后首请求应 `失败=nil`；`doctor` ⑤ |
+| ⑥ | 规则求值 | 字段 `user_agent`/`path`/`method`/`source_ip`/`tls_fingerprint`；算子 `equals`/`prefix`/`contains`；分值**1.0 截断**；⚠️ `path` **不含查询串**、按原始字符串匹配 | `common/core/internal/judge/` · `common/core/internal/policy/policy.go` | `ST-24`（规则是数据）· 缺口见 [`ops/functional-verification.md`](ops/functional-verification.md) §2 | `make replay`（离线回放）· DAG 第三步「响应」列 |
+| ⑦ | 三值决策 | 阈值 `thresholds.route_mirage` / `thresholds.block`；**灰度**按 decision_id 哈希（0% 时改道会被降级为放行）；诱饵面**禁止 block**；`severity` 档位未定恒 `none` | `common/core/internal/director/director.go`（`classify` / `grayAllows`） | `MD-12` · `MD-25` · `INT-12` · 未决项见 [`spec/metrics.md`](spec/metrics.md) §2 | 验证覆盖（`SHEN_BLOCK_ENABLED=true` + `gray_pct: 100`）下看 DAG「决策」跳 |
+| ⑧ | 处置执行 | 放行=原样透传；改道=查表→转发（可注入）；后端不可用**回落业务**；拦截=403 | `modules/deception/proxy/handler.go`（`dispatch` / `forwardMirage`）· `modules/deception/injection/` | `INT-8` · `NI-5` · `ADR-0002` | `executed` 七值实测（见 DAG 与 [`ops/functional-verification.md`](ops/functional-verification.md) §7.2） |
+| ⑨ | 响应卫生 | 删 `Via`、删 Caddy 默认 `Server`；错误路由同样删 | `modules/deception/proxy/handler.go`（`headerSanitizer`）· `embed.go`（`server.Errors`） | `OH-2` / `OH-5` | `scripts/traffic/send.py` 的响应头/响应体卫生检查（每场景都查） |
+| ⑩ | 遥测上报 | 异步、批量、幂等；载荷带**实际落点与返回信息** | `modules/deception/proxy/handler.go`（`reportRoute`）· [`spec/events.md`](spec/events.md) §2.2 | `AR-11` · `AR-6` | `make docker-log S=proxy`，看「路由：… 落点=…」 |
+| ⑪ | 观测面记录 | 判定同时落成**事件**与**判定归档**；`store` 是核心唯一 I/O 出口 | `common/core/cmd/core/main.go`（观测面适配器）· `common/core/internal/store/` · `common/core/internal/control/` | `MD-20` · `ST-7`（细节只进观测面） | `make docker-log S=core`（`msg=decision` 逐判定） |
+| ⑫ | 控制台读侧 | 只读接口：概览/流动/结论/**逐请求链路**/单请求详情；页面全 `textContent` | `modules/console/cmd/console/` · `modules/console/internal/topology/` · `modules/console/web/` | `AR-10`（不参与判定） | `scripts/shen.sh verify` |
 | ⑬ | L4 近线分析 | 读事件 → 去重（`AR-14`）→ 意图 → 攻击链（引用校验 `AR-12`）→ 策略数据 → 结论事件；**无执行能力** | `analysis/worker.py` · `analysis/{intent,chain,strategy,llm}/` | `ADR-0022` · `AR-31`/`AR-32` | `scripts/shen.sh traffic --check-l4` |
-| ⑭ | 策略面下发 | 拉取式 `Pull` + 回执 `Ack`；载荷 = 改道后端表 / 白名单 / 注入规则；**远端优先、本地兜底** | `core/internal/policy/server.go` · `deception/proxy/policy.go` | `ADR-0018` · `ST-8` · `AR-13` | `make docker-log S=proxy`（`已应用策略 …`） |
-| ⑮ | 会话与隔离 | 会话身份三级优先级（cookie > …）；隔离命中**短路**不再调核心（TTL） | `core/internal/session/` · `core/internal/isolation/` | `INT-19` · `INT-20` | 单测；运行时接缝状态见 [`modules/_map.md`](modules/_map.md) §3 |
-| ⑯ | 失败与熔断 | 任何未识别状态**放行到真实业务**；服务面熔断（错误率超阈值 → 纯放行） | `core/internal/control/`（breaker）· 各适配器 fail-open 分支 | `NI-1`（最高优先级）· `NI-10` | `make gate` 内的 `V-1…V-4` 故障注入 |
+| ⑭ | 策略面下发 | 拉取式 `Pull` + 回执 `Ack`；载荷 = 改道后端表 / 白名单 / 注入规则；**远端优先、本地兜底** | `common/core/internal/policy/server.go` · `modules/deception/proxy/policy.go` | `ADR-0018` · `ST-8` · `AR-13` | `make docker-log S=proxy`（`已应用策略 …`） |
+| ⑮ | 会话与隔离 | 会话身份三级优先级（cookie > …）；隔离命中**短路**不再调核心（TTL） | `common/core/internal/session/` · `common/core/internal/isolation/` | `INT-19` · `INT-20` | 单测；运行时接缝状态见 [`modules/_map.md`](modules/_map.md) §3 |
+| ⑯ | 失败与熔断 | 任何未识别状态**放行到真实业务**；服务面熔断（错误率超阈值 → 纯放行） | `common/core/internal/control/`（breaker）· 各适配器 fail-open 分支 | `NI-1`（最高优先级）· `NI-10` | `make gate` 内的 `V-1…V-4` 故障注入 |
 
 ---
 
@@ -81,17 +81,17 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| `core/cmd/core/main.go` | 装配：配置装载 → judge/director → 欺骗面 → 服务面 → 观测面（唯一允许依赖具体实现的地方） |
-| `core/internal/control/` | gRPC 服务面：入参映射 · **禁止回显的强制点** · 熔断 · 观测面记录与读取 |
-| `core/internal/judge/` · `director/` | 规则求值 → 分值/信号；阈值+灰度 → 三值 |
-| `core/internal/policy/` | 策略装载 · 下发投影（Pull）· 回执账本（Ack） |
-| `core/internal/{session,isolation,telemetry,store}/` | 会话身份 · 隔离短路 · 事件上报 · **唯一 I/O 出口** |
-| `core/internal/{decoy,responder,honeypot}/` | 欺骗面（诱饵资产 · 欺骗响应一致性 · 幻境后端池）—— 内容层不在本文范围 |
-| `deception/proxy/` | ③④ 适配器：白名单 → 缓存 → 判定 → 处置 → 上报；转发与 TLS 用内嵌 Caddy（`ADR-0017`） |
-| `deception/{injection,mirror,dns}/` | 注入引擎 · ① 旁路镜像接收端 · ② DNS 引流配置 |
+| `common/core/cmd/core/main.go` | 装配：配置装载 → judge/director → 欺骗面 → 服务面 → 观测面（唯一允许依赖具体实现的地方） |
+| `common/core/internal/control/` | gRPC 服务面：入参映射 · **禁止回显的强制点** · 熔断 · 观测面记录与读取 |
+| `common/core/internal/judge/` · `director/` | 规则求值 → 分值/信号；阈值+灰度 → 三值 |
+| `common/core/internal/policy/` | 策略装载 · 下发投影（Pull）· 回执账本（Ack） |
+| `common/core/internal/{session,isolation,telemetry,store}/` | 会话身份 · 隔离短路 · 事件上报 · **唯一 I/O 出口** |
+| `common/core/internal/{decoy,responder,honeypot}/` | 欺骗面（诱饵资产 · 欺骗响应一致性 · 幻境后端池）—— 内容层不在本文范围 |
+| `modules/deception/proxy/` | ③④ 适配器：白名单 → 缓存 → 判定 → 处置 → 上报；转发与 TLS 用内嵌 Caddy（`ADR-0017`） |
+| `modules/deception/{injection,mirror,dns}/` | 注入引擎 · ① 旁路镜像接收端 · ② DNS 引流配置 |
 | `analysis/`（Python） | L4：llm 契约层 · intent · chain · strategy · 近线 worker |
-| `console/` | 只读观测台 + 拓扑聚合（纯函数包 `console/internal/topology/`） |
-| `api/` | 契约唯一事实源（judge / policy / telemetry 三个 `.proto`） |
+| `modules/console/` | 只读观测台 + 拓扑聚合（纯函数包 `modules/console/internal/topology/`） |
+| `common/api/` | 契约唯一事实源（judge / policy / telemetry 三个 `.proto`） |
 | `scripts/` | 门禁（archcheck/tracecheck/check-leak/licensecheck）· 演示环境 · 伪造流量 · 接入自检（doctor） |
 
 ---
@@ -111,7 +111,7 @@
 
 ## 6. 明确不在本文范围
 
-1. **蜜罐内容与协议栈**（`honeypot/protocol/` 只做协议注册表 / 运行框架 / 最小适配器；真实协议库待专项调研）；
-2. **L3 网络欺骗细节**（微隔离 / 假拓扑 / 运行时检测是**声明式产物**，复用 Cilium/Tetragon —— 见 [`deception/netpolicy/README.md`](../deception/netpolicy/README.md)）；
+1. **蜜罐内容与协议栈**（`modules/honeypot/protocol/` 只做协议注册表 / 运行框架 / 最小适配器；真实协议库待专项调研）；
+2. **L3 网络欺骗细节**（微隔离 / 假拓扑 / 运行时检测是**声明式产物**，复用 Cilium/Tetragon —— 见 [`modules/deception/netpolicy/README.md`](../modules/deception/netpolicy/README.md)）；
 3. 各模块的契约、失败路径与测试（在 [`modules/<模块>.md`](modules/) 的九章文档里）；
 4. 每一条规则正文（在 [`design/`](design/README.md)，本文只引用 ID）。

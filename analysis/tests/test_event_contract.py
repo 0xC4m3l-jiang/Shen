@@ -1,7 +1,7 @@
 """跨语言事件契约：Python 侧必须能解析**核心真实写出**的判定事件载荷。
 
 契约正文：`docs/spec/events.md`。
-夹具：`api/telemetry/v1/testdata/decision_event.json`（由 Go 结构体生成）。
+夹具：`common/api/telemetry/v1/testdata/decision_event.json`（由 Go 结构体生成）。
 本用例的存在理由：L4 曾按自造字段名解析，导致运行时取到事件却一条也解析不出（自洽但错）。
 """
 
@@ -18,6 +18,7 @@ from analysis.worker import run_once
 
 FIXTURE = (
     pathlib.Path(__file__).resolve().parents[2]
+    / "common"
     / "api"
     / "telemetry"
     / "v1"

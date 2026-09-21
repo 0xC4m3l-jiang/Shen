@@ -104,7 +104,7 @@ $ make ai-check
 | 蜜罐后端池 `honeypot` | 未登记后端（"只做入口，不实现具体蜜罐"） | 起一个真实蜜罐并把 `type/addr` 登记进配置 |
 | `isolation`（隔离短路） | 需要先命中"隔离"路径（当前处置未产出 block） | 非影子模式 + 隔离规则 |
 | ② DNS 引流 · ① 旁路镜像 · ④ Sidecar | 当前栈只起 ③ 前置形态 | 分别按 [`../integrate/business-onboarding.md`](../integrate/business-onboarding.md) 部署对应形态 |
-| L3 网络欺骗（Cilium/Tetragon） | 需要 K8s 集群 | 集群侧加载 [`../../deception/netpolicy/config/`](../../deception/netpolicy/config) 的声明式产物 |
+| L3 网络欺骗（Cilium/Tetragon） | 需要 K8s 集群 | 集群侧加载 [`../../modules/deception/netpolicy/config/`](../../modules/deception/netpolicy/config) 的声明式产物 |
 | 真实 LLM 路径（`AR-19`…`AR-21` 双阶段收尾） | 未注入模型后端（`UnconfiguredClient` 显式失败） | 部署侧注入 `AnalysisClient`；否则只跑确定性部分 |
 
 ---

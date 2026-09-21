@@ -5,7 +5,7 @@
 | 模块名 | `adapter-mirror` |
 | 所属层 | L1 |
 | 实现语言 | 配置 + Go |
-| 源码目录 | `deception/mirror/` |
+| 源码目录 | `modules/deception/mirror/` |
 | 负责人 | —— |
 | 状态 | 阶段 1 已实现（含单测） |
 | 最后更新 | 2026-09-17 |
@@ -31,19 +31,19 @@
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
 | 输入 | HTTP 请求（镜像副本） | 本模块的 `Receiver.ServeHTTP` |
-| 输出 | `api/judge/v1` 的 `JudgeRequest` / `JudgeResponse` | `api/judge/v1/judge.proto` |
-| 输出 | `api/telemetry/v1` 的 `TelemetryEvent` | `api/telemetry/v1/telemetry.proto` |
+| 输出 | `common/api/judge/v1` 的 `JudgeRequest` / `JudgeResponse` | `common/api/judge/v1/judge.proto` |
+| 输出 | `common/api/telemetry/v1` 的 `TelemetryEvent` | `common/api/telemetry/v1/telemetry.proto` |
 
 ## 3. 依赖
 
 | 允许依赖 | 原因 |
 | --- | --- |
-| `api/*` 生成的 stub | 跨进程契约是**唯一**允许的跨边界方式 |
+| `common/api/*` 生成的 stub | 跨进程契约是**唯一**允许的跨边界方式 |
 | 标准库 `net/http` | 需要 HTTP 入口 |
 
 | 禁止依赖 | 原因 |
 | --- | --- |
-| **`core/internal/*`** | 编译期强制：Go 的 `internal` 规则让本包无法 import 核心内部类型 |
+| **`common/core/internal/*`** | 编译期强制：Go 的 `internal` 规则让本包无法 import 核心内部类型 |
 | `contract` | 同上 —— 那是进程内类型，跨进程不该用 |
 
 > 这条边界不是靠人工检查，是**编译器**保证的。

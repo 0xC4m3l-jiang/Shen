@@ -191,7 +191,7 @@ go build ./...                    # 验证 vendor/modules.txt 与 go.mod 一致
 ```sh
 # 依赖：改 analysis/requirements*.txt 后
 make pyenv                        # 重建 analysis/.venv（锁定版本）
-# 契约：改了 api/ 下的 .proto 后
+# 契约：改了 common/api/ 下的 .proto 后
 make pygen                        # 重新生成 analysis/proto（并一起提交）
 make pytest                       # 37 例
 ```

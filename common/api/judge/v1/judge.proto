@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package judge.v1;
+
+option go_package = "shen/common/api/judge/v1;judgev1";
+
+// 判定面 —— 适配器经此调用核心（接缝 S1）
+// 候选对比与失效条件见 docs/background/decisions/0002-decision-model.md
+service DeceptionJudge {
+  rpc Judge(JudgeRequest) returns (JudgeResponse);
+}
+
+message JudgeRequest {
+  // 幂等键，由适配器按（来源标识, 会话, 路径, 时间窗）派生（ST-10）
+  string decision_id = 1;
+  Observation observed = 2;
+}
+
+// 首跳可用信息（D0 推论 1）
+message Observation {
+  string source_ip = 1;
+  string user_agent = 2;
+  string method = 3;
+  string path = 4;
+  string tls_fingerprint = 5;
+  map<string, string> headers = 6;
+}
+
+message JudgeResponse {
+  Action action = 1;
+  // 旁路字段，与 action 并列输出（MD-13）
+  Severity severity = 2;
+  // 仅 ACTION_MIRAGE 时非空
+  string backend = 3;
+  // 注意 ST-7：禁止在此回显风险分值、规则名或证据
+}
+
+// 三值闭集，禁止新增第四个取值（MD-12 / TM-12）
+// ACTION_UNSPECIFIED 一律按 ACTION_ORIGIN 处理（NI-5 / V-4）
+enum Action {
+  ACTION_UNSPECIFIED = 0;
+  ACTION_ORIGIN = 1;  // route_origin
+  ACTION_MIRAGE = 2;  // route_mirage
+  ACTION_BLOCK = 3;   // block
+}
+
+// 当前唯一合法值（TM-13 / MD-24）
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_NONE = 1;
+}

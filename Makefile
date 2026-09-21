@@ -15,7 +15,7 @@ ERRCHECK_PKG    := github.com/kisielk/errcheck@v1.20.0
 
 
 # 契约文件在 Make 层求值一次，recipe 里就不必再嵌命令替换。
-PROTOS := $(shell find api -name '*.proto')
+PROTOS := $(shell find common/api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
@@ -80,8 +80,8 @@ help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 # ── 生成 ─────────────────────────────────────────────────────────────────────
-generate: ## 由 api/*.proto 生成 Go 代码（契约的唯一事实源，禁止手写客户端）
-	protoc -I api \
+generate: ## 由 common/api/*.proto 生成 Go 代码（契约的唯一事实源，禁止手写客户端）
+	protoc -I common/api \
 		--go_out=. --go_opt=module=shen \
 		--go-grpc_out=. --go-grpc_opt=module=shen \
 		$(PROTOS)
@@ -127,7 +127,7 @@ ANALYSIS := analysis
 PY      := $(ANALYSIS)/.venv/bin/python
 PY_VENV := $(ANALYSIS)/.venv
 
-pygen: ## 生成 L4 的 Python gRPC 桩（契约唯一事实源仍是 api/ 下的 .proto，ST-6）
+pygen: ## 生成 L4 的 Python gRPC 桩（契约唯一事实源仍是 common/api/ 下的 .proto，ST-6）
 	$(require_pyenv)
 	@$(PY) $(ANALYSIS)/tools/genproto.py
 
@@ -194,7 +194,7 @@ fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
 
 # ── 观测台（人工测试用）──────────────────────────────────────────────────────
 console: ## 只起观测控制台（核心需已在跑；地址取 SHEN_CORE_ADDR）
-	$(GO) run ./console/cmd/console
+	$(GO) run ./modules/console/cmd/console
 
 demo: ## 一键起「能看」的本地环境：核心 + 假业务 + 代理 + 控制台（人工测试入口）
 	@scripts/demo/run.sh
@@ -206,18 +206,18 @@ caddy-surface: ## 列出我们对 Caddy 的 API 依赖（升级 Caddy 前先看�
 	@echo "我们对 Caddy 的依赖面（自动从代码提取）："
 	@echo
 	@echo "  · 引用的包："
-	@grep -rhoE 'github.com/caddyserver/caddy/v2[a-z/]*' --include='*.go' deception/ core/ | sort -u | sed 's/^/      /'
+	@grep -rhoE 'github.com/caddyserver/caddy/v2[a-z/]*' --include='*.go' modules/deception/ common/core/ | sort -u | sed 's/^/      /'
 	@echo
 	@echo "  · 用到的导出符号："
-	@grep -rhoE '\b(caddy|caddyhttp|caddytls|caddyconfig|reverseproxy)\.[A-Z][A-Za-z]*' --include='*.go' deception/ core/ | sort -u | sed 's/^/      /'
+	@grep -rhoE '\b(caddy|caddyhttp|caddytls|caddyconfig|reverseproxy)\.[A-Z][A-Za-z]*' --include='*.go' modules/deception/ common/core/ | sort -u | sed 's/^/      /'
 	@echo
 	@echo "  · 以字符串引用的模块 ID（改了就启动失败或静默失效）："
-	@grep -rhoE '"http\.(handlers|error_handlers)\.[a-z_]+"' --include='*.go' deception/ core/ | sort -u | sed 's/^/      /'
+	@grep -rhoE '"http\.(handlers|error_handlers)\.[a-z_]+"' --include='*.go' modules/deception/ common/core/ | sort -u | sed 's/^/      /'
 
 # ── 基准：AR-29 的空载下界（直连 vs 经引擎）────────────────────────────────
 # 它只给下界；AR-29 的 P99 ≤ 5ms 要在接入演练里按真实载荷实测（实验 E3）。
 bench: ## 基准：业务路径额外延迟的空载下界（AR-29 的输入之一）
-	$(GO) test ./deception/proxy/ -run '^$$' -bench BenchmarkAddedLatency -benchtime 500x -count=1
+	$(GO) test ./modules/deception/proxy/ -run '^$$' -bench BenchmarkAddedLatency -benchtime 500x -count=1
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
 test: pytest ## 全部单测，含数据竞争检测（依据 TB-15）
@@ -252,14 +252,14 @@ fmt: ## 格式化（会改写文件）
 
 run: SHEN_CONFIG ?= deploy/config/config.example.yaml
 run: ## 本地起核心（影子模式；配置取 SHEN_CONFIG）
-	SHEN_CONFIG=$(SHEN_CONFIG) $(GO) run ./core/cmd/core
+	SHEN_CONFIG=$(SHEN_CONFIG) $(GO) run ./common/core/cmd/core
 
 check-config: SHEN_CONFIG ?= deploy/config/config.example.yaml
 check-config: ## 配置干跑：装载 + 校验 + 打印策略摘要（不开端口）
-	SHEN_CONFIG=$(SHEN_CONFIG) $(GO) run ./core/cmd/core -check-config
+	SHEN_CONFIG=$(SHEN_CONFIG) $(GO) run ./common/core/cmd/core -check-config
 
 replay: ## 规则回放：打印「样本观测 → 分数 → 命中信号」（判定响应不回显分值，只能在这里看）
-	$(GO) test -count=1 -run TestRuleReplay -v ./core/cmd/core
+	$(GO) test -count=1 -run TestRuleReplay -v ./common/core/cmd/core
 
 smoke: ## 在线冒烟：对已在跑的核心发判定请求（地址取 SHEN_DEV_ADDR）
 	$(GO) run ./scripts/devcheck -addr "$${SHEN_DEV_ADDR:-127.0.0.1:19443}"

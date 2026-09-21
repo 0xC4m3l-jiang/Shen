@@ -7,7 +7,7 @@
 > **本文件不是规则文档** —— 它规定的是「配置文件长什么样、什么算非法」。
 > 与 [`../design/`](../design/README.md) 冲突时以 `design/` 为准。
 >
-> ⚠️ **本文件与实现必须同步**：`core/internal/policy/policy.go` 的校验器实现本文件 §2 的全部约束；
+> ⚠️ **本文件与实现必须同步**：`common/core/internal/policy/policy.go` 的校验器实现本文件 §2 的全部约束；
 > 改一处**必须**改另一处（`ST-13` 精神：新增字段必须同步更新本文件）。
 
 ---
@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | 配置干跑 | `make check-config`（或 `core -check-config`） | 只装载 + 校验 + 打印策略摘要，**不开端口** |
 | 端到端验证 | `make dev` | 配置干跑（合法 + 非法）→ 起核心 → 在线冒烟 → 规则回放 |
-| 校验器实现 | `core/internal/policy/policy.go` | 本文件 §2 的可执行版本 |
+| 校验器实现 | `common/core/internal/policy/policy.go` | 本文件 §2 的可执行版本 |
 
 > 校验失败时进程**必须**输出「字段路径 + 违反的约束」，例如
 > `policy: rules[1].weight=1.5 越界（要求 0 < weight ≤ 1）` —— 只说「配置非法」不够，
@@ -122,8 +122,8 @@
 元素的**禁止**出现上述之外的键。
 
 > 字段与算符**必须**与 `contract.Match` / `Observation.Field` 一致 —— 类型定义在
-> [`core/internal/contract/verdict.go`](../../core/internal/contract/verdict.go) 与
-> [`observation.go`](../../core/internal/contract/observation.go)，本表是它的**契约化描述**。
+> [`common/core/internal/contract/verdict.go`](../../common/core/internal/contract/verdict.go) 与
+> [`observation.go`](../../common/core/internal/contract/observation.go)，本表是它的**契约化描述**。
 > 新增字段或算符**必须**同时改实现与本节（`MD-5`：跨模块共享类型收敛到一处）。
 
 ### 2.5 `whitelist`（本期预留）
@@ -247,7 +247,7 @@
 > 其余行为与今天逐字节一致（验收判据 ①）。
 > 消费链路：`policy` 装载 → `ai.manifest` 载入 `store.ContentStore` → 投影进策略载荷（`inject_enabled` + `content_manifest`）
 > → 适配器按 `(resource, variant)` 命中并注入改道侧。
-> 非法清单的**每一类失败**都有单测守着（见 `core/internal/policy/ai_test.go`）。
+> 非法清单的**每一类失败**都有单测守着（见 `common/core/internal/policy/ai_test.go`）。
 
 ---
 

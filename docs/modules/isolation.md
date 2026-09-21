@@ -42,7 +42,7 @@
 | 禁止依赖 | 原因 |
 | --- | --- |
 | 判定 / 决策逻辑 | `AR-2` / `MD-12` |
-| 适配器（`deception/`） | 适配器 → 核心单向（`MD-4`） |
+| 适配器（`modules/deception/`） | 适配器 → 核心单向（`MD-4`） |
 
 ## 4. 关键规则
 
@@ -76,7 +76,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 单元 | 命中/未命中 · TTL 写入 · 参数校验 · 存储故障上抛（fail-open 由调用方） | `core/internal/isolation/isolation_test.go` |
+| 单元 | 命中/未命中 · TTL 写入 · 参数校验 · 存储故障上抛（fail-open 由调用方） | `common/core/internal/isolation/isolation_test.go` |
 | 单元 | 命中短路（不调核心） | 同上 |
 | 故障注入 | 存储不可达 → fail-open 回退核心 | 同上 |
 
@@ -92,4 +92,4 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：隔离记录 / TTL / 查询短路（状态外置 + fail-open） | 既有清单（`modules.md` §1.1）· `NI-10` |
-| 2026-09-18 | **实现**：Check / Isolate + 单测；服务面已接短路（`core/internal/control/service.go`） | 本轮开发 |
+| 2026-09-18 | **实现**：Check / Isolate + 单测；服务面已接短路（`common/core/internal/control/service.go`） | 本轮开发 |

@@ -5,7 +5,7 @@
 | 模块名 | `telemetry` |
 | 所属层 | 核心 |
 | 实现语言 | Go |
-| 源码目录 | `core/internal/telemetry/` |
+| 源码目录 | `common/core/internal/telemetry/` |
 | 负责人 | —— |
 | 状态 | 阶段 1 已实现（含单测） |
 | 最后更新 | 2026-09-17 |
@@ -30,8 +30,8 @@
 
 | 方向 | 契约 | 定义位置 |
 | --- | --- | --- |
-| 输入 | `contract.Event`（含幂等键 `EventID`） | `core/internal/contract/` |
-| 输入 | `Sink.Write`（由 `store` 实现的幂等写入） | `core/internal/telemetry/iface.go` |
+| 输入 | `contract.Event`（含幂等键 `EventID`） | `common/core/internal/contract/` |
+| 输入 | `Sink.Write`（由 `store` 实现的幂等写入） | `common/core/internal/telemetry/iface.go` |
 | 输出 | `telemetry.Result`（`Accepted` / `Duplicated`） | 同上 |
 
 ## 3. 依赖

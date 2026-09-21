@@ -20,9 +20,9 @@
 
 | 改了 | 还要改 |
 | --- | --- |
-| `config.md` 的字段 | [`../../deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml)（有单测守着它必须能装载：`core/internal/policy` 的 `TestExampleConfigLoads`） |
-| `events.md` 的键名 | 夹具 [`../../api/telemetry/v1/testdata/decision_event.json`](../../api/telemetry/v1/testdata/decision_event.json) 与 [`../../api/telemetry/v1/testdata/request_judged_event.json`](../../api/telemetry/v1/testdata/request_judged_event.json) + 两侧契约测试（Go 与 Python 读同一夹具） |
-| `ai-contract.md` 的字段 | 生成侧（`analysis/aicap/`）· 核心侧（`core/internal/policy/`）· 适配器侧（`deception/proxy/`）三处 + `policy-payload.md` 的投影 |
-| `console-api.md` 的字段 | 提供方（`core/internal/control/telemetry.go` 的映射 · `core/internal/contract/snapshot.go`）· 消费方（`console/cmd/console/main.go` 的 `*View` · `console/web/index.html` 的取键）；**有键名单测钉住**：`go test ./console/cmd/console/` |
+| `config.md` 的字段 | [`../../deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml)（有单测守着它必须能装载：`common/core/internal/policy` 的 `TestExampleConfigLoads`） |
+| `events.md` 的键名 | 夹具 [`../../common/api/telemetry/v1/testdata/decision_event.json`](../../common/api/telemetry/v1/testdata/decision_event.json) 与 [`../../common/api/telemetry/v1/testdata/request_judged_event.json`](../../common/api/telemetry/v1/testdata/request_judged_event.json) + 两侧契约测试（Go 与 Python 读同一夹具） |
+| `ai-contract.md` 的字段 | 生成侧（`analysis/aicap/`）· 核心侧（`common/core/internal/policy/`）· 适配器侧（`modules/deception/proxy/`）三处 + `policy-payload.md` 的投影 |
+| `console-api.md` 的字段 | 提供方（`common/core/internal/control/telemetry.go` 的映射 · `common/core/internal/contract/snapshot.go`）· 消费方（`modules/console/cmd/console/main.go` 的 `*View` · `modules/console/web/index.html` 的取键）；**有键名单测钉住**：`go test ./modules/console/cmd/console/` |
 | `metrics.md` 的指标 | 采集点那一段代码 + `spec/logs.md`（同一处日志常同时是采集点） |
 | `logs.md` 的字段 | 打日志的那段代码（核心 `decisionRecorder` · 适配器 handler） |

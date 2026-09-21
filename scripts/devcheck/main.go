@@ -21,7 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	judgev1 "shen/api/judge/v1"
+	judgev1 "shen/common/api/judge/v1"
 )
 
 // smokeCase 是一条冒烟样本：一个观测。

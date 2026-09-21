@@ -227,7 +227,7 @@
 
 | 模块 | 插在哪 | 现状 | 前置条件 |
 | --- | --- | --- | --- |
-| `policy` | 实现 `judge.RuleSource` | ✅ **已实现**（配置装载 + 版本台账 + 规则供给）；下发面（`api/policy/v1`）仍未接线 | **无** |
+| `policy` | 实现 `judge.RuleSource` | ✅ **已实现**（配置装载 + 版本台账 + 规则供给）；下发面（`common/api/policy/v1`）仍未接线 | **无** |
 | `director` | 实现 `control.Decider` | ✅ **已实现**（阈值→三值 + 灰度 + 后端名，[`../modules/director.md`](../modules/director.md)）；`severity` 仍固定 `none` | **无**（`policy` 已就绪） |
 | `isolation` | 调用 `store.IsolationStore` | 接口已实现但**当前无人调用** | `session` 已就绪（无阻塞） |
 | `responder` | 被 `director` 调用 | **无预留接缝**（要新定接口） | 需要 `director` 先定后端选择契约 |
@@ -259,7 +259,7 @@ L2 / L3 / L4（`honeypot-protocol` · `honeypot-shell` · `netpolicy` · `intent
 
 ### 4.5 建议顺序
 
-1. ~~**`policy`** —— 唯一「零前置」的阶段 2 模块，且 `api/policy/v1` 已在等它；做它能同时闭合阶段 1 的空规则集~~ ✅ **已完成（2026-09-18）**
+1. ~~**`policy`** —— 唯一「零前置」的阶段 2 模块，且 `common/api/policy/v1` 已在等它；做它能同时闭合阶段 1 的空规则集~~ ✅ **已完成（2026-09-18）**
 2. **`director`** —— 让引擎从「只算分」变成「能处置」，**项目的核心价值在此**
 3. **真实存储**（`store` / `telemetry` 后端）—— 影子模式跑两周就需要真实落库
 4. **`isolation`** —— 与 `director` 配套（判定前短路）
@@ -275,9 +275,9 @@ L2 / L3 / L4（`honeypot-protocol` · `honeypot-shell` · `netpolicy` · `intent
 1. 先在 [`../design/modules.md`](../design/modules.md) §1.1 **加一行**（`MD-18`），并同步 [`../design/structure.md`](../design/structure.md) §1 的目录树
 2. 用 [`_template.md`](_template.md) 创建 `docs/modules/<模块名>.md`（`MD-2` / `MD-17`，**一节都不许删**）
 3. 建源码目录（`MD-19`：清单外的目录**禁止**承载业务逻辑）：
-   - 核心模块 → `core/internal/<模块名>/`
-   - L1 模块 → `deception/<模块名去 adapter- 前缀>/`
-   - L2/L3 → `deception/<模块名>/` · L4 → `analysis/<模块名>/` · 控制台 → `console/`
+   - 核心模块 → `common/core/internal/<模块名>/`
+   - L1 模块 → `modules/deception/<模块名去 adapter- 前缀>/`
+   - L2/L3 → `modules/deception/<模块名>/` · L4 → `analysis/<模块名>/` · 控制台 → `modules/console/`
 4. Go 模块三个文件：`iface.go`（导出的 interface）+ `<模块名>.go` + `<模块名>_test.go`（`MD-22`）
 5. 若属阶段 2/3：**禁止**现在实现（`MD-21`），除非先取得用户确认并更新阶段标记
 6. **落地后更新**：本文件 §3 与 [`../progress.md`](../progress.md) 的状态列 → [`../design/structure.md`](../design/structure.md) §1.5 与 **§1.6**（包级地图）
