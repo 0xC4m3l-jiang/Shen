@@ -5,7 +5,7 @@
 > **证据级 A**：本目录同时放着本次运行的**原始数据**（`check-log.txt` · `manifest.ai.json` · `dag/` · `logs/`），
 > **报告里的每个数字与每张图都从那些文件读出来**（渲染器见 [`scripts/dev/render-dag.py`](../../../scripts/dev/render-dag.py)）。
 > **模型**：DeepSeek（`deepseek-flash`，默认值）；key **只经环境变量 `SHEN_AI_KEY`**，未写入仓库任何文件。
-> **本次结论**：**22 项验收全过** ——
+> **本次结论**：**23 项验收全过** ——
 > 「判定 → 三值决策 → 诱导到幻境（蜜罐）→ **AI 生成内容注入**」全链路实测生效。
 
 ---
@@ -14,7 +14,7 @@
 
 | # | 你的问题 | 结论 | 落在哪 |
 | --- | --- | --- | --- |
-| 1 | 欺骗层整体功能是否已实现 | ✅ **已实现并本次实测**：判定 · 三值决策 · 改道 · 注入 · 观测 · 秒级关闭 · 拦截 | [`check-log.txt`](check-log.txt)（22 项） |
+| 1 | 欺骗层整体功能是否已实现 | ✅ **已实现并本次实测**：判定 · 三值决策 · 改道 · 注入 · 观测 · 秒级关闭 · 拦截 | [`check-log.txt`](check-log.txt)（23 项） |
 | 2 | 欺骗注入能力是否生效 | ✅ **实测生效**：改道侧被注入（**插入**语义，幻境正文保留），业务侧**逐字节不变**（`INT-8`） | §2 阶段② |
 | 3 | 动态注入 **AI 生成** 的欺骗信息 | ✅ **实测生效**：清单 `generator=model-v1`（16 条 AI 写的内容），注入的字节**逐字节等于清单里那一份**，且**不在模板产物里** | §2 阶段② · §3 |
 | 4 | 诱导进场访问蜜罐 | ✅ **实测生效**：幻境后端池 **1 个登记 / 1 个可用**，本阶段 **18 条**判定 `action=route_mirage backend=mirage` | §2 阶段② · §4 |
@@ -103,7 +103,7 @@ flowchart TD
 | 2 | 适配器 (L1) | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 判定来源：核心判定 | 适配器按顺序做四件事：白名单 → 本地判定缓存 → 调核心判定 → 异步上报（AR-6）；它只执行处置，不做判定（AR-7）。 |
 | 3 | 核心判定 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 分值 0.90 · 信号 ua-headless | judge 按配置里的规则逐条匹配（权重求和，1.0 截断）⇒ 分值 0.90，命中 1 条规则（ua-headless）；是否处置由 director 按阈值与灰度决定。 |
 | 4 | 决策 | 分值 0.90 · 信号 ua-headless | 改道（route_mirage） | director 输出**三值**（放行 / 改道 / 拦截）+ severity 旁路字段；影子模式下只算不执行（INT-11）——所以下一跳可能仍是业务源站。 |
-| 5 | 幻境后端 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 200 · 40 字节 · 2.4ms | 决策为改道 ⇒ 转发到幻境后端 'mirage'（改道后端表由策略面下发，ADR-0018）；注入只发生在改道侧（INT-8：业务侧响应零改写）。 |
+| 5 | 幻境后端 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 200 · 40 字节 · 1.2ms | 决策为改道 ⇒ 转发到幻境后端 'mirage'（改道后端表由策略面下发，ADR-0018）；注入只发生在改道侧（INT-8：业务侧响应零改写）。 |
 
 ### 阶段 ② 打开态：改道 + **AI 生成内容注入**（本轮主角）
 
@@ -111,14 +111,14 @@ flowchart TD
   业务侧不动；同会话同资源三次同答案（`AR-30`）；跨会话落不同变体（多态）。
 - **实测**（引自 [`check-log.txt`](check-log.txt)）：
   - `✓ 清单由模型产出（generator=model-v1，不是模板）：generator=model-v1；该资源 8 个 body 由 AI 生成`
-  - `✓ 注入的内容体逐字节来自清单（即 AI 生成的那一份）：命中清单 body（1488 字符）`
+  - `✓ 注入的内容体逐字节来自清单（即 AI 生成的那一份）：命中清单 body（1589 字符）`
   - `✓ 注入体**不在**模板产物里（与模板清单直接对比）：模板清单里没有这一段 ✓`
-  - `✓ 注入是**插入**：幻境自己的正文仍在：字节 40 → 1528`
+  - `✓ 注入是**插入**：幻境自己的正文仍在：字节 40 → 1629`
   - `✓ 业务侧响应**逐字节不变**（INT-8）：3e535d75f9418bcc == 3e535d75f9418bcc`
-  - `✓ 同会话同资源三次 → 响应 sha256 相同：sha256=8a23f6a11809dea5，三次长度 [1385, 1385, 1385]`
+  - `✓ 同会话同资源三次 → 响应 sha256 相同：sha256=6298fc08a2eedc10，三次长度 [1488, 1488, 1488]`
   - `✓ 16 个会话落在 ≥4 个不同变体上（多态生效）：命中 8 个变体（N=8）`
-  - `✓ 逐请求事件：inject=applied 且带 content_id：20 条，例：c-59ca0f195778f6c4`
-  - `✓ DAG 出现「内容注入」跳且三段文字齐全：内容注入 (L1) ⇒ c-662eaf2010bef491`
+  - `✓ 逐请求事件：inject=applied 且带 content_id：20 条，例：c-78bb82913a73e182`
+  - `✓ DAG 出现「内容注入」跳且三段文字齐全：内容注入 (L1) ⇒ c-3eb8269e414b773d`
 - **说明什么**：**AI 写的内容真的进了对手看到的字节里**，而且**只动改道侧**、**可复现**（会话钉定），
   并且有一条**直接判别**（注入体不在模板产物里）—— 不靠 `generator` 字段这一条间接证据。
 - 原始数据：[`dag/2-inject/`](dag/2-inject/) · `requests=21 · to_mirage=18 · to_origin=3 · unjudged=2`
@@ -148,7 +148,7 @@ flowchart LR
 **② 单请求链路（每一步发生了什么）**
 
 
-> 代表请求：`GET /api/users` · action=**route_mirage** · executed=**mirage** · inject=**applied** · score=0.9 · backend=mirage · content_id=c-59ca0f195778f6c4
+> 代表请求：`GET /api/users` · action=**route_mirage** · executed=**mirage** · inject=**applied** · score=0.9 · backend=mirage · content_id=c-78bb82913a73e182
 ```mermaid
 flowchart TD
   n0["客户端<br/><small>127.0.0.1</small>"]
@@ -160,7 +160,7 @@ flowchart TD
   n2 --> n3
   n4["幻境后端<br/><small>mirage</small>"]
   n3 --> n4
-  n5["内容注入 (L1)<br/><small>c-59ca0f195778f6c4</small>"]
+  n5["内容注入 (L1)<br/><small>c-78bb82913a73e182</small>"]
   n4 --> n5
   class n5 inject
   classDef inject fill:#ffe8b3,stroke:#b8860b,stroke-width:2px
@@ -172,15 +172,15 @@ flowchart TD
 | 2 | 适配器 (L1) | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 判定来源：核心判定 | 适配器按顺序做四件事：白名单 → 本地判定缓存 → 调核心判定 → 异步上报（AR-6）；它只执行处置，不做判定（AR-7）。 |
 | 3 | 核心判定 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 分值 0.90 · 信号 ua-headless | judge 按配置里的规则逐条匹配（权重求和，1.0 截断）⇒ 分值 0.90，命中 1 条规则（ua-headless）；是否处置由 director 按阈值与灰度决定。 |
 | 4 | 决策 | 分值 0.90 · 信号 ua-headless | 改道（route_mirage） | director 输出**三值**（放行 / 改道 / 拦截）+ severity 旁路字段；影子模式下只算不执行（INT-11）——所以下一跳可能仍是业务源站。 |
-| 5 | 幻境后端 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 200 · 2285 字节 · 0.2ms | 决策为改道 ⇒ 转发到幻境后端 'mirage'（改道后端表由策略面下发，ADR-0018）；注入只发生在改道侧（INT-8：业务侧响应零改写）。 |
-| 6 | 内容注入 (L1) | 幻境响应的 HTML（插入点标记前）：资源 /api/users | 已插入内容 c-59ca0f195778f6c4（改道侧响应体已改写） | 内容由 ai-capability 离线生成并**强制过护栏**（AR-33：结构 / 黑名单 / 长度 / 风格）→经策略面下发的 content_manifest → 适配器按（资源 + 会话哈希）**确定性命中**变体 → 注入改道侧；业务侧响应字节不变（INT-8），热路径不调模型（AR-30）。 |
+| 5 | 幻境后端 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 200 · 2717 字节 · 0.2ms | 决策为改道 ⇒ 转发到幻境后端 'mirage'（改道后端表由策略面下发，ADR-0018）；注入只发生在改道侧（INT-8：业务侧响应零改写）。 |
+| 6 | 内容注入 (L1) | 幻境响应的 HTML（插入点标记前）：资源 /api/users | 已插入内容 c-78bb82913a73e182（改道侧响应体已改写） | 内容由 ai-capability 离线生成并**强制过护栏**（AR-33：结构 / 黑名单 / 长度 / 风格）→经策略面下发的 content_manifest → 适配器按（资源 + 会话哈希）**确定性命中**变体 → 注入改道侧；业务侧响应字节不变（INT-8），热路径不调模型（AR-30）。 |
 
 ### 阶段 ③ 秒级关闭：不重启适配器就能停注入
 
 - **期望**：核心切回 `ai.enabled=false`（**只重启核心**）⇒ 适配器下一个 Pull 周期后不再注入。
 - **实测**：
-  - `✓ 核心（关闭态 v3）已重启：pid=7940`
-  - `✓ 适配器进程未被重启：pid=7935`
+  - `✓ 核心（关闭态 v3）已重启：pid=12777`
+  - `✓ 适配器进程未被重启：pid=12773`
   - `✓ 关闭后：响应体里没有清单里的任何内容体：字节 40 到 40`
   - `✓ 关闭后：改道侧响应回到原样（不再注入）：9eef5471e0ca88c0 == 9eef5471e0ca88c0`
 - **说明什么**：**能秒级关掉**（三层开关里最外那一层），不需要发布、不需要重启接入层。
@@ -226,7 +226,7 @@ flowchart TD
 | 2 | 适配器 (L1) | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 判定来源：核心判定 | 适配器按顺序做四件事：白名单 → 本地判定缓存 → 调核心判定 → 异步上报（AR-6）；它只执行处置，不做判定（AR-7）。 |
 | 3 | 核心判定 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 分值 0.90 · 信号 ua-headless | judge 按配置里的规则逐条匹配（权重求和，1.0 截断）⇒ 分值 0.90，命中 1 条规则（ua-headless）；是否处置由 director 按阈值与灰度决定。 |
 | 4 | 决策 | 分值 0.90 · 信号 ua-headless | 改道（route_mirage） | director 输出**三值**（放行 / 改道 / 拦截）+ severity 旁路字段；影子模式下只算不执行（INT-11）——所以下一跳可能仍是业务源站。 |
-| 5 | 幻境后端 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 200 · 40 字节 · 1.5ms | 决策为改道 ⇒ 转发到幻境后端 'mirage'（改道后端表由策略面下发，ADR-0018）；注入只发生在改道侧（INT-8：业务侧响应零改写）。 |
+| 5 | 幻境后端 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 200 · 40 字节 · 1.6ms | 决策为改道 ⇒ 转发到幻境后端 'mirage'（改道后端表由策略面下发，ADR-0018）；注入只发生在改道侧（INT-8：业务侧响应零改写）。 |
 
 ### 阶段 ④ 拦截：第三值 `block`（默认关，覆盖验证）
 
@@ -278,7 +278,7 @@ flowchart TD
 | 2 | 适配器 (L1) | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 判定来源：核心判定 | 适配器按顺序做四件事：白名单 → 本地判定缓存 → 调核心判定 → 异步上报（AR-6）；它只执行处置，不做判定（AR-7）。 |
 | 3 | 核心判定 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 分值 1.00 · 信号 ua-headless | judge 按配置里的规则逐条匹配（权重求和，1.0 截断）⇒ 分值 1.00，命中 1 条规则（ua-headless）；是否处置由 director 按阈值与灰度决定。 |
 | 4 | 决策 | 分值 1.00 · 信号 ua-headless | 拦截（block） | director 输出**三值**（放行 / 改道 / 拦截）+ severity 旁路字段；影子模式下只算不执行（INT-11）——所以下一跳可能仍是业务源站。 |
-| 5 | 拦截 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 403 · 0 字节 · 3.3ms | 决策为拦截 ⇒ 返回 403。403 是对手**可见**的处置，属已承认的设计（ADR-0002）：block 只用于「明确拒绝已知恶意」，透明误导由 route_mirage 承担。 |
+| 5 | 拦截 | GET /api/users（来源 127.0.0.1 · UA HeadlessChrome/120） | 403 · 0 字节 · 1.0ms | 决策为拦截 ⇒ 返回 403。403 是对手**可见**的处置，属已承认的设计（ADR-0002）：block 只用于「明确拒绝已知恶意」，透明误导由 route_mirage 承担。 |
 
 ### 阶段 ⑤（另一种形态）Docker 整栈：三值 + 白名单都在**交付形态**里验过
 
@@ -361,19 +361,19 @@ flowchart TD
 | 结构去重后的 body 数 | **16**（=16 ⇒ 每条结构都不一样） |
 | 验收里那条**直接判别** | 「注入体**不在**模板产物里」（与同一参数生成的模板清单逐字节对比） |
 
-**AI 写的一条正文**（`manifest.ai.json` 的 `/` · variant 0 · checksum `2cc41301137da1b7` · 3052 字节；
+**AI 写的一条正文**（`manifest.ai.json` 的 `/` · variant 0 · checksum `c70ca0f7db765ba8` · 3666 字节；
 **示例** —— 注入命中的是清单里的某一份，不一定是这一条）：
 
 ```html
-<section class="service-status" id="service-status-overview" data-profile="site-content" data-variant="0" data-revision="r7">
-  <header class="service-status__header">
-    <h2>Service status overview</h2>
-    <p class="service-status__summary">Service summary for revision <code>r7</code> &middot; 8 records in the service registry &middot; window 2024-06-01T00:00Z &ndash; 2024-06-01T06:00Z</p>
-  </header>
-
-  <table class="service-inventory">
-    <caption>Service inventory &mdash; health of each registered component</caption>
-    <thead>
+<section class="doc-profile" data-profile="site-content" data-variant="0">
+  <header class="profile-head">
+    <h1>Service registry &amp; status</h1>
+    <p class="lede">Service overview for the registered endpoint set. This page lists the current service inventory together with the lifecycle state and observed health state recorded for each entry.</p>
+    <dl class="meta-grid">
+      <div><dt>Record set</dt><dd>RG-0007</dd></div>
+      <div><dt>Revision</dt><dd>rev 14</dd></div>
+      <div><dt>Compiled at</dt><dd>2024-11-06T04:20:00Z</dd></div>
+      <div><dt>Entries</dt><dd>6</dd></div>
 ```
 
 > 完整清单：[`manifest.ai.json`](manifest.ai.json)（16 条 body 全文 + checksum + content_id）。
@@ -421,11 +421,11 @@ flowchart TD
 **阶段② 那一次运行的核心日志**（[`logs/core-stage2.log`](logs/core-stage2.log)，每阶段一个文件名，不会串）：
 
 ```text
-2026/09/21 23:40:29 策略已装载 policy_id=ai-check version=2 checksum=1937f956f5b1f0519f8111f1ebb17f2f00599a5e7e9f79dc1416b52977939fd3 规则=1 条 灰度=100%
-2026/09/21 23:40:29 诱饵面：0 个资产启用（observe-only，MD-25）
-2026/09/21 23:40:29 幻境后端池：1 个登记 / 1 个可用（不实现具体蜜罐，ADR-0011）
-2026/09/21 23:40:29 AI 内容已装载：/var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501/manifest.json（内容版本 v1 · 变体 8 · 资源 2 · 内容 16 条）
-2026/09/21 23:40:29 核心已启动（接管模式（产出真实三值决策））：127.0.0.1:55023
+2026/09/22 00:05:34 策略已装载 policy_id=ai-check version=2 checksum=1937f956f5b1f0519f8111f1ebb17f2f00599a5e7e9f79dc1416b52977939fd3 规则=1 条 灰度=100%
+2026/09/22 00:05:34 诱饵面：0 个资产启用（observe-only，MD-25）
+2026/09/22 00:05:34 幻境后端池：1 个登记 / 1 个可用（不实现具体蜜罐，ADR-0011）
+2026/09/22 00:05:34 AI 内容已装载：/var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501/manifest.json（内容版本 v1 · 变体 8 · 资源 2 · 内容 16 条）
+2026/09/22 00:05:34 核心已启动（接管模式（产出真实三值决策））：127.0.0.1:57921
 ```
 
 > 这一阶段共 **18** 条 `action=route_mirage backend=mirage` 的判定（同一文件里可数）。
@@ -434,9 +434,9 @@ flowchart TD
 **适配器的落点日志**（[`logs/proxy-on.log`](logs/proxy-on.log)；同一路径、不同会话落到不同变体，字节数因此不同）：
 
 ```text
-proxy: 路由：GET /api/users decision_id=17d8c8912ddd138e096fe7153034a709 判定=route_mirage 落点=mirage（后端 "mirage"）状态=200 字节=1528 耗时=1.9ms
-proxy: 路由：GET /api/users decision_id=0bb08d54a6589fa2505b5a4859ff5c6b 判定=route_mirage 落点=mirage（后端 "mirage"）状态=200 字节=1385 耗时=0.4ms
-proxy: 路由：GET /api/users decision_id=9be9a001692676753000887ecc330782 判定=route_mirage 落点=mirage（后端 "mirage"）状态=200 字节=2988 耗时=0.3ms
+proxy: 路由：GET /api/users decision_id=38df77da1bd31b8c21d27f4ee3e6dfd5 判定=route_mirage 落点=mirage（后端 "mirage"）状态=200 字节=1629 耗时=2.6ms
+proxy: 路由：GET /api/users decision_id=7b64ae42e0285e8b2cfd96a36ed3f060 判定=route_mirage 落点=mirage（后端 "mirage"）状态=200 字节=1488 耗时=0.5ms
+proxy: 路由：GET /api/users decision_id=ed82353c64c34e577fdb761c32bf7100 判定=route_mirage 落点=mirage（后端 "mirage"）状态=200 字节=4739 耗时=0.3ms
 ```
 
 **诚实边界**：本项目**不实现具体蜜罐**（[`ADR-0011`](../../background/decisions/0011-honeypot-entry-external-backends.md)：

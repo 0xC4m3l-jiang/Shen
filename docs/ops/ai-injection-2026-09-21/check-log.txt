@@ -1,10 +1,10 @@
-临时目录：/var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501（端口 {'core': 55023, 'proxy': 55024, 'console': 55025, 'business': 55026, 'mirage': 55027}）
+临时目录：/var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501（端口 {'core': 57921, 'proxy': 57922, 'console': 57923, 'business': 57924, 'mirage': 57925}）
 构建（core / proxy / console）…
-清单：aicap: 生成 16 条 / 护栏拒绝 0 条 · 生成器 model-v1 · 清单 v1 variants=8 entries=2 bytes=49740 → /var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501/manifest.json
+清单：aicap: 生成 16 条 / 护栏拒绝 0 条 · 生成器 model-v1 · 清单 v1 variants=8 entries=2 bytes=52436 → /var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501/manifest.json
 
 == ① 关闭态（ai.enabled=false + SHEN_PROXY_INJECT_CONTENT=false）==
 
-[阶段 1-closed] DAG 原始数据：/tmp/dag-v3/1-closed · topology.json(1224B), graphs.json(4445B), flow.json(538B), analysis.json(3B)
+[阶段 1-closed] DAG 原始数据：/tmp/dag-v4/1-closed · topology.json(1224B), graphs.json(4445B), flow.json(538B), analysis.json(3B)
 
 == ② 打开态（ai.enabled=true + 清单下发 + SHEN_PROXY_INJECT_CONTENT=true）==
 
@@ -12,33 +12,34 @@
 
 == ⑥ DAG 注入跳 ==
 
-[阶段 2-inject] DAG 原始数据：/tmp/dag-v3/2-inject · topology.json(1537B), graphs.json(58694B), flow.json(5347B), analysis.json(3B)
+[阶段 2-inject] DAG 原始数据：/tmp/dag-v4/2-inject · topology.json(1537B), graphs.json(58695B), flow.json(5349B), analysis.json(3B)
 
 == ⑤ 秒级关闭（核心重启 + 适配器不重启）==
 
-[阶段 3-killed] DAG 原始数据：/tmp/dag-v3/3-killed · topology.json(1052B), graphs.json(2326B), flow.json(285B), analysis.json(3B)
+[阶段 3-killed] DAG 原始数据：/tmp/dag-v4/3-killed · topology.json(1052B), graphs.json(2325B), flow.json(285B), analysis.json(3B)
 
 == ③ 模拟高分请求 → 拦截（SHEN_BLOCK_ENABLED=true）==
 
-[阶段 4-block] DAG 原始数据：/tmp/dag-v3/4-block · topology.json(1022B), graphs.json(2309B), flow.json(270B), analysis.json(3B)
+[阶段 4-block] DAG 原始数据：/tmp/dag-v4/4-block · topology.json(1022B), graphs.json(2309B), flow.json(270B), analysis.json(3B)
 
 ──────────────── 验收结果 ────────────────
-  ✓ 清单生成成功：aicap: 生成 16 条 / 护栏拒绝 0 条 · 生成器 model-v1 · 清单 v1 variants=8 entries=2 bytes=49740 → /var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501/manifest.json
+  ✓ 清单生成成功：aicap: 生成 16 条 / 护栏拒绝 0 条 · 生成器 model-v1 · 清单 v1 variants=8 entries=2 bytes=52436 → /var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501/manifest.json
   ✓ 清单由模型产出（generator=model-v1，不是模板）：generator=model-v1；该资源 8 个 body 由 AI 生成
   ✓ 关卡：护栏拒绝全部内容 ⇒ 退出码 1 且**不写清单**：exit=1 清单存在=False
+  ✓ 关闭态：确实到达改道侧（否则下面的字节比较没有意义）：40 字节
   ✓ 改道侧与「未注入基线」逐字节一致：经引擎 9eef5471e0ca88c0 vs 幻境直连 9eef5471e0ca88c0
   ✓ 业务侧与业务基线逐字节一致：经引擎 3e535d75f9418bcc vs 业务直连 3e535d75f9418bcc
   ✓ 逐请求事件：改道侧上报 inject=disabled：1 条改道侧请求，取值 ['disabled']
-  ✓ 注入的内容体逐字节来自清单（即 AI 生成的那一份）：命中清单 body（1488 字符）
+  ✓ 注入的内容体逐字节来自清单（即 AI 生成的那一份）：命中清单 body（1589 字符）
   ✓ 注入体**不在**模板产物里（与模板清单直接对比）：模板清单里没有这一段 ✓
-  ✓ 注入是**插入**：幻境自己的正文仍在：字节 40 → 1528
+  ✓ 注入是**插入**：幻境自己的正文仍在：字节 40 → 1629
   ✓ 业务侧响应**逐字节不变**（INT-8）：3e535d75f9418bcc == 3e535d75f9418bcc
-  ✓ 同会话同资源三次 → 响应 sha256 相同：sha256=8a23f6a11809dea5，三次长度 [1385, 1385, 1385]
+  ✓ 同会话同资源三次 → 响应 sha256 相同：sha256=6298fc08a2eedc10，三次长度 [1488, 1488, 1488]
   ✓ 16 个会话落在 ≥4 个不同变体上（多态生效）：命中 8 个变体（N=8）
-  ✓ 逐请求事件：inject=applied 且带 content_id：20 条，例：c-59ca0f195778f6c4
-  ✓ DAG 出现「内容注入」跳且三段文字齐全：内容注入 (L1) ⇒ c-662eaf2010bef491
-  ✓ 核心（关闭态 v3）已重启：pid=7940
-  ✓ 适配器进程未被重启：pid=7935
+  ✓ 逐请求事件：inject=applied 且带 content_id：20 条，例：c-78bb82913a73e182
+  ✓ DAG 出现「内容注入」跳且三段文字齐全：内容注入 (L1) ⇒ c-3eb8269e414b773d
+  ✓ 核心（关闭态 v3）已重启：pid=12777
+  ✓ 适配器进程未被重启：pid=12773
   ✓ 关闭后：改道侧响应回到原样（不再注入）：9eef5471e0ca88c0 == 9eef5471e0ca88c0
   ✓ 关闭后：响应体里没有清单里的任何内容体：字节 40 到 40
   ✓ 逐请求事件回到 inject=disabled（下发级开关生效）：1 条 disabled
@@ -48,4 +49,4 @@
 
 临时目录保留：/var/folders/nq/bmyvmrpj3wz3jzk9g7l43rl00000gn/T/shen-ai-check-501
 
-✅ 全部通过（22 项）
+✅ 全部通过（23 项）

@@ -1,36 +1,36 @@
-{"level":"warn","ts":1790005230.060999,"logger":"admin","msg":"admin endpoint disabled"}
-{"level":"info","ts":1790005230.061119,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x35f1b2c25100"}
-{"level":"warn","ts":1790005230.061845,"logger":"http","msg":"HTTP/2 skipped because it requires TLS","network":"tcp","addr":"127.0.0.1:55024"}
-{"level":"warn","ts":1790005230.061856,"logger":"http","msg":"HTTP/3 skipped because it requires TLS","network":"tcp","addr":"127.0.0.1:55024"}
-{"level":"info","ts":1790005230.0618591,"logger":"http.log","msg":"server running","name":"shen","protocols":["h1","h2","h3"]}
-{"level":"info","ts":1790005230.061884,"msg":"proxy 已启动：监听 127.0.0.1:55024（明文），核心 127.0.0.1:55023，业务 http://127.0.0.1:55026，接管模式（可按决策改道）"}
-{"level":"info","ts":1790005230.061891,"msg":"策略面：每 1s 拉取一次（适配器标识 proxy@127.0.0.1:55024）"}
-{"level":"info","ts":1790005230.061895,"msg":"未配置引流后端（SHEN_PROXY_MIRAGE 为空）：所有 route_mirage 都会回落业务"}
-{"level":"info","ts":1790005230.0664551,"logger":"tls","msg":"storage cleaning happened too recently; skipping for now","storage":"FileStorage:/Users/camel/Library/Application Support/Caddy","instance":"7bb1cd7d-0717-4bdb-bfa6-bf181fd76bc2","try_again":1790091630.066454,"try_again_in":86399.999999792}
-{"level":"info","ts":1790005230.0668118,"logger":"tls","msg":"finished cleaning storage units"}
-{"level":"info","ts":1790005230.067363,"msg":"proxy: 已应用策略 ai-check v2（1 个改道后端）"}
-{"level":"info","ts":1790005231.735528,"msg":"proxy: 路由：GET /api/users decision_id=17d8c8912ddd138e096fe7153034a709 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1528 耗时=1.9ms"}
-{"level":"info","ts":1790005231.842686,"msg":"proxy: 路由：GET /healthz decision_id=a0806572cd6982e192116c06bc683ab4 判定=route_origin 落点=origin（后端 \"\"）状态=200 字节=39 耗时=1.3ms"}
-{"level":"info","ts":1790005231.843528,"msg":"proxy: 路由：GET /api/users decision_id=0bb08d54a6589fa2505b5a4859ff5c6b 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1385 耗时=0.4ms"}
-{"level":"info","ts":1790005231.843931,"msg":"proxy: 路由：GET /api/users decision_id=0bb08d54a6589fa2505b5a4859ff5c6b 判定=route_mirage 落点=cache（后端 \"mirage\"）状态=200 字节=1385 耗时=0.2ms"}
-{"level":"info","ts":1790005231.844231,"msg":"proxy: 路由：GET /api/users decision_id=0bb08d54a6589fa2505b5a4859ff5c6b 判定=route_mirage 落点=cache（后端 \"mirage\"）状态=200 字节=1385 耗时=0.1ms"}
-{"level":"info","ts":1790005231.844737,"msg":"proxy: 路由：GET /api/users decision_id=9be9a001692676753000887ecc330782 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2988 耗时=0.3ms"}
-{"level":"info","ts":1790005231.845108,"msg":"proxy: 路由：GET /api/users decision_id=485c8de2624beba2964475b56a6627c1 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1683 耗时=0.2ms"}
-{"level":"info","ts":1790005231.8454459,"msg":"proxy: 路由：GET /api/users decision_id=bc8bf40b5a8711d5897c3e2ba1b1dd80 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1385 耗时=0.2ms"}
-{"level":"info","ts":1790005231.8457952,"msg":"proxy: 路由：GET /api/users decision_id=3669427f5622b06e49c15ed35e5684ee 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4732 耗时=0.2ms"}
-{"level":"info","ts":1790005231.8461828,"msg":"proxy: 路由：GET /api/users decision_id=1f351cd87890aab6624553505ecc2a58 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2285 耗时=0.2ms"}
-{"level":"info","ts":1790005231.846514,"msg":"proxy: 路由：GET /api/users decision_id=0075c852642362c653036cabdf8b8e5b 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1528 耗时=0.2ms"}
-{"level":"info","ts":1790005231.846831,"msg":"proxy: 路由：GET /api/users decision_id=1b860acf6f831f909c74336c4515140c 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2915 耗时=0.2ms"}
-{"level":"info","ts":1790005231.847209,"msg":"proxy: 路由：GET /api/users decision_id=7dee85f7f36f538845da4d5cce723e16 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2310 耗时=0.2ms"}
-{"level":"info","ts":1790005231.847627,"msg":"proxy: 路由：GET /api/users decision_id=cdd153cdaba7e8af65dd0e8c806bfac6 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2988 耗时=0.3ms"}
-{"level":"info","ts":1790005231.847954,"msg":"proxy: 路由：GET /api/users decision_id=d712f4ea300a2ce07ea21698181d1c9d 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1683 耗时=0.2ms"}
-{"level":"info","ts":1790005231.848279,"msg":"proxy: 路由：GET /api/users decision_id=971944c2b577f44a18ee4d99c94fba70 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1683 耗时=0.2ms"}
-{"level":"info","ts":1790005231.848626,"msg":"proxy: 路由：GET /api/users decision_id=29afe2d5b9aff3c35ce82fd560ff68fa 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2988 耗时=0.2ms"}
-{"level":"info","ts":1790005231.84898,"msg":"proxy: 路由：GET /api/users decision_id=4a04f755510c1425f80ed4b956f40390 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4732 耗时=0.2ms"}
-{"level":"info","ts":1790005231.8492851,"msg":"proxy: 路由：GET /api/users decision_id=d82af6158afb6597b968bd0dd09e2661 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1385 耗时=0.2ms"}
-{"level":"info","ts":1790005231.8496041,"msg":"proxy: 路由：GET /api/users decision_id=c327d35f56d5a0752329583e4d1e4d6d 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1528 耗时=0.2ms"}
-{"level":"info","ts":1790005231.8499289,"msg":"proxy: 路由：GET /api/users decision_id=6adef327251186fdecb64eed7dbb9ce9 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2285 耗时=0.2ms"}
-{"level":"info","ts":1790005232.071094,"msg":"proxy: 已应用策略 ai-check v3（1 个改道后端）"}
-{"level":"info","ts":1790005234.9662862,"msg":"proxy: 路由：GET /api/users decision_id=cb4c891445c6f6b852378b1c19ec4831 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=40 耗时=1.5ms"}
-{"level":"info","ts":1790005234.9717388,"msg":"收到 terminated，正在退出"}
-{"level":"info","ts":1790005234.97182,"logger":"http","msg":"servers shutting down; grace period initiated","duration":10}
+{"level":"warn","ts":1790006735.065973,"logger":"admin","msg":"admin endpoint disabled"}
+{"level":"info","ts":1790006735.066129,"logger":"tls.cache.maintenance","msg":"started background certificate maintenance","cache":"0x4d4c61417b00"}
+{"level":"warn","ts":1790006735.0668721,"logger":"http","msg":"HTTP/2 skipped because it requires TLS","network":"tcp","addr":"127.0.0.1:57922"}
+{"level":"warn","ts":1790006735.0668821,"logger":"http","msg":"HTTP/3 skipped because it requires TLS","network":"tcp","addr":"127.0.0.1:57922"}
+{"level":"info","ts":1790006735.066886,"logger":"http.log","msg":"server running","name":"shen","protocols":["h1","h2","h3"]}
+{"level":"info","ts":1790006735.066914,"msg":"proxy 已启动：监听 127.0.0.1:57922（明文），核心 127.0.0.1:57921，业务 http://127.0.0.1:57924，接管模式（可按决策改道）"}
+{"level":"info","ts":1790006735.06692,"msg":"策略面：每 1s 拉取一次（适配器标识 proxy@127.0.0.1:57922）"}
+{"level":"info","ts":1790006735.066923,"msg":"未配置引流后端（SHEN_PROXY_MIRAGE 为空）：所有 route_mirage 都会回落业务"}
+{"level":"info","ts":1790006735.069039,"msg":"proxy: 已应用策略 ai-check v2（1 个改道后端）"}
+{"level":"info","ts":1790006735.0713532,"logger":"tls","msg":"storage cleaning happened too recently; skipping for now","storage":"FileStorage:/Users/camel/Library/Application Support/Caddy","instance":"7bb1cd7d-0717-4bdb-bfa6-bf181fd76bc2","try_again":1790093135.0713532,"try_again_in":86399.999999375}
+{"level":"info","ts":1790006735.071584,"logger":"tls","msg":"finished cleaning storage units"}
+{"level":"info","ts":1790006736.75349,"msg":"proxy: 路由：GET /api/users decision_id=38df77da1bd31b8c21d27f4ee3e6dfd5 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1629 耗时=2.6ms"}
+{"level":"info","ts":1790006736.840587,"msg":"proxy: 路由：GET /healthz decision_id=b1b69c65e268f6a298e6e04a2e386fca 判定=route_origin 落点=origin（后端 \"\"）状态=200 字节=39 耗时=0.7ms"}
+{"level":"info","ts":1790006736.841415,"msg":"proxy: 路由：GET /api/users decision_id=7b64ae42e0285e8b2cfd96a36ed3f060 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1488 耗时=0.5ms"}
+{"level":"info","ts":1790006736.841794,"msg":"proxy: 路由：GET /api/users decision_id=7b64ae42e0285e8b2cfd96a36ed3f060 判定=route_mirage 落点=cache（后端 \"mirage\"）状态=200 字节=1488 耗时=0.2ms"}
+{"level":"info","ts":1790006736.842061,"msg":"proxy: 路由：GET /api/users decision_id=7b64ae42e0285e8b2cfd96a36ed3f060 判定=route_mirage 落点=cache（后端 \"mirage\"）状态=200 字节=1488 耗时=0.1ms"}
+{"level":"info","ts":1790006736.8425229,"msg":"proxy: 路由：GET /api/users decision_id=ed82353c64c34e577fdb761c32bf7100 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4739 耗时=0.3ms"}
+{"level":"info","ts":1790006736.842901,"msg":"proxy: 路由：GET /api/users decision_id=c59f2eed95539c68e79778067eff2771 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2214 耗时=0.2ms"}
+{"level":"info","ts":1790006736.843266,"msg":"proxy: 路由：GET /api/users decision_id=0f044c032474b56cb941140f7d8735f1 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1488 耗时=0.2ms"}
+{"level":"info","ts":1790006736.843603,"msg":"proxy: 路由：GET /api/users decision_id=d548b26a4069d10daf3acdfdc556c491 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4649 耗时=0.2ms"}
+{"level":"info","ts":1790006736.844022,"msg":"proxy: 路由：GET /api/users decision_id=6d8309c7c79ecdbc2f18432d4a94afaa 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2717 耗时=0.2ms"}
+{"level":"info","ts":1790006736.8443751,"msg":"proxy: 路由：GET /api/users decision_id=794d15288d90b6295416ed459615f97e 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1629 耗时=0.2ms"}
+{"level":"info","ts":1790006736.844992,"msg":"proxy: 路由：GET /api/users decision_id=2dd42c2fe9e1b35e1bb900a4a9fca7f0 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=3525 耗时=0.4ms"}
+{"level":"info","ts":1790006736.8454862,"msg":"proxy: 路由：GET /api/users decision_id=42f2e63cbac745deab4cce50f2f65f4a 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=3885 耗时=0.3ms"}
+{"level":"info","ts":1790006736.8458939,"msg":"proxy: 路由：GET /api/users decision_id=b7f49ceebbb369b256a6f91f8eeefbcb 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4739 耗时=0.2ms"}
+{"level":"info","ts":1790006736.846248,"msg":"proxy: 路由：GET /api/users decision_id=a95633856d72ac14cf848651a17f389c 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2214 耗时=0.2ms"}
+{"level":"info","ts":1790006736.846653,"msg":"proxy: 路由：GET /api/users decision_id=a258e8579266c4c4548cab68240bdc97 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2214 耗时=0.2ms"}
+{"level":"info","ts":1790006736.847014,"msg":"proxy: 路由：GET /api/users decision_id=c52297eabe1c73dbea2d3b9bbfe5d8fb 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4739 耗时=0.2ms"}
+{"level":"info","ts":1790006736.8474061,"msg":"proxy: 路由：GET /api/users decision_id=5c4a12d39580ea4ad9b56679827784d3 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=4649 耗时=0.2ms"}
+{"level":"info","ts":1790006736.847763,"msg":"proxy: 路由：GET /api/users decision_id=14fd0e784e6f419d2671fc3d7695e1c1 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1488 耗时=0.2ms"}
+{"level":"info","ts":1790006736.8481228,"msg":"proxy: 路由：GET /api/users decision_id=4a0653a8666eaa520abb1beaf406d85b 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=1629 耗时=0.2ms"}
+{"level":"info","ts":1790006736.848473,"msg":"proxy: 路由：GET /api/users decision_id=9a9977bbeb8bef3e1cd6df0291f73503 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=2717 耗时=0.2ms"}
+{"level":"info","ts":1790006737.075308,"msg":"proxy: 已应用策略 ai-check v3（1 个改道后端）"}
+{"level":"info","ts":1790006739.975018,"msg":"proxy: 路由：GET /api/users decision_id=d118ea296e02b856b4616febc82b797d 判定=route_mirage 落点=mirage（后端 \"mirage\"）状态=200 字节=40 耗时=1.6ms"}
+{"level":"info","ts":1790006739.981205,"msg":"收到 terminated，正在退出"}
+{"level":"info","ts":1790006739.981256,"logger":"http","msg":"servers shutting down; grace period initiated","duration":10}

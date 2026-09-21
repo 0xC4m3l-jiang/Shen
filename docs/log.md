@@ -18,7 +18,7 @@
    产物**如实标注** `generator`（`template-v1` / `model-v1`，闭集守住）；`resource`/`variant` 等身份字段**不从模型取**；
    **缺后端就退出 2、不写清单**（不允许「一条 AI 内容都没有」却写出一份看着成功的清单）；
 2. **真模型验证**：`make ai-check-llm` → 16 条内容由 DeepSeek 生成、**0 条被拒**，
-   端到端 **21/21** 全过，其中关键断言是「**注入的字节逐字节来自清单**」（1634 字符命中）——
+   端到端 **23/23** 全过，其中关键断言是「**注入的字节逐字节来自清单**」（1589 字符命中）——
    模板路有固定指纹可断言，模型路没有，所以这条断言才是「AI 内容真的进了响应」的证明；
 3. **顺手补了三值的第三值**：`--block` 覆盖验证（`SHEN_BLOCK_ENABLED=true` + 权重 1.0）⇒ 403 · `executed=block` · 拦截侧不注入；
 4. **每个阶段都有图**：`--dag-out` 落盘控制台原始 JSON → 新增 `scripts/dev/render-dag.py` 渲染成 mermaid。
@@ -36,7 +36,7 @@
 **对应文档**：`docs/plans/2026-09-21-ai-injection-verification.md` · 报告 `docs/ops/ai-injection-2026-09-21/README.md` · [ADR-0031](docs/background/decisions/0031-analysis-reuse-and-model-backend.md)（修正条目）· 规则依据 `AR-15` / `AR-33` / `AR-30` / `INT-8` / `NI-1` / `MD-12`
 
 **验证**：`make gate` 通过（**126 例** pytest —— 新增 8 例内容两条路的用例）·
-`make ai-check` **21/21**（模板 + 拦截，连跑 3 次稳定）· `make ai-check-llm` **22/22**（真模型，在**终版代码**上重跑）·
+`make ai-check` **21/21**（模板 + 拦截，连跑 3 次稳定）· `make ai-check-llm` **23/23**（真模型，在**终版代码**上重跑）·
 `make dev` **6/6**（回归：响应路径仍不碰模型）· `make archcheck` 通过（`AR-33` 结构判据）·
 **Docker 交付形态也跑了**：默认栈（影子）流量扫描 `断言 26/27 · 缺口 8 · 链路 70 条核对`；接管覆盖（`compose.verify-mirage.yaml`）
 实测三值 `route_mirage→mirage`(200) / `block`(403) / `route_origin`(200) + 后端池 1/1；白名单（`INT-25`）实测 `executed=whitelist` + `unjudged=true`（不调核心）。
@@ -47,9 +47,9 @@
 | 场景 | 期望 | 实测 |
 | --- | --- | --- |
 | 内容由模型产出 | `generator=model-v1`、0 条被拒 | ✅ 16 条 AI 内容 |
-| **AI 内容被注入** | 注入体逐字节来自清单 | ✅ 命中 1634 字符 |
+| **AI 内容被注入** | 注入体逐字节来自清单 | ✅ 命中 1589 字符 |
 | 只改道侧（`INT-8`） | 业务侧字节与直连一致 | ✅ |
-| 会话钉定（`AR-30`） | 同会话三次同 sha256 | ✅ `3c04f9fb72915807` |
+| 会话钉定（`AR-30`） | 同会话三次同 sha256 | ✅ `6298fc08a2eedc10` |
 | 多态 | 16 会话落 ≥4 变体 | ✅ 8 个变体 |
 | 秒级关闭 | 只重启核心即停注入 | ✅ `inject=disabled` |
 | 拦截（第三值） | 403 + `executed=block` + 不注入 | ✅ |
