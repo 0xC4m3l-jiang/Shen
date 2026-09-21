@@ -9,6 +9,86 @@
 
 ---
 
+## 2026-09-21 · 控制台「配置」块 + 逐判定日志补全（+ 读面契约收成一处）
+
+**做了什么**：按用户选定的路线（无构建 · 先做配置与日志 · 核心加只读快照 · 技能暂不装），给控制台补了两块**今天完全看不到**的东西：
+
+1. **「配置」块（从 0 到有）**：新增核心只读 RPC `GetCoreSnapshot` + 控制台接口 /api/config + 页面块。
+   看到的是**核心当前按什么在跑**：策略 id / 版本 / 校验和 / 规则数 / 白名单条数 +
+   AI 能力开关 / 任务种类 / 模型 / 清单路径 / 变体数 / 轮换冷却 / **已装载清单的资源与内容条数**。
+   「AI 开关开着但没有内容」这种配置错会被**显式标出来**。
+2. **逐判定日志字段补全**：页面补上「判定 ID / severity / 看链路」三列（现在与逐判定日志字典的 11 个字段一一对应），
+   每条都能一键跳到该请求的四段链路详情（复用已有的 `showTrace`，不另造一份视图）。
+3. **读面契约收成一处**：新增 `docs/spec/console-api.md` —— 核心 gRPC 的两个读方法 + 控制台 10 个只读接口
+   + **快照字段的准入规矩**（这轮最值钱的一段，见下）。
+
+**两条设计取舍写进了契约**（不是随手决定）：
+
+- **阈值 / 灰度 / 影子模式不进快照**：它们是核心运行参数，`core/internal/contract/thresholds.go` 明确禁止
+  写进 `api/` 下 proto 的对外响应（`ST-23` 只要求它们集中定义、可配置）⇒ 只有两类字段能进：
+  ① 已经允许离开核心的（策略版本/校验和/AI 配置，本就在策略载荷或回执里）；② 比①**更弱**的描述性信息（白名单只给**条数**）。
+- **不带进程 `started_at`**：核心全库**零** `time.Now()`（`MD-6` 的纪律）—— 不为一个展示字段开这个口子；
+  「是不是刚重启」由 /api/summary 的事件时间范围回答。
+
+**「不伪造」贯穿两侧**：核心未装配快照读侧 ⇒ 返 `Unimplemented`（不回全零快照）；控制台取不到 ⇒ 报错（不返全零配置）。
+**零值看起来完全正常**（version=0 / 变体=0），一份看起来正常的错数据比一个错误危险得多。
+
+**改了哪些文件**：新增 `docs/spec/console-api.md` · `console/cmd/console/config_test.go` ·
+`core/internal/contract/snapshot.go` · `docs/plans/2026-09-21-console-config-log.md`；
+修改 `api/telemetry/v1/telemetry.proto`（+ 重新生成 `telemetry.pb.go` 与 `telemetry_grpc.pb.go`）·
+`core/internal/control/observer.go`（加 `SnapshotProvider` 端口）· `core/internal/control/telemetry.go`（RPC + 映射）·
+`core/internal/control/telemetry_test.go`（+3 条）· `core/cmd/core/main.go`（提供方 + 接线）·
+`console/cmd/console/main.go`（接口 + 视图）· `console/web/index.html`（配置块 + 日志列）·
+`docs/spec/README.md` · `docs/README.md` · `docs/modules/console.md` · `docs/kb/capabilities.md` · `docs/log.md`。
+
+**对应文档**：`docs/plans/2026-09-21-console-config-log.md`（含追溯矩阵 · 11 条场景表 · 审视 9 条）·
+`docs/spec/console-api.md`（读面权威）· `docs/modules/console.md` §2/§7/§9。
+
+**验证**：`make gate` 通过（含 `make trace` · `make archcheck` · 80 例 pytest · Go 侧 `-race`）。
+**端到端实测**（临时配置起核心 + 控制台）：接口返回的 `checksum` 与**核心启动日志逐字一致**
+（`8a0913a613594bb2db72f6428a385524359d638441ab359ebe6f5d6353948771`）；白名单 `count=3`（2 CIDR + 1 UA）
+且响应里**没有任何 CIDR 字符串**；页面命中新块 6 处。
+新增 5 条单测（核心 3 + 控制台 2），其中两条专门钉「取不到时**不得**伪造一份全零配置」。
+
+**证据**：
+
+```console
+$ make gate
+架构检查通过。
+  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）
+追溯检查通过。
+泄漏检查通过。
+许可审计通过：没有传染性或限制性许可。
+80 passed in 0.43s
+门禁通过。
+
+# 端到端：接口值 vs 核心日志（校验和必须一致）
+$ curl -s http://127.0.0.1:<port>/api/config
+{"policy":{"policy_id":"console-check","version":3,
+  "checksum":"8a0913a613594bb2db72f6428a385524359d638441ab359ebe6f5d6353948771",
+  "rule_count":2,"whitelist_count":3},
+ "ai":{"enabled":false,"kinds":["content"],"model":"","manifest_path":"",
+  "variants":8,"rotate_cooldown":"30m0s","manifest_loaded":false,
+  "manifest_version":0,"manifest_resources":0,"manifest_contents":0}}
+
+$ grep 策略已装载 <核心日志>
+策略已装载 policy_id=console-check version=3 checksum=8a0913a613594bb2db72f6428a385524359d638441ab359ebe6f5d6353948771 规则=2 条 灰度=0%
+
+$ go test ./core/internal/control/ -run Snapshot -v   # 3 条全 PASS
+$ go test ./console/cmd/console/ -run Config -v       # 2 条全 PASS
+```
+
+**没做 / 遗留**：① **AI 生成批次 / 护栏拒绝明细**未展示（等适配器，ADR-0026 未解决 1）；
+② **监控时序图与告警档位**未做 —— 它们会**触发** `ADR-0020` 失效条件 1，下一轮开工前必须先判；
+③ 阈值 / 灰度 / 影子模式**上不了页面**（按准入规矩不进契约面，需用户定）；
+④ 前端技能未装（本轮先做展示）；⑤ 控制台仍无鉴权、单实例（若哪天绑非回环地址，**必须先解决** ——
+配置快照会暴露策略版本与清单路径）。去向：`docs/plans/2026-09-21-console-config-log.md` §7。
+
+**顺带修了两处过期状态标记**：`docs/README.md` 的「logs / metrics 待写」与 `docs/spec/README.md` 的
+「待建：metrics.md」—— 两者都已经建好了。
+
+---
+
 ## 2026-09-21 · 接云模型的前置：修循环导入 · ADR-0026（信任边界 / 密钥 / 确定性澄清）· 纠正 18 处过度声称 · 探针入仓
 
 **做了什么**：用户要求接 DeepSeek 做功能验证。动手前发现三件事必须先处理，本轮把它们做完（**没接适配器**，那是下一轮）：

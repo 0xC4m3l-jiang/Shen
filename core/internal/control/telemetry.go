@@ -19,7 +19,8 @@ import (
 type TelemetryService struct {
 	telemetryv1.UnimplementedDeceptionTelemetryServer
 	collector telemetry.Telemetry
-	lister    EventLister // 可空；为空时 ListEvents 返回空（控制台会显示「暂无数据」）
+	lister    EventLister      // 可空；为空时 ListEvents 返回空（控制台会显示「暂无数据」）
+	snapshot  SnapshotProvider // 可空；为空时 GetCoreSnapshot 返回 Unimplemented（不返回全零假快照）
 }
 
 // NewTelemetryService 构造服务端。collector 为 nil 时 panic。
@@ -38,6 +39,11 @@ func WithEventLister(l EventLister) TelemetryOption {
 	return func(s *TelemetryService) { s.lister = l }
 }
 
+// WithSnapshotProvider 给遥测面挂上**只读快照**（控制台看「现在按什么在跑」）。
+func WithSnapshotProvider(p SnapshotProvider) TelemetryOption {
+	return func(s *TelemetryService) { s.snapshot = p }
+}
+
 // NewTelemetryServiceWith 构造带可选装配项的遥测面服务端。
 func NewTelemetryServiceWith(c telemetry.Telemetry, opts ...TelemetryOption) *TelemetryService {
 	s := NewTelemetryService(c)
@@ -48,7 +54,6 @@ func NewTelemetryServiceWith(c telemetry.Telemetry, opts ...TelemetryOption) *Te
 }
 
 // ListEvents 返回最近事件（观测面读侧）。
-//
 // 未装配读侧时返回空列表而不是错误：控制台要能显示「暂无数据」，
 // 而不是因为核心没接存储就整页报错。
 func (s *TelemetryService) ListEvents(ctx context.Context, in *telemetryv1.ListEventsRequest) (*telemetryv1.ListEventsResponse, error) {
@@ -68,6 +73,45 @@ func (s *TelemetryService) ListEvents(ctx context.Context, in *telemetryv1.ListE
 		out = append(out, toProtoEvent(ev))
 	}
 	return &telemetryv1.ListEventsResponse{Events: out}, nil
+}
+
+// GetCoreSnapshot 返回核心当前生效状态的只读摘要（控制台「配置」页）。
+//
+// 未装配快照提供方时返回 `Unimplemented` 而**不是**全零快照：
+// 全零会被页面读成「策略版本 0 / 变体 0」，那是**假的**——
+// 宁可让控制台显示「核心未提供」，也不要给它一份看起来正常的错数据（`AR-15` 的精神）。
+func (s *TelemetryService) GetCoreSnapshot(
+	ctx context.Context, _ *telemetryv1.GetCoreSnapshotRequest,
+) (*telemetryv1.CoreSnapshot, error) {
+	if s.snapshot == nil {
+		return nil, status.Error(codes.Unimplemented, "control: 核心未装配快照读侧")
+	}
+	snap, err := s.snapshot.CoreSnapshot(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "control: 取快照失败：%v", err)
+	}
+	return toProtoSnapshot(snap), nil
+}
+
+// toProtoSnapshot 把内部快照映射成 proto（字段一一对应，不做加工）。
+func toProtoSnapshot(s contract.CoreSnapshot) *telemetryv1.CoreSnapshot {
+	return &telemetryv1.CoreSnapshot{
+		PolicyId:            s.Policy.PolicyID,
+		PolicyVersion:       s.Policy.Version,
+		PolicyChecksum:      s.Policy.Checksum,
+		RuleCount:           int32(s.Policy.RuleCount),
+		WhitelistCount:      int32(s.Policy.WhitelistCount),
+		AiEnabled:           s.AI.Enabled,
+		AiKinds:             s.AI.Kinds,
+		AiModel:             s.AI.Model,
+		AiManifestPath:      s.AI.ManifestPath,
+		AiContentVariants:   int32(s.AI.Variants),
+		AiRotateCooldown:    s.AI.RotateCooldown,
+		AiManifestLoaded:    s.AI.ManifestLoaded,
+		AiManifestVersion:   s.AI.ManifestVersion,
+		AiManifestResources: int32(s.AI.ManifestResources),
+		AiManifestContents:  int32(s.AI.ManifestContents),
+	}
 }
 
 // toProtoEvent 把内部事件映射回 proto。

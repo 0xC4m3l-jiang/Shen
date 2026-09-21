@@ -35,7 +35,7 @@
 | --- | --- |
 | 逐判定日志 | `make docker-log S=core` 看 `msg=decision`（分值 · 命中信号 · 决策 · 后端 · 时刻）；字段表 [`../spec/logs.md`](../spec/logs.md) §3 |
 | 逐请求日志 | `SHEN_PROXY_LOG_REQUESTS=1` 时看 `路由：… 落点=…`（演示栈默认开） |
-| 控制台接口 | **8 个只读接口**：`/`（页面）· `/api/summary` · `/api/flow` · `/api/events` · `/api/analysis` · `/api/graphs`（逐请求链路）· `/api/trace`（单请求四段）· `/api/topology`（聚合）· `/healthz` |
+| 控制台接口 | **10 个只读接口**（权威表：[`../spec/console-api.md`](../spec/console-api.md) §2）：`/`（页面）· `/api/summary` · **`/api/config`（核心只读快照）** · `/api/flow`（逐判定）· `/api/events` · `/api/analysis` · `/api/graphs`（逐请求链路）· `/api/trace`（单请求四段）· `/api/topology`（聚合）· `/healthz` |
 | **DAG 逐请求链路** | 每条请求一条链路，**每步可点**看「请求 / 响应 / 为什么执行」；5 秒刷新；文字折行不溢出 |
 | 告警 | 两段式：真实告警（`block` 或 `severity≠none`）+ 高风险显示标记（`score ≥ SHEN_CONSOLE_ALERT_SCORE`，**仅显示**） |
 | 指标 | [`../spec/metrics.md`](../spec/metrics.md)：**已采集 10 项** / 未采集 6 项（各带关法） |

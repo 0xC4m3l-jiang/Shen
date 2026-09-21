@@ -22,6 +22,221 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// GetCoreSnapshotRequest 无参数 —— 快照就是「现在」，不接受时间窗（要历史去读事件）。
+type GetCoreSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetCoreSnapshotRequest) Reset() {
+	*x = GetCoreSnapshotRequest{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetCoreSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetCoreSnapshotRequest) ProtoMessage() {}
+
+func (x *GetCoreSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetCoreSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*GetCoreSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{0}
+}
+
+// CoreSnapshot 是核心当前生效状态的只读摘要。
+//
+// **字段取舍有规矩**（见 `docs/spec/console-api.md` §2.1）：只放两类 ——
+//
+//  1. 已经**允许离开核心**的（策略版本 / 校验和 / AI 配置，它们本就在 `api/policy/v1` 的载荷里）；
+//  2. 比前者**更弱**的描述性信息（如白名单**条数** —— 载荷里本来就有全量 CIDR 列表）。
+//
+// 因此**不**包含：阈值 / 灰度 / 误调度预算 / 影子模式 ——
+// 它们是核心运行参数，`core/internal/contract/thresholds.go` 明确禁止写进 `api/*.proto` 的对外响应
+// （`ST-23` 要求它们集中定义并可配置，不代表可以把它们摊到契约面）。
+// 要看它们：读部署配置 [`docs/spec/config.md`](../../docs/spec/config.md)。
+//
+// 同理**不**返回：白名单/隔离名单的**内容**、任何密钥（`ST-20`）、以及进程 `started_at`。
+//
+// 为什么不要 `started_at`：核心全库**零** `time.Now()`（`MD-6` 的纪律）——
+// 不为了一个展示字段开这个口子。要看「核心是不是刚重启」，控制台「概览」的事件时间范围
+// 已经能回答（重启后事件从零开始）。
+type CoreSnapshot struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// ── 策略面（`AR-13` / `ST-8`）─────────────────────────────────────
+	PolicyId       string `protobuf:"bytes,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
+	PolicyVersion  uint64 `protobuf:"varint,2,opt,name=policy_version,json=policyVersion,proto3" json:"policy_version,omitempty"`
+	PolicyChecksum string `protobuf:"bytes,3,opt,name=policy_checksum,json=policyChecksum,proto3" json:"policy_checksum,omitempty"`
+	// rule_count 是判定规则条数（规则 id 已随事件载荷的 `signals` 可见，条数严格更弱）。
+	RuleCount int32 `protobuf:"varint,4,opt,name=rule_count,json=ruleCount,proto3" json:"rule_count,omitempty"`
+	// whitelist_count 只给**条数**（名单内容是接入方的资产面，不进观测面）。
+	WhitelistCount int32 `protobuf:"varint,5,opt,name=whitelist_count,json=whitelistCount,proto3" json:"whitelist_count,omitempty"`
+	// ── AI 能力（`ADR-0023` / `ADR-0026`）────────────────────────────
+	AiEnabled         bool     `protobuf:"varint,6,opt,name=ai_enabled,json=aiEnabled,proto3" json:"ai_enabled,omitempty"`
+	AiKinds           []string `protobuf:"bytes,7,rep,name=ai_kinds,json=aiKinds,proto3" json:"ai_kinds,omitempty"`
+	AiModel           string   `protobuf:"bytes,8,opt,name=ai_model,json=aiModel,proto3" json:"ai_model,omitempty"`
+	AiManifestPath    string   `protobuf:"bytes,9,opt,name=ai_manifest_path,json=aiManifestPath,proto3" json:"ai_manifest_path,omitempty"`
+	AiContentVariants int32    `protobuf:"varint,10,opt,name=ai_content_variants,json=aiContentVariants,proto3" json:"ai_content_variants,omitempty"`
+	AiRotateCooldown  string   `protobuf:"bytes,11,opt,name=ai_rotate_cooldown,json=aiRotateCooldown,proto3" json:"ai_rotate_cooldown,omitempty"`
+	// ai_manifest_loaded = 是否真的装载成功（false 且 enabled=true ⇒ 「开关开了但没内容」）。
+	AiManifestLoaded    bool   `protobuf:"varint,12,opt,name=ai_manifest_loaded,json=aiManifestLoaded,proto3" json:"ai_manifest_loaded,omitempty"`
+	AiManifestVersion   uint64 `protobuf:"varint,13,opt,name=ai_manifest_version,json=aiManifestVersion,proto3" json:"ai_manifest_version,omitempty"`
+	AiManifestResources int32  `protobuf:"varint,14,opt,name=ai_manifest_resources,json=aiManifestResources,proto3" json:"ai_manifest_resources,omitempty"`
+	AiManifestContents  int32  `protobuf:"varint,15,opt,name=ai_manifest_contents,json=aiManifestContents,proto3" json:"ai_manifest_contents,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *CoreSnapshot) Reset() {
+	*x = CoreSnapshot{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CoreSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CoreSnapshot) ProtoMessage() {}
+
+func (x *CoreSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CoreSnapshot.ProtoReflect.Descriptor instead.
+func (*CoreSnapshot) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CoreSnapshot) GetPolicyId() string {
+	if x != nil {
+		return x.PolicyId
+	}
+	return ""
+}
+
+func (x *CoreSnapshot) GetPolicyVersion() uint64 {
+	if x != nil {
+		return x.PolicyVersion
+	}
+	return 0
+}
+
+func (x *CoreSnapshot) GetPolicyChecksum() string {
+	if x != nil {
+		return x.PolicyChecksum
+	}
+	return ""
+}
+
+func (x *CoreSnapshot) GetRuleCount() int32 {
+	if x != nil {
+		return x.RuleCount
+	}
+	return 0
+}
+
+func (x *CoreSnapshot) GetWhitelistCount() int32 {
+	if x != nil {
+		return x.WhitelistCount
+	}
+	return 0
+}
+
+func (x *CoreSnapshot) GetAiEnabled() bool {
+	if x != nil {
+		return x.AiEnabled
+	}
+	return false
+}
+
+func (x *CoreSnapshot) GetAiKinds() []string {
+	if x != nil {
+		return x.AiKinds
+	}
+	return nil
+}
+
+func (x *CoreSnapshot) GetAiModel() string {
+	if x != nil {
+		return x.AiModel
+	}
+	return ""
+}
+
+func (x *CoreSnapshot) GetAiManifestPath() string {
+	if x != nil {
+		return x.AiManifestPath
+	}
+	return ""
+}
+
+func (x *CoreSnapshot) GetAiContentVariants() int32 {
+	if x != nil {
+		return x.AiContentVariants
+	}
+	return 0
+}
+
+func (x *CoreSnapshot) GetAiRotateCooldown() string {
+	if x != nil {
+		return x.AiRotateCooldown
+	}
+	return ""
+}
+
+func (x *CoreSnapshot) GetAiManifestLoaded() bool {
+	if x != nil {
+		return x.AiManifestLoaded
+	}
+	return false
+}
+
+func (x *CoreSnapshot) GetAiManifestVersion() uint64 {
+	if x != nil {
+		return x.AiManifestVersion
+	}
+	return 0
+}
+
+func (x *CoreSnapshot) GetAiManifestResources() int32 {
+	if x != nil {
+		return x.AiManifestResources
+	}
+	return 0
+}
+
+func (x *CoreSnapshot) GetAiManifestContents() int32 {
+	if x != nil {
+		return x.AiManifestContents
+	}
+	return 0
+}
+
 type TelemetryEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 幂等键：重复上报不产生重复记录（AR-11 / ST-9）
@@ -38,7 +253,7 @@ type TelemetryEvent struct {
 
 func (x *TelemetryEvent) Reset() {
 	*x = TelemetryEvent{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -50,7 +265,7 @@ func (x *TelemetryEvent) String() string {
 func (*TelemetryEvent) ProtoMessage() {}
 
 func (x *TelemetryEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -63,7 +278,7 @@ func (x *TelemetryEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryEvent.ProtoReflect.Descriptor instead.
 func (*TelemetryEvent) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{0}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *TelemetryEvent) GetEventId() string {
@@ -117,7 +332,7 @@ type TelemetryBatch struct {
 
 func (x *TelemetryBatch) Reset() {
 	*x = TelemetryBatch{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -129,7 +344,7 @@ func (x *TelemetryBatch) String() string {
 func (*TelemetryBatch) ProtoMessage() {}
 
 func (x *TelemetryBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -142,7 +357,7 @@ func (x *TelemetryBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryBatch.ProtoReflect.Descriptor instead.
 func (*TelemetryBatch) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{1}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *TelemetryBatch) GetEvents() []*TelemetryEvent {
@@ -166,7 +381,7 @@ type ListEventsRequest struct {
 
 func (x *ListEventsRequest) Reset() {
 	*x = ListEventsRequest{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +393,7 @@ func (x *ListEventsRequest) String() string {
 func (*ListEventsRequest) ProtoMessage() {}
 
 func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +406,7 @@ func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsRequest.ProtoReflect.Descriptor instead.
 func (*ListEventsRequest) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{2}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ListEventsRequest) GetLimit() uint32 {
@@ -224,7 +439,7 @@ type ListEventsResponse struct {
 
 func (x *ListEventsResponse) Reset() {
 	*x = ListEventsResponse{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -236,7 +451,7 @@ func (x *ListEventsResponse) String() string {
 func (*ListEventsResponse) ProtoMessage() {}
 
 func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -249,7 +464,7 @@ func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListEventsResponse) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{3}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListEventsResponse) GetEvents() []*TelemetryEvent {
@@ -269,7 +484,7 @@ type ReportAck struct {
 
 func (x *ReportAck) Reset() {
 	*x = ReportAck{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -281,7 +496,7 @@ func (x *ReportAck) String() string {
 func (*ReportAck) ProtoMessage() {}
 
 func (x *ReportAck) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -294,7 +509,7 @@ func (x *ReportAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAck.ProtoReflect.Descriptor instead.
 func (*ReportAck) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{4}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ReportAck) GetAccepted() uint32 {
@@ -315,7 +530,27 @@ var File_telemetry_v1_telemetry_proto protoreflect.FileDescriptor
 
 const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\n" +
-	"\x1ctelemetry/v1/telemetry.proto\x12\ftelemetry.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd9\x01\n" +
+	"\x1ctelemetry/v1/telemetry.proto\x12\ftelemetry.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x18\n" +
+	"\x16GetCoreSnapshotRequest\"\xe4\x04\n" +
+	"\fCoreSnapshot\x12\x1b\n" +
+	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12%\n" +
+	"\x0epolicy_version\x18\x02 \x01(\x04R\rpolicyVersion\x12'\n" +
+	"\x0fpolicy_checksum\x18\x03 \x01(\tR\x0epolicyChecksum\x12\x1d\n" +
+	"\n" +
+	"rule_count\x18\x04 \x01(\x05R\truleCount\x12'\n" +
+	"\x0fwhitelist_count\x18\x05 \x01(\x05R\x0ewhitelistCount\x12\x1d\n" +
+	"\n" +
+	"ai_enabled\x18\x06 \x01(\bR\taiEnabled\x12\x19\n" +
+	"\bai_kinds\x18\a \x03(\tR\aaiKinds\x12\x19\n" +
+	"\bai_model\x18\b \x01(\tR\aaiModel\x12(\n" +
+	"\x10ai_manifest_path\x18\t \x01(\tR\x0eaiManifestPath\x12.\n" +
+	"\x13ai_content_variants\x18\n" +
+	" \x01(\x05R\x11aiContentVariants\x12,\n" +
+	"\x12ai_rotate_cooldown\x18\v \x01(\tR\x10aiRotateCooldown\x12,\n" +
+	"\x12ai_manifest_loaded\x18\f \x01(\bR\x10aiManifestLoaded\x12.\n" +
+	"\x13ai_manifest_version\x18\r \x01(\x04R\x11aiManifestVersion\x122\n" +
+	"\x15ai_manifest_resources\x18\x0e \x01(\x05R\x13aiManifestResources\x120\n" +
+	"\x14ai_manifest_contents\x18\x0f \x01(\x05R\x12aiManifestContents\"\xd9\x01\n" +
 	"\x0eTelemetryEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +
@@ -339,12 +574,13 @@ const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\rR\baccepted\x12\x1e\n" +
 	"\n" +
 	"duplicated\x18\x02 \x01(\rR\n" +
-	"duplicated2\xec\x01\n" +
+	"duplicated2\xc1\x02\n" +
 	"\x12DeceptionTelemetry\x12?\n" +
 	"\x06Report\x12\x1c.telemetry.v1.TelemetryEvent\x1a\x17.telemetry.v1.ReportAck\x12D\n" +
 	"\vReportBatch\x12\x1c.telemetry.v1.TelemetryBatch\x1a\x17.telemetry.v1.ReportAck\x12O\n" +
 	"\n" +
-	"ListEvents\x12\x1f.telemetry.v1.ListEventsRequest\x1a .telemetry.v1.ListEventsResponseB#Z!shen/api/telemetry/v1;telemetryv1b\x06proto3"
+	"ListEvents\x12\x1f.telemetry.v1.ListEventsRequest\x1a .telemetry.v1.ListEventsResponse\x12S\n" +
+	"\x0fGetCoreSnapshot\x12$.telemetry.v1.GetCoreSnapshotRequest\x1a\x1a.telemetry.v1.CoreSnapshotB#Z!shen/api/telemetry/v1;telemetryv1b\x06proto3"
 
 var (
 	file_telemetry_v1_telemetry_proto_rawDescOnce sync.Once
@@ -358,28 +594,32 @@ func file_telemetry_v1_telemetry_proto_rawDescGZIP() []byte {
 	return file_telemetry_v1_telemetry_proto_rawDescData
 }
 
-var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_telemetry_v1_telemetry_proto_goTypes = []any{
-	(*TelemetryEvent)(nil),        // 0: telemetry.v1.TelemetryEvent
-	(*TelemetryBatch)(nil),        // 1: telemetry.v1.TelemetryBatch
-	(*ListEventsRequest)(nil),     // 2: telemetry.v1.ListEventsRequest
-	(*ListEventsResponse)(nil),    // 3: telemetry.v1.ListEventsResponse
-	(*ReportAck)(nil),             // 4: telemetry.v1.ReportAck
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(*GetCoreSnapshotRequest)(nil), // 0: telemetry.v1.GetCoreSnapshotRequest
+	(*CoreSnapshot)(nil),           // 1: telemetry.v1.CoreSnapshot
+	(*TelemetryEvent)(nil),         // 2: telemetry.v1.TelemetryEvent
+	(*TelemetryBatch)(nil),         // 3: telemetry.v1.TelemetryBatch
+	(*ListEventsRequest)(nil),      // 4: telemetry.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),     // 5: telemetry.v1.ListEventsResponse
+	(*ReportAck)(nil),              // 6: telemetry.v1.ReportAck
+	(*timestamppb.Timestamp)(nil),  // 7: google.protobuf.Timestamp
 }
 var file_telemetry_v1_telemetry_proto_depIdxs = []int32{
-	5, // 0: telemetry.v1.TelemetryEvent.created_at:type_name -> google.protobuf.Timestamp
-	0, // 1: telemetry.v1.TelemetryBatch.events:type_name -> telemetry.v1.TelemetryEvent
-	5, // 2: telemetry.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
-	0, // 3: telemetry.v1.ListEventsResponse.events:type_name -> telemetry.v1.TelemetryEvent
-	0, // 4: telemetry.v1.DeceptionTelemetry.Report:input_type -> telemetry.v1.TelemetryEvent
-	1, // 5: telemetry.v1.DeceptionTelemetry.ReportBatch:input_type -> telemetry.v1.TelemetryBatch
-	2, // 6: telemetry.v1.DeceptionTelemetry.ListEvents:input_type -> telemetry.v1.ListEventsRequest
-	4, // 7: telemetry.v1.DeceptionTelemetry.Report:output_type -> telemetry.v1.ReportAck
-	4, // 8: telemetry.v1.DeceptionTelemetry.ReportBatch:output_type -> telemetry.v1.ReportAck
-	3, // 9: telemetry.v1.DeceptionTelemetry.ListEvents:output_type -> telemetry.v1.ListEventsResponse
-	7, // [7:10] is the sub-list for method output_type
-	4, // [4:7] is the sub-list for method input_type
+	7, // 0: telemetry.v1.TelemetryEvent.created_at:type_name -> google.protobuf.Timestamp
+	2, // 1: telemetry.v1.TelemetryBatch.events:type_name -> telemetry.v1.TelemetryEvent
+	7, // 2: telemetry.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	2, // 3: telemetry.v1.ListEventsResponse.events:type_name -> telemetry.v1.TelemetryEvent
+	2, // 4: telemetry.v1.DeceptionTelemetry.Report:input_type -> telemetry.v1.TelemetryEvent
+	3, // 5: telemetry.v1.DeceptionTelemetry.ReportBatch:input_type -> telemetry.v1.TelemetryBatch
+	4, // 6: telemetry.v1.DeceptionTelemetry.ListEvents:input_type -> telemetry.v1.ListEventsRequest
+	0, // 7: telemetry.v1.DeceptionTelemetry.GetCoreSnapshot:input_type -> telemetry.v1.GetCoreSnapshotRequest
+	6, // 8: telemetry.v1.DeceptionTelemetry.Report:output_type -> telemetry.v1.ReportAck
+	6, // 9: telemetry.v1.DeceptionTelemetry.ReportBatch:output_type -> telemetry.v1.ReportAck
+	5, // 10: telemetry.v1.DeceptionTelemetry.ListEvents:output_type -> telemetry.v1.ListEventsResponse
+	1, // 11: telemetry.v1.DeceptionTelemetry.GetCoreSnapshot:output_type -> telemetry.v1.CoreSnapshot
+	8, // [8:12] is the sub-list for method output_type
+	4, // [4:8] is the sub-list for method input_type
 	4, // [4:4] is the sub-list for extension type_name
 	4, // [4:4] is the sub-list for extension extendee
 	0, // [0:4] is the sub-list for field type_name
@@ -396,7 +636,7 @@ func file_telemetry_v1_telemetry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_telemetry_v1_telemetry_proto_rawDesc), len(file_telemetry_v1_telemetry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

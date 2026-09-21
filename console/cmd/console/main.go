@@ -127,6 +127,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/summary", s.handleSummary)
+	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/flow", s.handleFlow)
 	mux.HandleFunc("/api/analysis", s.handleAnalysis)
@@ -421,6 +422,73 @@ func (s *server) handleSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, sum)
+}
+
+// configView 是「配置」页的数据形状（snake_case，与项目其余载荷一致）。
+//
+// 为什么再包一层而不直接回 proto：① proto 的 JSON 映射是给 gRPC 用的（camelCase），
+// 页面的键要与其余接口一致；② 这层转换把「哪些字段允许出观测面」**显式写下来**了
+// （见 `docs/spec/console-api.md` §2.1）—— 想加字段就得先在这里表态。
+type configView struct {
+	Policy policyView `json:"policy"`
+	AI     aiView     `json:"ai"`
+}
+
+type policyView struct {
+	PolicyID       string `json:"policy_id"`
+	Version        uint64 `json:"version"`
+	Checksum       string `json:"checksum"`
+	RuleCount      int32  `json:"rule_count"`
+	WhitelistCount int32  `json:"whitelist_count"`
+}
+
+type aiView struct {
+	Enabled           bool     `json:"enabled"`
+	Kinds             []string `json:"kinds"`
+	Model             string   `json:"model"`
+	ManifestPath      string   `json:"manifest_path"`
+	Variants          int32    `json:"variants"`
+	RotateCooldown    string   `json:"rotate_cooldown"`
+	ManifestLoaded    bool     `json:"manifest_loaded"`
+	ManifestVersion   uint64   `json:"manifest_version"`
+	ManifestResources int32    `json:"manifest_resources"`
+	ManifestContents  int32    `json:"manifest_contents"`
+}
+
+// handleConfig 返回核心当前生效状态的只读快照（「配置」页的数据源）。
+//
+// 核心未装配快照读侧时**透传错误**（页面显示「核心未提供」）——
+// **不**返回一份全零的「正常」配置：那会让人以为引擎真的按 version=0 在跑
+// （与核心侧拒绝回全零快照同一理由，`AR-15` 的精神）。
+func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	snap, err := s.client.GetCoreSnapshot(ctx, &telemetryv1.GetCoreSnapshotRequest{})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, configView{
+		Policy: policyView{
+			PolicyID:       snap.GetPolicyId(),
+			Version:        snap.GetPolicyVersion(),
+			Checksum:       snap.GetPolicyChecksum(),
+			RuleCount:      snap.GetRuleCount(),
+			WhitelistCount: snap.GetWhitelistCount(),
+		},
+		AI: aiView{
+			Enabled:           snap.GetAiEnabled(),
+			Kinds:             snap.GetAiKinds(),
+			Model:             snap.GetAiModel(),
+			ManifestPath:      snap.GetAiManifestPath(),
+			Variants:          snap.GetAiContentVariants(),
+			RotateCooldown:    snap.GetAiRotateCooldown(),
+			ManifestLoaded:    snap.GetAiManifestLoaded(),
+			ManifestVersion:   snap.GetAiManifestVersion(),
+			ManifestResources: snap.GetAiManifestResources(),
+			ManifestContents:  snap.GetAiManifestContents(),
+		},
+	})
 }
 
 // fetch 向核心要最近事件（事件类型取查询参数 `type`）。

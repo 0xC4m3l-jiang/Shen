@@ -19,9 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DeceptionTelemetry_Report_FullMethodName      = "/telemetry.v1.DeceptionTelemetry/Report"
-	DeceptionTelemetry_ReportBatch_FullMethodName = "/telemetry.v1.DeceptionTelemetry/ReportBatch"
-	DeceptionTelemetry_ListEvents_FullMethodName  = "/telemetry.v1.DeceptionTelemetry/ListEvents"
+	DeceptionTelemetry_Report_FullMethodName          = "/telemetry.v1.DeceptionTelemetry/Report"
+	DeceptionTelemetry_ReportBatch_FullMethodName     = "/telemetry.v1.DeceptionTelemetry/ReportBatch"
+	DeceptionTelemetry_ListEvents_FullMethodName      = "/telemetry.v1.DeceptionTelemetry/ListEvents"
+	DeceptionTelemetry_GetCoreSnapshot_FullMethodName = "/telemetry.v1.DeceptionTelemetry/GetCoreSnapshot"
 )
 
 // DeceptionTelemetryClient is the client API for DeceptionTelemetry service.
@@ -37,6 +38,17 @@ type DeceptionTelemetryClient interface {
 	// 用途：控制台回答「刚才发生了什么、告警在哪、流量怎么流动」——
 	// 这是**人工测试与排障**的基础能力，也是 `logs.md` 字典落地前的过渡读侧契约。
 	ListEvents(ctx context.Context, in *ListEventsRequest, opts ...grpc.CallOption) (*ListEventsResponse, error)
+	// 读侧：**核心当前生效状态的只读快照**（配置 + 策略版本 + AI 能力装载态）。
+	//
+	// 用途：控制台回答「这套引擎现在是按什么在跑」—— 配置与内容清单活在**核心内存**里，
+	// 控制台拿不到，只能问核心要（见 `docs/spec/console-api.md` §2）。
+	//
+	// 语义：**纯读**。与 `policy.Pull` 不同：它**不**推进任何游标、**不**写任何状态 ——
+	// 控制台随时刷新都不会影响适配器的策略对账（`ST-8`）。
+	//
+	// 刻意**不**返回：白名单/隔离名单的**内容**（只给条数）、任何密钥（`ST-20`）。
+	// 观测面不等于泄密面：控制台是只读观测台，不是配置导出器。
+	GetCoreSnapshot(ctx context.Context, in *GetCoreSnapshotRequest, opts ...grpc.CallOption) (*CoreSnapshot, error)
 }
 
 type deceptionTelemetryClient struct {
@@ -77,6 +89,16 @@ func (c *deceptionTelemetryClient) ListEvents(ctx context.Context, in *ListEvent
 	return out, nil
 }
 
+func (c *deceptionTelemetryClient) GetCoreSnapshot(ctx context.Context, in *GetCoreSnapshotRequest, opts ...grpc.CallOption) (*CoreSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CoreSnapshot)
+	err := c.cc.Invoke(ctx, DeceptionTelemetry_GetCoreSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeceptionTelemetryServer is the server API for DeceptionTelemetry service.
 // All implementations must embed UnimplementedDeceptionTelemetryServer
 // for forward compatibility.
@@ -90,6 +112,17 @@ type DeceptionTelemetryServer interface {
 	// 用途：控制台回答「刚才发生了什么、告警在哪、流量怎么流动」——
 	// 这是**人工测试与排障**的基础能力，也是 `logs.md` 字典落地前的过渡读侧契约。
 	ListEvents(context.Context, *ListEventsRequest) (*ListEventsResponse, error)
+	// 读侧：**核心当前生效状态的只读快照**（配置 + 策略版本 + AI 能力装载态）。
+	//
+	// 用途：控制台回答「这套引擎现在是按什么在跑」—— 配置与内容清单活在**核心内存**里，
+	// 控制台拿不到，只能问核心要（见 `docs/spec/console-api.md` §2）。
+	//
+	// 语义：**纯读**。与 `policy.Pull` 不同：它**不**推进任何游标、**不**写任何状态 ——
+	// 控制台随时刷新都不会影响适配器的策略对账（`ST-8`）。
+	//
+	// 刻意**不**返回：白名单/隔离名单的**内容**（只给条数）、任何密钥（`ST-20`）。
+	// 观测面不等于泄密面：控制台是只读观测台，不是配置导出器。
+	GetCoreSnapshot(context.Context, *GetCoreSnapshotRequest) (*CoreSnapshot, error)
 	mustEmbedUnimplementedDeceptionTelemetryServer()
 }
 
@@ -108,6 +141,9 @@ func (UnimplementedDeceptionTelemetryServer) ReportBatch(context.Context, *Telem
 }
 func (UnimplementedDeceptionTelemetryServer) ListEvents(context.Context, *ListEventsRequest) (*ListEventsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListEvents not implemented")
+}
+func (UnimplementedDeceptionTelemetryServer) GetCoreSnapshot(context.Context, *GetCoreSnapshotRequest) (*CoreSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCoreSnapshot not implemented")
 }
 func (UnimplementedDeceptionTelemetryServer) mustEmbedUnimplementedDeceptionTelemetryServer() {}
 func (UnimplementedDeceptionTelemetryServer) testEmbeddedByValue()                            {}
@@ -184,6 +220,24 @@ func _DeceptionTelemetry_ListEvents_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeceptionTelemetry_GetCoreSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCoreSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeceptionTelemetryServer).GetCoreSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeceptionTelemetry_GetCoreSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeceptionTelemetryServer).GetCoreSnapshot(ctx, req.(*GetCoreSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DeceptionTelemetry_ServiceDesc is the grpc.ServiceDesc for DeceptionTelemetry service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -202,6 +256,10 @@ var DeceptionTelemetry_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListEvents",
 			Handler:    _DeceptionTelemetry_ListEvents_Handler,
+		},
+		{
+			MethodName: "GetCoreSnapshot",
+			Handler:    _DeceptionTelemetry_GetCoreSnapshot_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

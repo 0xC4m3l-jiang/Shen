@@ -2,9 +2,12 @@ package control
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	telemetryv1 "shen/api/telemetry/v1"
@@ -104,3 +107,69 @@ func TestFromProtoEvent_MissingTimeIsZero(t *testing.T) {
 		t.Fatalf("缺失时间时应留零值，不得取系统时钟，得到 %v", got.CreatedAt)
 	}
 }
+
+// ── 只读快照（控制台「配置」页）─────────────────────────────────────────────
+
+// stubSnapshot 是 SnapshotProvider 的测试替身。
+type stubSnapshot struct {
+	snap contract.CoreSnapshot
+	err  error
+}
+
+func (s stubSnapshot) CoreSnapshot(context.Context) (contract.CoreSnapshot, error) {
+	return s.snap, s.err
+}
+
+// 未装配快照提供方 ⇒ Unimplemented，**不得**回全零快照。
+//
+// 这条测试守的是一条设计决定：全零快照会被页面读成「策略版本 0 / 变体 0」，
+// 也就是一份**看起来正常的错数据** —— 那比报错更危险（AR-15 的精神）。
+func TestTelemetryService_SnapshotWithoutProviderIsUnimplemented(t *testing.T) {
+	svc := NewTelemetryServiceWith(newStubCollector())
+	got, err := svc.GetCoreSnapshot(context.Background(), &telemetryv1.GetCoreSnapshotRequest{})
+	if status.Code(err) != codes.Unimplemented {
+		t.Fatalf("未装配时应返回 Unimplemented，实际 err=%v", err)
+	}
+	if got != nil {
+		t.Fatalf("Unimplemented 时不得回快照，实际 %+v", got)
+	}
+}
+
+// 装配后逐字段映射（含「清单未装载」时的默认值）。
+func TestTelemetryService_SnapshotMapsFields(t *testing.T) {
+	want := contract.CoreSnapshot{
+		Policy: contract.PolicyState{
+			PolicyID: "site-a", Version: 7, Checksum: "abc123", RuleCount: 3, WhitelistCount: 4,
+		},
+		AI: contract.AIState{
+			Enabled: true, Kinds: []string{"content"}, Model: "deepseek-flash",
+			ManifestPath: "/etc/shen/manifest.json", Variants: 8, RotateCooldown: "30m0s",
+			ManifestLoaded: true, ManifestVersion: 2, ManifestResources: 5, ManifestContents: 16,
+		},
+	}
+	svc := NewTelemetryServiceWith(newStubCollector(), WithSnapshotProvider(stubSnapshot{snap: want}))
+	got, err := svc.GetCoreSnapshot(context.Background(), &telemetryv1.GetCoreSnapshotRequest{})
+	if err != nil {
+		t.Fatalf("取快照失败：%v", err)
+	}
+	if got.GetPolicyId() != "site-a" || got.GetPolicyVersion() != 7 || got.GetRuleCount() != 3 ||
+		got.GetWhitelistCount() != 4 {
+		t.Errorf("策略面字段映射错了：%+v", got)
+	}
+	if !got.GetAiEnabled() || got.GetAiModel() != "deepseek-flash" || got.GetAiContentVariants() != 8 ||
+		got.GetAiRotateCooldown() != "30m0s" || !got.GetAiManifestLoaded() ||
+		got.GetAiManifestVersion() != 2 || got.GetAiManifestContents() != 16 {
+		t.Errorf("AI 面字段映射错了：%+v", got)
+	}
+}
+
+// 提供方报错 ⇒ Internal（不吞成成功、不回半份数据）。
+func TestTelemetryService_SnapshotProviderErrorIsInternal(t *testing.T) {
+	svc := NewTelemetryServiceWith(newStubCollector(),
+		WithSnapshotProvider(stubSnapshot{err: errStubSnapshot}))
+	if _, err := svc.GetCoreSnapshot(context.Background(), &telemetryv1.GetCoreSnapshotRequest{}); status.Code(err) != codes.Internal {
+		t.Fatalf("提供方报错时应返回 Internal，实际 %v", err)
+	}
+}
+
+var errStubSnapshot = errors.New("stub: 读不到策略")

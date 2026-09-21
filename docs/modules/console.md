@@ -7,7 +7,7 @@
 | 实现语言 | `TypeScript`（依据 [`../design/language.md`](../design/language.md) §1） |
 | 负责人 | — |
 | 状态 | ✅ **已实现（最小可用）**（阶段 2b）：Go 进程 + 静态页（`go:embed`，**无前端构建步骤**）；只读观测 · `docs/integrate/observability.md` 是使用说明 |
-| 最后更新 | 2026-09-19 |
+| 最后更新 | 2026-09-21 |
 
 ---
 
@@ -29,11 +29,13 @@
 
 ## 2. 输入 / 输出契约
 
-| 方向 | 契约 | 定义位置 |
+**权威在 [`../spec/console-api.md`](../spec/console-api.md)，本节不复制**（`MD-3`）：
+
+| 方向 | 契约 | 状态 |
 | --- | --- | --- |
-| 输入 | 策略平面（`api/policy/v1`）的 Pull / Watch | [`../design/structure.md`](../design/structure.md) §2.1 |
-| 输入 | 遥测 / 事件查询接口 | 同上 |
-| 输出 | 策略发布 / 回执（`Ack`） | 同上 |
+| **输入**（读核心） | 核心 gRPC 读面：`ListEvents`（历史）· `GetCoreSnapshot`（当前态） | ✅ 已实现（快照 2026-09-21 新增） |
+| **输出**（页 / HTTP） | 控制台 10 个**只读** HTTP 接口（含 `/api/config`） | ✅ 已实现 |
+| 输入 / 输出（**设计意图**） | 策略平面（`api/policy/v1`）的 `Pull` / `Ack` —— 策略编排所需的**写能力** | ❌ **未实现**：控制台当前只读（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md) 决定 2）；要做得先重开它 |
 
 ## 3. 依赖
 
@@ -76,7 +78,9 @@
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
 | 集成（人工） | 起核心 + 控制台 → 经引擎发流量 → 页面/`api` 能看到**分值 + 命中信号** | [`../ops/functional-verification.md`](../ops/functional-verification.md) §7 |
-| 接口 | `/api/summary` · `/api/flow` · `/api/events` · `healthz` 的返回形状 | 实跑（`scripts/demo/run.sh`） |
+| 接口（形状） | `/api/summary` · `/api/flow` · `/api/events` · `healthz` 的返回形状 | 实跑（`scripts/demo/run.sh`） |
+| 单元 | **`/api/config` 的键名与失败语义**：snake_case 键齐备；核心未装配快照时**返回错误而不是全零配置** | [`../../console/cmd/console/config_test.go`](../../console/cmd/console/config_test.go) |
+| 单元 | 核心侧快照 RPC：未装配 ⇒ `Unimplemented` · 逐字段映射 · 提供方报错 ⇒ `Internal` | [`../../core/internal/control/telemetry_test.go`](../../core/internal/control/telemetry_test.go)（`TestTelemetryService_Snapshot*`） |
 | 安全 | 页面渲染攻击者可控字符串用 DOM + `textContent`（**禁止** `innerHTML` 拼接） | [`../../console/web/index.html`](../../console/web/index.html) 顶部注释 |
 
 > ⚠️ **语言偏离设计**：设计写 TypeScript，本轮实现为 Go + 静态页（按用户裁定不引入前端工具链）——
@@ -85,7 +89,7 @@
 
 | 类型 | 覆盖什么 | 位置 |
 | --- | --- | --- |
-| 实跑 | 页面与四个只读接口 | `console/web/index.html` + `scripts/demo/run.sh`（见 [`../ops/functional-verification.md`](../ops/functional-verification.md) §7） |
+| 实跑 | 页面与全部只读接口（个数与参数以 [`../spec/console-api.md`](../spec/console-api.md) §2 为准，本节不重复计数） | `console/web/index.html` + `scripts/demo/run.sh`（见 [`../ops/functional-verification.md`](../ops/functional-verification.md) §7） |
 | 集成 | 策略发布 → 回执对账 | 同上 |
 | 契约 | 与 `api/policy/v1` 的一致性测试（`ST-6`：文档由 proto 生成） | 同上 |
 
@@ -101,6 +105,7 @@
 | 日期 | 变更 | 依据 |
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：策略编排 + 资产管理 + 审计查询 | 既有清单（`modules.md` §1.1） |
+| 2026-09-21 | **新增「配置」块**（读核心只读快照 `GetCoreSnapshot`）+ **逐判定日志补全字段**（`decision_id` / `severity`）与「看链路」入口；新增 `../spec/console-api.md` 把读面契约收成一处 | [`../plans/2026-09-21-console-config-log.md`](../plans/2026-09-21-console-config-log.md) · [`../spec/console-api.md`](../spec/console-api.md) |
 
 ## 9.1 流量调度图（DAG）与链路详情（2026-09-20 新增）
 

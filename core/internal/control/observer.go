@@ -50,3 +50,12 @@ type DecisionRecorder interface {
 type EventLister interface {
 	ListEvents(ctx context.Context, limit int, since time.Time, eventType string) ([]contract.Event, error)
 }
+
+// SnapshotProvider 是**只读快照**依赖：控制台问「你现在按什么在跑」。
+//
+// 它与 EventLister 的分工：事件回答「刚才发生了什么」（有时序），
+// 快照回答「当前配置是什么」（无时序，每次都是「现在」）。
+// 配置与内容清单活在核心内存里，控制台拿不到，只能经由这个接口问。
+type SnapshotProvider interface {
+	CoreSnapshot(ctx context.Context) (contract.CoreSnapshot, error)
+}

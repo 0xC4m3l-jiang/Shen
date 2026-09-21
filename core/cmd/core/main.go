@@ -175,14 +175,23 @@ func run() error {
 			control.WithBreaker(breaker),
 			control.WithIsolation(surf.isolate),
 			control.WithDecisionRecorder(observer)))
+
+	// AI 内容装载：**只装一次**，让「策略面投影的内容」与「控制台看到的内容」必然是同一份。
+	// 装两次就有机会不一致 —— 而控制台那一眼正是用来判「当下是不是真的在注入」的。
+	content, err := loadAIContent(ctx, loader, stores.Content)
+	if err != nil {
+		return err
+	}
+
 	telemetryv1.RegisterDeceptionTelemetryServer(srv,
-		control.NewTelemetryServiceWith(collector, control.WithEventLister(eventLister{events: stores.Event})))
+		control.NewTelemetryServiceWith(collector,
+			control.WithEventLister(eventLister{events: stores.Event}),
+			control.WithSnapshotProvider(coreSnapshot{loader: loader, content: content})))
+
 	// 策略面（S4）：把当前策略版本投影后下发给适配器，并接收它们的回执（AR-13 / ST-8）。
 	// 服务端落在 policy 模块（它持有快照与校验和）—— 不新增模块，见 ADR-0018。
 	policyServer := policy.NewServer(loader, stores.Policy)
-	if content, cerr := loadAIContent(ctx, loader, stores.Content); cerr != nil {
-		return cerr
-	} else if content != nil {
+	if content != nil {
 		policyServer.WithContent(*content)
 	}
 	policyv1.RegisterDeceptionPolicyServer(srv, policyServer)
@@ -389,6 +398,66 @@ type eventLister struct{ events store.EventStore }
 
 func (l eventLister) ListEvents(ctx context.Context, limit int, since time.Time, eventType string) ([]contract.Event, error) {
 	return l.events.List(ctx, store.EventQuery{Limit: limit, Since: since, Type: eventType})
+}
+
+// coreSnapshot 把「启动时装载成功的那些东西」答成一份**只读摘要**（控制台「配置」页）。
+//
+// 为什么在 main 里写：只有这里同时看得见 loader（策略）与装载结果（内容清单）——
+// 各模块自己只依赖接口（依赖方向单向）。
+//
+// **不含阈值 / 灰度 / 影子模式**：它们是核心运行参数，`thresholds.go` 明确禁止进 `api/*.proto`
+// （要看去部署配置）。字段取舍的完整规矩见 `docs/spec/console-api.md` §2.1。
+type coreSnapshot struct {
+	loader  *policy.Loader
+	content *policy.ContentSource // 可为 nil：未启用 AI，或启用但没配清单
+}
+
+func (c coreSnapshot) CoreSnapshot(ctx context.Context) (contract.CoreSnapshot, error) {
+	snap, err := c.loader.Snapshot(ctx)
+	if err != nil {
+		return contract.CoreSnapshot{}, err
+	}
+	wl, err := c.loader.Whitelist(ctx)
+	if err != nil {
+		return contract.CoreSnapshot{}, err
+	}
+	ai, err := c.loader.AI(ctx)
+	if err != nil {
+		return contract.CoreSnapshot{}, err
+	}
+
+	out := contract.CoreSnapshot{
+		Policy: contract.PolicyState{
+			PolicyID:  snap.PolicyID,
+			Version:   snap.Version,
+			Checksum:  snap.Checksum,
+			RuleCount: len(snap.Rules),
+			// 只给条数：名单内容不进观测面。三个列表相加 = 人读到的「名单有多少条」。
+			WhitelistCount: len(wl.SourceCIDRs) + len(wl.UserAgents) + len(wl.PathPrefixes),
+		},
+		AI: contract.AIState{
+			Enabled:        ai.Enabled,
+			Kinds:          ai.Kinds,
+			Model:          ai.Model,
+			ManifestPath:   ai.ManifestPath,
+			Variants:       ai.Content.Variants,
+			RotateCooldown: ai.Content.RotateCooldown.String(),
+		},
+	}
+	// 已装载的清单摘要：`content == nil` 包含两种情况（未启用 / 启用但没配清单），
+	// 控制台靠 `ai_enabled` 与 `ai_manifest_loaded` 两个字段把这两种情况分辨出来。
+	if c.content != nil {
+		m := c.content.Manifest
+		bodies := 0
+		for _, e := range m.Entries {
+			bodies += len(e.Bodies)
+		}
+		out.AI.ManifestLoaded = bodies > 0
+		out.AI.ManifestVersion = m.Version
+		out.AI.ManifestResources = len(m.Entries)
+		out.AI.ManifestContents = bodies
+	}
+	return out, nil
 }
 
 // actionFromString / severityFromString 把观测记录里的可读值还原成枚举。
