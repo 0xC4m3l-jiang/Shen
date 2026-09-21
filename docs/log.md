@@ -9,6 +9,49 @@
 
 ---
 
+## 2026-09-21 · 简化：观测面推送那轮的重复与啰嗦（**无行为变化**）
+
+**做了什么**：对上一轮（观测面推送）自己写的代码做一轮简化，**只动新增/改动的行**：
+
+1. 抽出 `sendEvent` / `sendStatus` —— 同一种帧形状原先在**两处**各写一份（补漏、转流），改一处必漏另一处；
+2. `catchUp` 里 6 行顺序 if 收敛成纯函数 `clampLimit`（默认与上限互为边界，分开写容易只改一处）；
+3. `wantedType` 的循环改为 `slices.Contains`（项目已在用 `slices`，Go 1.26）；
+4. 测试里重复的「带超时收 n 条」抽成 `recvIDs` 助手；
+5. `Hub.Publish` 的内层 `for i := range evs` → `for _, ev := range evs`（可读性，语义相同）。
+
+**刻意不动的两处**（避免“为了短而改行为”）：
+
+- `sendEvent` / `sendStatus` 里的 `return stream.Send(...)` **原样透传**传输错误 ——
+  包装会**改变客户端看到的错误**（那是行为变更）；静态检查报的“bare error”在此是有意的；
+- 页面 JS 与 `handleStream` 本轮**未改** —— 前者上轮已抽成共用的列定义，后者结构已足够直（再拆只多一层间接）。
+
+**改了哪些文件**：`core/internal/telemetry/hub.go` · `core/internal/telemetry/hub_test.go` ·
+`core/internal/control/telemetry.go` · `docs/log.md`。
+
+**对应文档**：无（纯重构：契约、帧形状与行为均未变，因此**不需要**改 `docs/spec/console-api.md`）。
+
+**验证**：`make gate` 通过；受影响的三个包额外跑了 `-race -count=2`。
+
+**证据**：
+
+```console
+$ go test -race -count=2 ./core/internal/telemetry/ ./core/internal/control/ ./console/...
+ok  shen/core/internal/telemetry   1.500s
+ok  shen/core/internal/control     1.650s
+ok  shen/console/cmd/console       2.229s
+
+$ make gate
+架构检查通过。
+追溯检查通过。
+泄漏检查通过。
+80 passed in 0.36s
+门禁通过。
+```
+
+**没做 / 遗留**：无。本轮是 S 档（行为不变的重构），已按技能要求略过变更包与独立评审。
+
+---
+
 ## 2026-09-21 · 观测面推送：从「轮询」改成「记到即推」（实测 3 ms）
 
 **做了什么**：用户指出「不是轮询刷新，而是监控到了、并且记录了，就要通知/主动更新到管控平台」。

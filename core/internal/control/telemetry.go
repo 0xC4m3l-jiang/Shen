@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"time"
 
@@ -178,9 +179,7 @@ func (s *TelemetryService) WatchEvents(
 			if !wantedType(types, ev.Type) {
 				continue
 			}
-			if err := stream.Send(&telemetryv1.WatchEvent{
-				Body: &telemetryv1.WatchEvent_Event{Event: toProtoEvent(ev)},
-			}); err != nil {
+			if err := sendEvent(stream, ev); err != nil {
 				return err
 			}
 		case <-ticker.C:
@@ -189,13 +188,7 @@ func (s *TelemetryService) WatchEvents(
 				continue // 没变化就不发：状态帧是告警信号，不是心跳
 			}
 			sentDropped, sentBuffered = dropped, buffered
-			if err := stream.Send(&telemetryv1.WatchEvent{Body: &telemetryv1.WatchEvent_Status{
-				Status: &telemetryv1.WatchStatus{
-					Dropped:    dropped,
-					BufferSize: uint32(buffered),
-					Capacity:   uint32(sub.Capacity()),
-				},
-			}}); err != nil {
+			if err := sendStatus(stream, dropped, buffered, sub.Capacity()); err != nil {
 				return err
 			}
 		}
@@ -212,13 +205,7 @@ func (s *TelemetryService) catchUp(
 	if s.lister == nil {
 		return nil // 没装读侧 ⇒ 补不了漏，但仍然转流（不因补漏失败而拒绝订阅）
 	}
-	limit := askLimit
-	if limit <= 0 {
-		limit = defaultCatchUpLimit
-	}
-	if limit > maxCatchUpLimit {
-		limit = maxCatchUpLimit
-	}
+	limit := clampLimit(askLimit)
 	evs, err := s.lister.ListEvents(stream.Context(), limit, since, "")
 	if err != nil {
 		return status.Errorf(codes.Internal, "control: 补漏读历史失败：%v", err)
@@ -229,9 +216,7 @@ func (s *TelemetryService) catchUp(
 			continue
 		}
 		seen[ev.EventID] = struct{}{}
-		if err := stream.Send(&telemetryv1.WatchEvent{
-			Body: &telemetryv1.WatchEvent_Event{Event: toProtoEvent(ev)},
-		}); err != nil {
+		if err := sendEvent(stream, ev); err != nil {
 			return err
 		}
 	}
@@ -240,15 +225,45 @@ func (s *TelemetryService) catchUp(
 
 // wantedType 判断事件类型是否在订阅范围内；**空 = 全部**。
 func wantedType(types []string, t string) bool {
-	if len(types) == 0 {
-		return true
+	return len(types) == 0 || slices.Contains(types, t)
+}
+
+// clampLimit 把调用方给的上限收敛到服务端边界：0 = 默认，超上限截断。
+//
+// 单独成函数而不是写在 catchUp 里：它是**唯一**读这两个常量的地方（默认与上限互为边界，分开写容易只改一处）。
+func clampLimit(ask int) int {
+	switch {
+	case ask <= 0:
+		return defaultCatchUpLimit
+	case ask > maxCatchUpLimit:
+		return maxCatchUpLimit
+	default:
+		return ask
 	}
-	for _, want := range types {
-		if want == t {
-			return true
-		}
-	}
-	return false
+}
+
+// sendEvent 把一条内部事件写成流上的一帧。
+//
+// 补漏与转流**共用**它：帧形状只允许有一处定义（各写一份的话，改一处就会漏另一处）。
+func sendEvent(stream grpc.ServerStreamingServer[telemetryv1.WatchEvent], ev contract.Event) error {
+	return stream.Send(&telemetryv1.WatchEvent{
+		Body: &telemetryv1.WatchEvent_Event{Event: toProtoEvent(ev)},
+	})
+}
+
+// sendStatus 写一帧订阅者缓冲状态。值由调用方传入（**不要在内部重读**：
+// 那样「判有没有变化」与「发出去的值」之间会多一个窗口，可能不一致）。
+func sendStatus(
+	stream grpc.ServerStreamingServer[telemetryv1.WatchEvent],
+	dropped uint64, buffered, capacity int,
+) error {
+	return stream.Send(&telemetryv1.WatchEvent{Body: &telemetryv1.WatchEvent_Status{
+		Status: &telemetryv1.WatchStatus{
+			Dropped:    dropped,
+			BufferSize: uint32(buffered),
+			Capacity:   uint32(capacity),
+		},
+	}})
 }
 
 // toProtoEvent 把内部事件映射回 proto。

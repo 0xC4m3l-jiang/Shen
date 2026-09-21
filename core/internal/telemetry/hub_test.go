@@ -50,18 +50,25 @@ func TestHub_PublishNeverBlocksAndDropsOldest(t *testing.T) {
 		t.Fatalf("容量 2 应留住 2 条，实际 %d", got)
 	}
 	// 留住的必须是**最后两条**（丢的是最旧，不是最新）。
-	var kept []string
-	for i := 0; i < 2; i++ {
-		select {
-		case ev := <-sub.Events():
-			kept = append(kept, ev.EventID)
-		case <-time.After(time.Second):
-			t.Fatal("队列里应有 2 条")
-		}
-	}
+	kept := recvIDs(t, sub, 2)
 	if kept[0] != "e-998" || kept[1] != "e-999" {
 		t.Errorf("应留最后两条 [e-998 e-999]，实际 %v", kept)
 	}
+}
+
+// recvIDs 从订阅者取 n 条事件 id；等不到就判失败（测试里不需要客气的错误传播）。
+func recvIDs(t *testing.T, sub *Subscription, n int) []string {
+	t.Helper()
+	ids := make([]string, 0, n)
+	for len(ids) < n {
+		select {
+		case ev := <-sub.Events():
+			ids = append(ids, ev.EventID)
+		case <-time.After(time.Second):
+			t.Fatalf("等第 %d 条超时（已收到 %v）", len(ids)+1, ids)
+		}
+	}
+	return ids
 }
 
 // 纪律③：没有订阅者时 Publish 是空操作（不 panic、不分配、不阻塞）。
@@ -120,13 +127,8 @@ func TestCollector_DoesNotPublishDuplicates(t *testing.T) {
 	if _, err := c.ReportBatch(context.Background(), []contract.Event{evOf("d-1"), evOf("d-1")}); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case got := <-sub.Events():
-		if got.EventID != "d-1" {
-			t.Errorf("应收到 d-1，实际 %s", got.EventID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("落库成功的事件应被推送")
+	if got := recvIDs(t, sub, 1); got[0] != "d-1" {
+		t.Errorf("应收到 d-1，实际 %s", got[0])
 	}
 	select {
 	case second := <-sub.Events():

@@ -125,8 +125,8 @@ func (h *Hub) Publish(evs []contract.Event) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for s := range h.subs {
-		for i := range evs {
-			s.offer(evs[i])
+		for _, ev := range evs {
+			s.offer(ev)
 		}
 	}
 }
