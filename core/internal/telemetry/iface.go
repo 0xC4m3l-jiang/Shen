@@ -23,6 +23,14 @@ type Telemetry interface {
 	ReportBatch(ctx context.Context, evs []contract.Event) (Result, error)
 }
 
+// Publisher 把**已写入**的事件广播出去（观测面推送，`ADR-0027`）。
+//
+// 依赖方定义接口：telemetry 不 import 具体的广播实现（依赖方向单向）。
+// `*Hub` 满足它。
+type Publisher interface {
+	Publish(evs []contract.Event)
+}
+
 // Result 是上报回执，供适配器对账。
 type Result struct {
 	Accepted   uint32 // 实际写入

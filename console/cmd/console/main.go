@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -28,7 +29,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	telemetryv1 "shen/api/telemetry/v1"
 	"shen/console/internal/topology"
@@ -128,6 +132,7 @@ func main() {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/summary", s.handleSummary)
 	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/stream", s.handleStream)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/flow", s.handleFlow)
 	mux.HandleFunc("/api/analysis", s.handleAnalysis)
@@ -491,6 +496,121 @@ func (s *server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// viewOf 把一条 proto 事件解成页面的视图形状。
+//
+// **只有这一处解码**：拉（`/api/events` · `/api/flow`）与推（`/api/stream`）两条路径共用它 ——
+// 各写一份必然会漂（同一条事件在两处显示成不同字段）。
+func viewOf(ev *telemetryv1.TelemetryEvent) eventView {
+	view := eventView{
+		EventID:   ev.GetEventId(),
+		Type:      ev.GetEventType(),
+		ActorID:   ev.GetActorId(),
+		SessionID: ev.GetSessionId(),
+		Raw:       json.RawMessage(ev.GetPayload()),
+	}
+	if ev.GetCreatedAt() != nil {
+		view.CreatedAt = ev.GetCreatedAt().AsTime()
+	}
+	if ev.GetEventType() == decisionEventType {
+		var flow flowRecord
+		if err := json.Unmarshal(ev.GetPayload(), &flow); err == nil {
+			view.Flow = &flow
+		}
+	}
+	return view
+}
+
+// sseFrame 是推给浏览器的一帧（一个形状，三种 kind）：
+//
+//	event  —— 一条事件（`view` 与拉取接口同形，页面不需要另一套渲染）
+//	status —— 流自身状态：**丢了多少**（核心无背压，丢包必须可见）
+//	closed —— 流结束（核心挂了/主动断开），页面据此提示「重连中」
+//
+// 为什么不让页面自己解载荷：解码在 Go 侧（`viewOf`），浏览器只负责画 —— 与拉取路径一致。
+type sseFrame struct {
+	Kind     string     `json:"kind"`
+	View     *eventView `json:"view,omitempty"`
+	Dropped  uint64     `json:"dropped,omitempty"`
+	Buffered uint32     `json:"buffered,omitempty"`
+	Capacity uint32     `json:"capacity,omitempty"`
+	Error    string     `json:"error,omitempty"`
+}
+
+// handleStream 把核心的事件流以 SSE 推给浏览器（观测面推送，`ADR-0027`）。
+//
+// 两个要点：
+//
+//	① 本进程的 `http.Server` **没有** `WriteTimeout` —— 有的话长连接会被定期掐断（改它之前先看这里）；
+//	② `since` 由页面带回来：断线重连不静默丢数据（核心先补一段历史再转流）。
+func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "console: 本服务器不支持流式响应", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	// 前置反代（若启用）不得缓冲流：否则「实时」会在反代那一层变成批量。
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	req := &telemetryv1.WatchEventsRequest{SubscriberId: "console"}
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		if at, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			req.Since = timestamppb.New(at)
+		}
+	}
+	stream, err := s.client.WatchEvents(r.Context(), req)
+	if err != nil {
+		writeSSE(w, flusher, sseFrame{Kind: "closed", Error: err.Error()})
+		return
+	}
+	log.Printf("console: 观测面订阅已建立（since=%q）", r.URL.Query().Get("since"))
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			writeSSE(w, flusher, sseFrame{Kind: "closed", Error: streamEndReason(err)})
+			return
+		}
+		switch body := msg.GetBody().(type) {
+		case *telemetryv1.WatchEvent_Event:
+			view := viewOf(body.Event)
+			writeSSE(w, flusher, sseFrame{Kind: "event", View: &view})
+		case *telemetryv1.WatchEvent_Status:
+			writeSSE(w, flusher, sseFrame{
+				Kind: "status", Dropped: body.Status.GetDropped(),
+				Buffered: body.Status.GetBufferSize(), Capacity: body.Status.GetCapacity(),
+			})
+		}
+	}
+}
+
+// streamEndReason 把「流为什么结束」翻成一句人话（页面直接展示）。
+func streamEndReason(err error) string {
+	switch {
+	case errors.Is(err, io.EOF):
+		return "核心结束了事件流"
+	case status.Code(err) == codes.Unimplemented:
+		return "核心未装配事件推送（老版本核心？）"
+	case status.Code(err) == codes.Unavailable:
+		return "核心不可达"
+	default:
+		return err.Error()
+	}
+}
+
+// writeSSE 写一帧并立即 flush（不 flush 就不是「实时」）。
+func writeSSE(w http.ResponseWriter, f http.Flusher, frame sseFrame) {
+	payload, err := json.Marshal(frame)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write([]byte("data: "))
+	_, _ = w.Write(payload)
+	_, _ = w.Write([]byte("\n\n"))
+	f.Flush()
+}
+
 // fetch 向核心要最近事件（事件类型取查询参数 `type`）。
 func (s *server) fetch(r *http.Request) ([]eventView, error) {
 	return s.fetchType(r, r.URL.Query().Get("type"))
@@ -517,23 +637,7 @@ func (s *server) fetchType(r *http.Request, eventType string) ([]eventView, erro
 
 	out := make([]eventView, 0, len(resp.GetEvents()))
 	for _, ev := range resp.GetEvents() {
-		view := eventView{
-			EventID:   ev.GetEventId(),
-			Type:      ev.GetEventType(),
-			ActorID:   ev.GetActorId(),
-			SessionID: ev.GetSessionId(),
-			Raw:       json.RawMessage(ev.GetPayload()),
-		}
-		if ev.GetCreatedAt() != nil {
-			view.CreatedAt = ev.GetCreatedAt().AsTime()
-		}
-		if ev.GetEventType() == decisionEventType {
-			var flow flowRecord
-			if err := json.Unmarshal(ev.GetPayload(), &flow); err == nil {
-				view.Flow = &flow
-			}
-		}
-		out = append(out, view)
+		out = append(out, viewOf(ev))
 	}
 	// 新的在前：核心已按 newest first 返回，这里再排一次以防上游实现变化。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })

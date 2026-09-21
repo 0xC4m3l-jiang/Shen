@@ -9,6 +9,100 @@
 
 ---
 
+## 2026-09-21 · 观测面推送：从「轮询」改成「记到即推」（实测 3 ms）
+
+**做了什么**：用户指出「不是轮询刷新，而是监控到了、并且记录了，就要通知/主动更新到管控平台」。
+原来页面每 5 秒整块重取，而且**还得有人盯着** —— 告警的价值随时间衰减，这个时效下限不够。
+
+改成两段推送，**零新依赖**：
+
+```text
+核心 ──gRPC 服务端流 WatchEvents──▶ 控制台 ──SSE GET /api/stream──▶ 浏览器（EventSource）
+```
+
+1. **核心**：新增有界广播 `Hub`（每订阅者一个固定容量队列）。事件**落库之后**才广播，
+   且**只推真正写入的**（幂等命中不重推）。
+2. **控制台**：新增 `GET /api/stream`（SSE），复用已有的 `viewOf` 解码 —— 拉与推**共用一份解码**。
+3. **页面**：改为**增量**（新事件立即插入、告警立即计数并亮）+ **30 秒整块对账**（纠偏本地计数）。
+
+**三条不可破的纪律**（写进契约与 [ADR-0027](background/decisions/0027-observability-push.md)）：
+
+- **旁路**：推送不影响任何写入路径（`NI-1` / `AR-6`）；`Hub.Publish` **不返回错误**；
+- **无背压 + 丢包可见**：订阅者跟不上就**丢最旧**并计数，丢了多少**随流告知**
+  （**不可见**的丢包会让页面把「漏了」读成「没发生」）；
+- **可补漏**：`since` 重连先补历史再转流；**顺序必须是「先订阅、再补漏」**
+  （反了的话补漏期间新产生的事件会永久丢失）。
+
+**与 ADR-0018 的边界（必须说清，否则看起来自相矛盾）**：ADR-0018 拒 `Watch` 是因为**策略面**变更稀疏、
+60 秒轮询够用；本次是**观测面**（事件持续产生、时效就是价值）—— 前提完全不同。
+**策略面一字未改**：`policy.Watch` 仍返回 `Unimplemented`。
+
+**实测**：
+
+```console
+① 补漏：事件 3 条 · 状态帧 1
+② 连上后注入唯一事件 → 量「记录 → 看见」延迟
+  收到 3 条 · 延迟 最小 3ms · 中位 3ms · 最大 3ms
+```
+
+**一次值得留档的「失败」**：第一次用 `devcheck` 造事件时**一条都没收到** ——
+原因是它三次请求完全相同 ⇒ 决策 id 相同 ⇒ **幂等命中**（`AR-11`）⇒ 没写库 ⇒ **按设计也不推**。
+换唯一 id 后立即收到 —— 这从反面证明了「只推真正写入的」。
+
+**按你的要求删掉了不必要的代码**（逐条走 `audit` 四道门槛，见变更包 §7.1）：
+页面旧的「**每 5 秒自动刷新**」开关 + `setInterval(load, 5000)` + 其 handler（被 SSE 取代）·
+`Hub.remove`（拆两处反而易被误用 ⇒ 合并进 `Close`，并写明这是**正确性条件**：关 channel 必须与投递互斥）·
+`load()` 里三处内联表格行构造（→ `eventCells`/`flowCells`/`alertCells`，与实时插入**共用**）·
+`fetchType` 里的内联解码（→ `viewOf`，拉/推共用）· DAG 段的过期注释 ·
+并且**抓到自己引入的一处实效倒退**：DAG 改 30 秒对账后会比原来还慢 ⇒ 加事件驱动 + 去抖 1 秒重取。
+
+**改了哪些文件**：新增 `core/internal/telemetry/hub.go` · `core/internal/telemetry/hub_test.go` ·
+`docs/background/decisions/0027-observability-push.md` · `docs/plans/2026-09-21-observability-push.md`；
+修改 `api/telemetry/v1/telemetry.proto`（+ 重新生成两个 .pb.go）· `core/internal/telemetry/iface.go` ·
+`core/internal/telemetry/telemetry.go` · `core/internal/telemetry/telemetry_test.go` ·
+`core/internal/control/telemetry.go` · `core/cmd/core/main.go` · `console/cmd/console/main.go` ·
+`console/web/index.html` · `docs/spec/console-api.md` · `docs/modules/console.md` ·
+`docs/kb/capabilities.md` · `docs/background/decisions/README.md` · `docs/log.md`。
+
+**对应文档**：`docs/plans/2026-09-21-observability-push.md`（含追溯矩阵 · 10 条场景表 · 审视 9 条）·
+`docs/spec/console-api.md` §1.5/§2.1/§3 · [ADR-0027](background/decisions/0027-observability-push.md)。
+
+**验证**：`make gate` 通过（含 `make trace` · 80 例 pytest · Go 侧 `-race`）。
+新增 5 条单测（三条纪律 + 幂等不重推 + 无推送照常上报），`-count=3 -race` 均过。
+`make trace` 还抓到我写错的**一个不存在的规则 ID**（数字多打了一位）—— 已改正。
+
+**证据**：
+
+```console
+$ python3 /tmp/ai-probe/stream-check2.py <console> <core>
+① 补漏：事件 3 条 · 状态帧 1
+② 连上后注入唯一事件 → 量「记录 → 看见」延迟
+  收到 3 条 · 延迟 最小 3ms · 中位 3ms · 最大 3ms
+
+$ go test -race ./core/internal/telemetry/ -v | grep '^--- '
+--- PASS: TestHub_PublishNeverBlocksAndDropsOldest
+--- PASS: TestHub_PublishWithoutSubscribersIsNoop
+--- PASS: TestHub_ConcurrentPublishAndClose
+--- PASS: TestCollector_DoesNotPublishDuplicates
+--- PASS: TestCollector_ReportsWithoutPublisher
+
+$ make gate
+架构检查通过。
+追溯检查通过。
+80 passed in 0.49s
+门禁通过。
+```
+
+**没做 / 遗留**：① **多副本聚合**（控制台只连一个核心 ⇒ 只看到那一个副本的存储，既有边界，本轮显式写下）；
+② **控制台仍无鉴权** —— 流会把全部事件持续推给任何能连上的人，**绑非回环地址前必须先解决**；
+③ 断线很久后「缺口多大」未单独上报（只显示累计丢弃）；
+④ **外部通知渠道**（桌面/邮件/webhook）未做，本轮只到页内高亮与计数；
+⑤ 页面无浏览器自动化，增量/去抖/重连的用户侧行为靠代码审查；
+⑥ fan-out 未压测（订阅者数的成本上限未知）。
+去向：`docs/plans/2026-09-21-observability-push.md` §7 与 ADR-0027 未解决段。
+
+---
+
 ## 2026-09-21 · 控制台补「观测新鲜度」+ 校准 6 处文档标记（含一处「承诺未实现」）
 
 **做了什么**：用户要「补一个点能力 + 确认文档标记准确」。两件事在本轮**合成一件**：

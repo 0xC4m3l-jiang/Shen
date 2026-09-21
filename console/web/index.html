@@ -34,7 +34,7 @@
   <span class="muted" id="meta">加载中…</span>
   <span style="flex:1"></span>
   <button id="refresh">刷新</button>
-  <label class="muted"><input type="checkbox" id="auto"> 每 5 秒自动刷新</label>
+  <span class="muted" id="stream">实时流：连接中…</span>
 </header>
 
 <main>
@@ -213,7 +213,8 @@ function summarizeConclusion(c) {
 
 // ── 逐请求链路（DAG）────────────────────────────────────────────────────────
 // 每条请求一张独立的小图（不聚合）：节点=该请求实际走过的一跳，节点上写**这条请求**的值。
-// 数据来自 /api/graphs（后端按 decision_id 把核心判定与适配器执行 join 好）。每 5 秒随页面刷新 → 动态。
+// 数据来自 /api/graphs（后端按 decision_id 把核心判定与适配器执行 join 好）。
+// 刷新方式：新事件到达 → **去抖 1 秒**重取（一条事件一次请求太浪费）；不靠固定轮询间隔。
 // 渲染纪律：只用 DOM / SVG textContent（路径与 UA 是攻击者可控字符串，绝不拼 innerHTML）。
 let dagRequests = [];
 let dagFilter = "all";
@@ -474,15 +475,134 @@ async function loadConfig() {
   renderConfig(cfg);
 }
 
+// ── 观测面实时流（SSE，ADR-0027）───────────────────────────────────────────
+// 为什么要有它：轮询的时效下限就是轮询间隔，而**告警的价值随时间衰减**。
+// 现在核心在**事件落库的那一刻**把它推过来，页面立即插入（不再是「每 5 秒整块重取」）。
+//
+// 两条配套纪律：
+//   ① **丢包可见**：核心无背压（订阅者跟不上就丢最旧），丢了多少由状态帧告知 —— 必须显示出来，
+//      否则「漏了」会被读成「没发生」（那比丢包本身危险）；
+//   ② **重连带 since**：EventSource 自带的「无参重连」会重复/漏数据，所以出错时我们自己关掉、
+//      带 `since` 重开，由核心先补一段历史再转流。
+let lastEventAt = "";        // 我最后见到的事件时刻（重连时带回去补漏）
+let streamDropped = 0;       // 核心告知的累计丢包数
+const seenIds = new Set();   // 去重：补漏与实时流可能重叠（服务端也去重，这是第二道）
+const seenOrder = [];        // 配合 seenIds 做**有界**淘汰，防集合无界增长
+let counters = { total: 0, alerts: 0, l4: 0 };
+
+function setStreamState(text, bad) {
+  const el = $("stream");
+  el.textContent = text;
+  el.className = bad ? "err" : "muted";
+}
+
+function openStream() {
+  const url = lastEventAt ? "/api/stream?since=" + encodeURIComponent(lastEventAt) : "/api/stream";
+  const es = new EventSource(url);
+  es.onopen = () => setStreamState("实时流：已连接", streamDropped > 0);
+  es.onmessage = (m) => { try { onFrame(JSON.parse(m.data)); } catch (_) { /* 坏帧丢弃，不打断流 */ } };
+  es.onerror = () => {
+    es.close();               // 关掉自带重连，改用带 since 的那条
+    setStreamState("实时流：已断开（2 秒后带 since 重连）", true);
+    setTimeout(openStream, 2000);
+  };
+}
+
+function remember(id) {
+  seenIds.add(id);
+  seenOrder.push(id);
+  if (seenOrder.length > 1000) seenIds.delete(seenOrder.shift()); // 只对最近 1000 条去重
+}
+
+function onFrame(f) {
+  if (f.kind === "status") {
+    streamDropped = f.dropped || 0;
+    if (streamDropped > 0) {
+      setStreamState(`实时流：已连接（⚠️ 累计丢弃 ${streamDropped} 条）`, true);
+    }
+    return;
+  }
+  if (f.kind === "closed") {
+    setStreamState("实时流：核心结束了推送（" + (f.error || "") + "）", true);
+    return;
+  }
+  const v = f.view;
+  if (!v || !v.event_id || seenIds.has(v.event_id)) return;
+  remember(v.event_id);
+  if (v.created_at) lastEventAt = v.created_at;
+  counters.total++;
+  if (v.type === "analysis") counters.l4++;
+  prependRow("events", eventCells(v), 200);
+  if (v.type === "decision" && v.flow) {
+    const alert = isAlert(v.flow);
+    if (alert) counters.alerts++;
+    prependRow("flows", flowCells(v.flow), 300);
+    if (alert) prependRow("alerts", alertCells(v.flow), 100);
+  }
+  if (v.type === "decision" || v.type === "request_judged") scheduleDagReload();
+  renderMeta();
+}
+
+// scheduleDagReload：DAG 是**join 过**的视图（核心判定 + 适配器执行），单靠一条事件拼不出来，
+// 所以它仍然要整块重取 —— 但不能一条事件一次请求：去抖 1 秒（最多每秒一次）。
+// 没有它的话，DAG 就只剩 30 秒对账那一次刷新了（比原来还慢）。
+let dagPending = null;
+function scheduleDagReload() {
+  if (dagPending) return;
+  dagPending = setTimeout(async () => {
+    dagPending = null;
+    try { await loadDag(); } catch (_) { /* 单次失败不打断流，下次事件会再试 */ }
+  }, 1000);
+}
+
+// isAlert 的口径**必须**与核心侧 handleSummary 一致（真实告警 = block 或 severity≠none）——
+// 不一致会让「卡片上的告警数」与「告警表的行数」对不上。
+function isAlert(f) {
+  return (f.action || "").toLowerCase().includes("block") ||
+    (f.severity && f.severity.toLowerCase() !== "none");
+}
+
+// prependRow 在最上面插一行，并把超出 cap 的尾巴删掉（页面只留最近 N 条）。
+function prependRow(tableId, cells, cap) {
+  const tbody = $(tableId).querySelector("tbody");
+  tbody.insertBefore(tr(cells), tbody.firstChild);
+  while (tbody.childElementCount > cap) tbody.removeChild(tbody.lastChild);
+}
+
+// 下面三个「行构造函数」是**唯一**的列定义：整块刷新（load）与实时插入（onFrame）共用它们。
+// 分两份写必然会漂 —— 列一改只改一处，另一处就静默错位。
+function eventCells(v) {
+  return [td(fmtTime(v.created_at)), td(show(v.type)), td(show(v.actor_id)), td(show(v.event_id), "flow")];
+}
+function flowCells(f) {
+  return [td(fmtTime(f.at)), idCell(f.decision_id), actionCell(f.action), td(show(f.severity)),
+    td(show(f.source_ip)), td(show(f.method)), td(show(f.path)),
+    td(show((f.user_agent || "").slice(0, 40)), "flow"), td(f.score ? f.score.toFixed(3) : "—"),
+    td((f.signals || []).join(", ") || "—"), td(show(f.backend)), traceCell(f.decision_id)];
+}
+function alertCells(f) {
+  return [td(fmtTime(f.at)), actionCell(f.action), td(show(f.source_ip)), td(show(f.method)),
+    td(show(f.path)), td(f.score ? f.score.toFixed(3) : "—"),
+    td((f.signals || []).join(", ") || "—"), td(show(f.backend))];
+}
+
+function renderMeta() {
+  const fr = freshness(lastEventAt);
+  $("meta").textContent = `事件 ${counters.total} 条 · 告警 ${counters.alerts} 条 · L4 结论 ${counters.l4} 条 · ${fr.text}`;
+  $("meta").className = fr.stale ? "err" : "muted";
+}
+
 async function load() {
   try {
     const [sum, flows, events, conclusions] = await Promise.all([
       get("/api/summary"), get("/api/flow?limit=300"), get("/api/events?limit=100"),
       get("/api/analysis?limit=100"),
     ]);
-    const fresh = freshness(sum.last_seen);
-    $("meta").textContent = `事件 ${sum.total} 条 · 告警 ${sum.alerts} 条 · L4 结论 ${sum.l4_conclusions || 0} 条 · ${fresh.text}`;
-    $("meta").className = fresh.stale ? "err" : "muted";
+    // 整块刷新（首屏 + 30 秒对账 + 手点刷新）：它负责**纠偏**（本地计数会漂），
+    // 及时性由上面的 SSE 流负责。
+    if (!lastEventAt && sum.last_seen) lastEventAt = sum.last_seen;
+    counters = { total: sum.total || 0, alerts: sum.alerts || 0, l4: sum.l4_conclusions || 0 };
+    renderMeta();
     $("obsWindow").textContent = fmtWindow(sum);
 
     const cards = $("cards"); cards.textContent = "";
@@ -499,20 +619,11 @@ async function load() {
     const alerts = flows.filter(f => (f.action || "").toLowerCase().includes("block") ||
       (f.severity && f.severity.toLowerCase() !== "none"));
     $("alertHint").textContent = alerts.length ? `（${alerts.length} 条）` : "（暂无告警 —— 影子模式下不会有拦截，属正常）";
-    fillTable("alerts", alerts.map(f => tr([
-      td(fmtTime(f.at)), actionCell(f.action), td(show(f.source_ip)), td(show(f.method)),
-      td(show(f.path)), td(f.score ? f.score.toFixed(3) : "—"),
-      td((f.signals || []).join(", ") || "—"), td(show(f.backend)),
-    ])));
+    fillTable("alerts", alerts.map(f => tr(alertCells(f))));
 
     const shown = filter === "all" ? flows : flows.filter(f => (f.action || "").toLowerCase().includes(filter));
     $("flowHint").textContent = `（显示 ${shown.length} / ${flows.length}）`;
-    fillTable("flows", shown.map(f => tr([
-      td(fmtTime(f.at)), idCell(f.decision_id), actionCell(f.action), td(show(f.severity)),
-      td(show(f.source_ip)), td(show(f.method)), td(show(f.path)),
-      td(show((f.user_agent || "").slice(0, 40)), "flow"), td(f.score ? f.score.toFixed(3) : "—"),
-      td((f.signals || []).join(", ") || "—"), td(show(f.backend)), traceCell(f.decision_id),
-    ])));
+    fillTable("flows", shown.map(f => tr(flowCells(f))));
 
     const bar = $("filterBar"); bar.textContent = "筛选：";
     for (const k of ["all", "origin", "mirage", "block"]) {
@@ -535,9 +646,7 @@ async function load() {
     await loadConfig();
     await loadDag();
 
-    fillTable("events", events.map(e => tr([
-      td(fmtTime(e.created_at)), td(show(e.type)), td(show(e.actor_id)), td(show(e.event_id), "flow"),
-    ])));
+    fillTable("events", events.map(e => tr(eventCells(e))));
   } catch (e) {
     $("meta").textContent = "读取核心失败：" + e.message + "（核心起了吗？SHEN_CORE_ADDR 对吗？）";
     $("meta").className = "err";
@@ -545,7 +654,8 @@ async function load() {
 }
 
 $("refresh").onclick = load;
-$("auto").onchange = (e) => { if (e.target.checked) window._t = setInterval(load, 5000); else clearInterval(window._t); };
+openStream();              // 实时流：事件落库即推（断线自动带 since 重连）
+setInterval(load, 30000);  // 30 秒整块对账：纠偏本地计数
 load();
 </script>
 </body>

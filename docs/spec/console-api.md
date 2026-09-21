@@ -102,6 +102,41 @@
 
 ---
 
+### 1.5 `WatchEvents`（订阅新事件，`ADR-0027`）
+
+| 参数 | 类型 | 含义 |
+| --- | --- | --- |
+| `event_types` | string[] | 只订阅这些类型；**空 = 全部**。过滤在服务端做 |
+| `since` | Timestamp | 补漏起点：非空时先补「该时刻之后、最多 `catch_up_limit` 条」的历史，再转流 |
+| `catch_up_limit` | uint32 | 补漏上限；0 = 服务端默认 **500**，上限 **5000** |
+| `subscriber_id` | string | 订阅者标识（供日志分辨「谁在订阅」） |
+
+流上的消息是 `WatchEvent`，**两种帧**（`oneof`）：
+
+| 帧 | 何时发 | 客户端该做什么 |
+| --- | --- | --- |
+| `event` | 一条事件被**写入**之后（幂等命中**不**推） | 插入视图 |
+| `status` | **只在有变化时**（`dropped` 或 `buffer_size` 变了） | 显示「累计丢弃 N 条」——丢包必须可见 |
+
+**三条不可破的语义**（完整理由见 [`../background/decisions/0027-observability-push.md`](../background/decisions/0027-observability-push.md)）：
+
+1. **旁路**：投递失败**不得**影响任何写入路径（`NI-1` / `AR-6`）—— 推送在落库之后；
+2. **无背压**：订阅者跟不上就**丢最旧**并计数（有界缓冲），**不**反压到上报方；
+3. **可补漏**：`since` 非空时先补历史再转流 —— 断线重启不静默丢数据。
+
+失败语义：
+
+| 情形 | 核心返回 |
+| --- | --- |
+| 未装配事件推送 | `Unimplemented`（**不挂住**订阅方 —— 与 `policy.Watch` 同一约定） |
+| 订阅方断开 | 流正常结束（**不是错误**） |
+| 补漏读历史失败 | `Internal`（订阅建立失败，不静默降级成「只转流」） |
+
+**未实现时怎么办**：控制台把 `Unimplemented` 转成一帧 `closed`（页面显示「核心未装配事件推送」），
+**不**回退到 5 秒轮询 —— 页面仍有 30 秒整块对账作兵底（见 §2 的 `/api/stream` 行）。
+
+---
+
 ## 2. 控制台 HTTP 只读面（`/api/*`）
 
 全部 `GET`，全部只读。返回 JSON 的键一律 **snake_case**（与项目其余载荷一致）。
@@ -112,6 +147,7 @@
 | `GET /healthz` | —— | `ok`。**只反映本进程存活** —— 核心是否可达由页面上的错误提示体现（`ST-17` 的语义区分） | —— |
 | `GET /api/summary` | —— | 概览：`total` · `by_action` · `alerts` · `l4_conclusions` · `first_seen` · `last_seen`。**页面消费方式**：`first_seen`/`last_seen` → 「观测窗口」一行；`last_seen` 距今 > 120 秒 ⇒ 概览右上角标色（「⚠️ 观测可能已停」）—— 这个阈值是**页面常量**（`STALE_AFTER_MS`），不是契约字段 | `ListEvents` |
 | `GET /api/config` | —— | **核心只读快照**（§1.1 的字段，包在 `{policy, ai}` 两层里） | `GetCoreSnapshot` |
+| `GET /api/stream` | `since`（可选） | **SSE 流**：核心的新事件实时推给浏览器（§2.1）。帧形状：`{kind:"event",view:{…}}` · `{kind:"status",dropped,buffered,capacity}` · `{kind:"closed",error}`。`view` 与 `/api/events` **同形** —— 页面不需要第二套渲染 | `WatchEvents` |
 | `GET /api/events` | `limit` · `type` | 最近事件（原始视图） | `ListEvents` |
 | `GET /api/flow` | `limit` | **逐判定**记录：`decision_id` / `source_ip` / `method` / `path` / `user_agent` / `action` / `severity` / `backend` / `score` / `signals` / `at`（与 `logs.md` §3 的字段表一一对应） | `ListEvents`（`type=decision`） |
 | `GET /api/analysis` | `limit` | L4 结论事件（解成结构化字段） | `ListEvents`（`type=analysis`） |
@@ -120,6 +156,22 @@
 | `GET /api/trace` | `decision_id` | 单请求**四段**：① 请求 ② 判定（核心）③ 执行与返回（适配器）④ 告警 | 同上 |
 
 错误响应统一形状：`{"error": "<原因>"}` + HTTP `502`（核心不可达/报错时）。
+
+### 2.1 页面如何消费流（`ADR-0027` 决定 3）
+
+**增量 + 对账**，两者分工固定：
+
+| 机制 | 负责 | 频率 |
+| --- | --- | --- |
+| `EventSource` 流 | **及时性**：新事件立即插入表格、告警立即计数并亮 | 事件驱动 |
+| 整块刷新（`/api/summary` + 各表） | **正确性**：纠偏本地计数（本地累加久了会漂） | 首屏 + **30 秒** + 手点「刷新」 |
+
+**已删除的机制**：原来的「每 5 秒整块刷新」开关 —— 它已被更快的机制取代，留着会让读者以为时效仍是 5 秒。
+
+**断线重连**：`EventSource` 自带的「无参重连」会重复/漏，因此页面在 `onerror` 时**主动关闭**、
+2 秒后用 `?since=<最后见到的事件时刻>` 重开，由核心先补漏再转流。
+
+**视图去重**：补漏与实时流可能重叠（服务端已用 `event_id` 去重，页面再留一道有界去重，防重复插入）。
 
 ---
 
@@ -133,3 +185,8 @@
    并跑 `go test ./console/cmd/console/`（那里有一条键名测试钉住 snake_case）。
 
 加**快照字段**前先过 §1.2 的两条规矩；过不了就不加，改由配置文档承载。
+
+改**流上的帧形状**（`WatchEvent` / SSE 帧）时额外注意：它同时被
+核心（`core/internal/control/telemetry.go`）、控制台（`console/cmd/console/main.go` 的 `sseFrame`）
+与页面（`console/web/index.html` 的 `onFrame`）三处消费 —— 三处都要改，且页面的插入路径
+**必须**复用整块刷新那套列定义（`eventCells` / `flowCells` / `alertCells`）。

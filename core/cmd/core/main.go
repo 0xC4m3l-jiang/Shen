@@ -118,7 +118,10 @@ func run() error {
 
 	// CookieName 是业务自身的 session cookie 名（会话身份三级优先级的第 ① 级）。
 	sess := session.New("sid")
-	collector := telemetry.New(stores.Event)
+	// 观测面推送（ADR-0027）：事件**落库之后**旁路广播给订阅者（控制台的实时流）。
+	// 没有订阅者时它几乎零成本（Hub.Publish 只取一次读锁），也不会阻塞上报路径。
+	eventHub := telemetry.NewHub()
+	collector := telemetry.New(stores.Event, eventHub)
 
 	// 决策路径（阶段 2a）：影子模式用 ShadowDecider（恒放行，只算不处置）；
 	// 关闭影子后才用 director 产出真实三值（阈值 → 三值 + 灰度收敛）。
@@ -186,6 +189,7 @@ func run() error {
 	telemetryv1.RegisterDeceptionTelemetryServer(srv,
 		control.NewTelemetryServiceWith(collector,
 			control.WithEventLister(eventLister{events: stores.Event}),
+			control.WithEventHub(eventHub),
 			control.WithSnapshotProvider(coreSnapshot{loader: loader, content: content})))
 
 	// 策略面（S4）：把当前策略版本投影后下发给适配器，并接收它们的回执（AR-13 / ST-8）。

@@ -22,6 +22,230 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// WatchEventsRequest 是订阅参数。
+type WatchEventsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 只订阅这些事件类型；**空 = 全部**。过滤在服务端做（订阅者不必自己丢无用的）。
+	EventTypes []string `protobuf:"bytes,1,rep,name=event_types,json=eventTypes,proto3" json:"event_types,omitempty"`
+	// 补漏起点：非空时先补「该时刻之后、最多 catch_up_limit 条」的历史，再转流。
+	Since *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
+	// 补漏上限；0 = 服务端默认（500）。防止断线很久后一次灌爆客户端。
+	CatchUpLimit uint32 `protobuf:"varint,3,opt,name=catch_up_limit,json=catchUpLimit,proto3" json:"catch_up_limit,omitempty"`
+	// 订阅者标识（进日志，便于分辨「谁在订阅」）。
+	SubscriberId  string `protobuf:"bytes,4,opt,name=subscriber_id,json=subscriberId,proto3" json:"subscriber_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchEventsRequest) Reset() {
+	*x = WatchEventsRequest{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchEventsRequest) ProtoMessage() {}
+
+func (x *WatchEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchEventsRequest.ProtoReflect.Descriptor instead.
+func (*WatchEventsRequest) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *WatchEventsRequest) GetEventTypes() []string {
+	if x != nil {
+		return x.EventTypes
+	}
+	return nil
+}
+
+func (x *WatchEventsRequest) GetSince() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Since
+	}
+	return nil
+}
+
+func (x *WatchEventsRequest) GetCatchUpLimit() uint32 {
+	if x != nil {
+		return x.CatchUpLimit
+	}
+	return 0
+}
+
+func (x *WatchEventsRequest) GetSubscriberId() string {
+	if x != nil {
+		return x.SubscriberId
+	}
+	return ""
+}
+
+// WatchEvent 是流上的一条消息：**事件**或**流自身状态**。
+//
+// 为什么不用裸 `TelemetryEvent` 流：订阅者需要知道「我漏了多少」——
+// 丢事件是无背压的必然代价（见 `WatchEvents` 语义②）。状态帧让丢包**可见**，
+// 而不是让页面把「漏了」误读成「没发生」。
+type WatchEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Body:
+	//
+	//	*WatchEvent_Event
+	//	*WatchEvent_Status
+	Body          isWatchEvent_Body `protobuf_oneof:"body"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchEvent) Reset() {
+	*x = WatchEvent{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchEvent) ProtoMessage() {}
+
+func (x *WatchEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchEvent.ProtoReflect.Descriptor instead.
+func (*WatchEvent) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *WatchEvent) GetBody() isWatchEvent_Body {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *WatchEvent) GetEvent() *TelemetryEvent {
+	if x != nil {
+		if x, ok := x.Body.(*WatchEvent_Event); ok {
+			return x.Event
+		}
+	}
+	return nil
+}
+
+func (x *WatchEvent) GetStatus() *WatchStatus {
+	if x != nil {
+		if x, ok := x.Body.(*WatchEvent_Status); ok {
+			return x.Status
+		}
+	}
+	return nil
+}
+
+type isWatchEvent_Body interface {
+	isWatchEvent_Body()
+}
+
+type WatchEvent_Event struct {
+	Event *TelemetryEvent `protobuf:"bytes,1,opt,name=event,proto3,oneof"`
+}
+
+type WatchEvent_Status struct {
+	Status *WatchStatus `protobuf:"bytes,2,opt,name=status,proto3,oneof"`
+}
+
+func (*WatchEvent_Event) isWatchEvent_Body() {}
+
+func (*WatchEvent_Status) isWatchEvent_Body() {}
+
+// WatchStatus 是本订阅者的缓冲区状态（服务端只在**有变化时**发，不刷屏）。
+type WatchStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// dropped = 本订阅者累计被丢弃的事件数（缓冲满时丢最旧 / 塞不进）。
+	Dropped uint64 `protobuf:"varint,1,opt,name=dropped,proto3" json:"dropped,omitempty"`
+	// buffer_size = 当前缓冲里待投递的条数（越大说明订阅者越慢）。
+	BufferSize uint32 `protobuf:"varint,2,opt,name=buffer_size,json=bufferSize,proto3" json:"buffer_size,omitempty"`
+	// capacity = 本订阅者的缓冲容量（常量，便于客户端自解释）。
+	Capacity      uint32 `protobuf:"varint,3,opt,name=capacity,proto3" json:"capacity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchStatus) Reset() {
+	*x = WatchStatus{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchStatus) ProtoMessage() {}
+
+func (x *WatchStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchStatus.ProtoReflect.Descriptor instead.
+func (*WatchStatus) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *WatchStatus) GetDropped() uint64 {
+	if x != nil {
+		return x.Dropped
+	}
+	return 0
+}
+
+func (x *WatchStatus) GetBufferSize() uint32 {
+	if x != nil {
+		return x.BufferSize
+	}
+	return 0
+}
+
+func (x *WatchStatus) GetCapacity() uint32 {
+	if x != nil {
+		return x.Capacity
+	}
+	return 0
+}
+
 // GetCoreSnapshotRequest 无参数 —— 快照就是「现在」，不接受时间窗（要历史去读事件）。
 type GetCoreSnapshotRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -31,7 +255,7 @@ type GetCoreSnapshotRequest struct {
 
 func (x *GetCoreSnapshotRequest) Reset() {
 	*x = GetCoreSnapshotRequest{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -43,7 +267,7 @@ func (x *GetCoreSnapshotRequest) String() string {
 func (*GetCoreSnapshotRequest) ProtoMessage() {}
 
 func (x *GetCoreSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[0]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -56,7 +280,7 @@ func (x *GetCoreSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCoreSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*GetCoreSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{0}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{3}
 }
 
 // CoreSnapshot 是核心当前生效状态的只读摘要。
@@ -104,7 +328,7 @@ type CoreSnapshot struct {
 
 func (x *CoreSnapshot) Reset() {
 	*x = CoreSnapshot{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -116,7 +340,7 @@ func (x *CoreSnapshot) String() string {
 func (*CoreSnapshot) ProtoMessage() {}
 
 func (x *CoreSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[1]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -129,7 +353,7 @@ func (x *CoreSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CoreSnapshot.ProtoReflect.Descriptor instead.
 func (*CoreSnapshot) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{1}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CoreSnapshot) GetPolicyId() string {
@@ -253,7 +477,7 @@ type TelemetryEvent struct {
 
 func (x *TelemetryEvent) Reset() {
 	*x = TelemetryEvent{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -265,7 +489,7 @@ func (x *TelemetryEvent) String() string {
 func (*TelemetryEvent) ProtoMessage() {}
 
 func (x *TelemetryEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[2]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -278,7 +502,7 @@ func (x *TelemetryEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryEvent.ProtoReflect.Descriptor instead.
 func (*TelemetryEvent) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{2}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *TelemetryEvent) GetEventId() string {
@@ -332,7 +556,7 @@ type TelemetryBatch struct {
 
 func (x *TelemetryBatch) Reset() {
 	*x = TelemetryBatch{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +568,7 @@ func (x *TelemetryBatch) String() string {
 func (*TelemetryBatch) ProtoMessage() {}
 
 func (x *TelemetryBatch) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[3]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +581,7 @@ func (x *TelemetryBatch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryBatch.ProtoReflect.Descriptor instead.
 func (*TelemetryBatch) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{3}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *TelemetryBatch) GetEvents() []*TelemetryEvent {
@@ -381,7 +605,7 @@ type ListEventsRequest struct {
 
 func (x *ListEventsRequest) Reset() {
 	*x = ListEventsRequest{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -393,7 +617,7 @@ func (x *ListEventsRequest) String() string {
 func (*ListEventsRequest) ProtoMessage() {}
 
 func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[4]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -406,7 +630,7 @@ func (x *ListEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsRequest.ProtoReflect.Descriptor instead.
 func (*ListEventsRequest) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{4}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListEventsRequest) GetLimit() uint32 {
@@ -439,7 +663,7 @@ type ListEventsResponse struct {
 
 func (x *ListEventsResponse) Reset() {
 	*x = ListEventsResponse{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[5]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -451,7 +675,7 @@ func (x *ListEventsResponse) String() string {
 func (*ListEventsResponse) ProtoMessage() {}
 
 func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[5]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -464,7 +688,7 @@ func (x *ListEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListEventsResponse) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{5}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListEventsResponse) GetEvents() []*TelemetryEvent {
@@ -484,7 +708,7 @@ type ReportAck struct {
 
 func (x *ReportAck) Reset() {
 	*x = ReportAck{}
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[6]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -496,7 +720,7 @@ func (x *ReportAck) String() string {
 func (*ReportAck) ProtoMessage() {}
 
 func (x *ReportAck) ProtoReflect() protoreflect.Message {
-	mi := &file_telemetry_v1_telemetry_proto_msgTypes[6]
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -509,7 +733,7 @@ func (x *ReportAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportAck.ProtoReflect.Descriptor instead.
 func (*ReportAck) Descriptor() ([]byte, []int) {
-	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{6}
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ReportAck) GetAccepted() uint32 {
@@ -530,7 +754,23 @@ var File_telemetry_v1_telemetry_proto protoreflect.FileDescriptor
 
 const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\n" +
-	"\x1ctelemetry/v1/telemetry.proto\x12\ftelemetry.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x18\n" +
+	"\x1ctelemetry/v1/telemetry.proto\x12\ftelemetry.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb2\x01\n" +
+	"\x12WatchEventsRequest\x12\x1f\n" +
+	"\vevent_types\x18\x01 \x03(\tR\n" +
+	"eventTypes\x120\n" +
+	"\x05since\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05since\x12$\n" +
+	"\x0ecatch_up_limit\x18\x03 \x01(\rR\fcatchUpLimit\x12#\n" +
+	"\rsubscriber_id\x18\x04 \x01(\tR\fsubscriberId\"\x7f\n" +
+	"\n" +
+	"WatchEvent\x124\n" +
+	"\x05event\x18\x01 \x01(\v2\x1c.telemetry.v1.TelemetryEventH\x00R\x05event\x123\n" +
+	"\x06status\x18\x02 \x01(\v2\x19.telemetry.v1.WatchStatusH\x00R\x06statusB\x06\n" +
+	"\x04body\"d\n" +
+	"\vWatchStatus\x12\x18\n" +
+	"\adropped\x18\x01 \x01(\x04R\adropped\x12\x1f\n" +
+	"\vbuffer_size\x18\x02 \x01(\rR\n" +
+	"bufferSize\x12\x1a\n" +
+	"\bcapacity\x18\x03 \x01(\rR\bcapacity\"\x18\n" +
 	"\x16GetCoreSnapshotRequest\"\xe4\x04\n" +
 	"\fCoreSnapshot\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12%\n" +
@@ -574,13 +814,14 @@ const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\baccepted\x18\x01 \x01(\rR\baccepted\x12\x1e\n" +
 	"\n" +
 	"duplicated\x18\x02 \x01(\rR\n" +
-	"duplicated2\xc1\x02\n" +
+	"duplicated2\x8e\x03\n" +
 	"\x12DeceptionTelemetry\x12?\n" +
 	"\x06Report\x12\x1c.telemetry.v1.TelemetryEvent\x1a\x17.telemetry.v1.ReportAck\x12D\n" +
 	"\vReportBatch\x12\x1c.telemetry.v1.TelemetryBatch\x1a\x17.telemetry.v1.ReportAck\x12O\n" +
 	"\n" +
 	"ListEvents\x12\x1f.telemetry.v1.ListEventsRequest\x1a .telemetry.v1.ListEventsResponse\x12S\n" +
-	"\x0fGetCoreSnapshot\x12$.telemetry.v1.GetCoreSnapshotRequest\x1a\x1a.telemetry.v1.CoreSnapshotB#Z!shen/api/telemetry/v1;telemetryv1b\x06proto3"
+	"\x0fGetCoreSnapshot\x12$.telemetry.v1.GetCoreSnapshotRequest\x1a\x1a.telemetry.v1.CoreSnapshot\x12K\n" +
+	"\vWatchEvents\x12 .telemetry.v1.WatchEventsRequest\x1a\x18.telemetry.v1.WatchEvent0\x01B#Z!shen/api/telemetry/v1;telemetryv1b\x06proto3"
 
 var (
 	file_telemetry_v1_telemetry_proto_rawDescOnce sync.Once
@@ -594,35 +835,43 @@ func file_telemetry_v1_telemetry_proto_rawDescGZIP() []byte {
 	return file_telemetry_v1_telemetry_proto_rawDescData
 }
 
-var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_telemetry_v1_telemetry_proto_goTypes = []any{
-	(*GetCoreSnapshotRequest)(nil), // 0: telemetry.v1.GetCoreSnapshotRequest
-	(*CoreSnapshot)(nil),           // 1: telemetry.v1.CoreSnapshot
-	(*TelemetryEvent)(nil),         // 2: telemetry.v1.TelemetryEvent
-	(*TelemetryBatch)(nil),         // 3: telemetry.v1.TelemetryBatch
-	(*ListEventsRequest)(nil),      // 4: telemetry.v1.ListEventsRequest
-	(*ListEventsResponse)(nil),     // 5: telemetry.v1.ListEventsResponse
-	(*ReportAck)(nil),              // 6: telemetry.v1.ReportAck
-	(*timestamppb.Timestamp)(nil),  // 7: google.protobuf.Timestamp
+	(*WatchEventsRequest)(nil),     // 0: telemetry.v1.WatchEventsRequest
+	(*WatchEvent)(nil),             // 1: telemetry.v1.WatchEvent
+	(*WatchStatus)(nil),            // 2: telemetry.v1.WatchStatus
+	(*GetCoreSnapshotRequest)(nil), // 3: telemetry.v1.GetCoreSnapshotRequest
+	(*CoreSnapshot)(nil),           // 4: telemetry.v1.CoreSnapshot
+	(*TelemetryEvent)(nil),         // 5: telemetry.v1.TelemetryEvent
+	(*TelemetryBatch)(nil),         // 6: telemetry.v1.TelemetryBatch
+	(*ListEventsRequest)(nil),      // 7: telemetry.v1.ListEventsRequest
+	(*ListEventsResponse)(nil),     // 8: telemetry.v1.ListEventsResponse
+	(*ReportAck)(nil),              // 9: telemetry.v1.ReportAck
+	(*timestamppb.Timestamp)(nil),  // 10: google.protobuf.Timestamp
 }
 var file_telemetry_v1_telemetry_proto_depIdxs = []int32{
-	7, // 0: telemetry.v1.TelemetryEvent.created_at:type_name -> google.protobuf.Timestamp
-	2, // 1: telemetry.v1.TelemetryBatch.events:type_name -> telemetry.v1.TelemetryEvent
-	7, // 2: telemetry.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
-	2, // 3: telemetry.v1.ListEventsResponse.events:type_name -> telemetry.v1.TelemetryEvent
-	2, // 4: telemetry.v1.DeceptionTelemetry.Report:input_type -> telemetry.v1.TelemetryEvent
-	3, // 5: telemetry.v1.DeceptionTelemetry.ReportBatch:input_type -> telemetry.v1.TelemetryBatch
-	4, // 6: telemetry.v1.DeceptionTelemetry.ListEvents:input_type -> telemetry.v1.ListEventsRequest
-	0, // 7: telemetry.v1.DeceptionTelemetry.GetCoreSnapshot:input_type -> telemetry.v1.GetCoreSnapshotRequest
-	6, // 8: telemetry.v1.DeceptionTelemetry.Report:output_type -> telemetry.v1.ReportAck
-	6, // 9: telemetry.v1.DeceptionTelemetry.ReportBatch:output_type -> telemetry.v1.ReportAck
-	5, // 10: telemetry.v1.DeceptionTelemetry.ListEvents:output_type -> telemetry.v1.ListEventsResponse
-	1, // 11: telemetry.v1.DeceptionTelemetry.GetCoreSnapshot:output_type -> telemetry.v1.CoreSnapshot
-	8, // [8:12] is the sub-list for method output_type
-	4, // [4:8] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	10, // 0: telemetry.v1.WatchEventsRequest.since:type_name -> google.protobuf.Timestamp
+	5,  // 1: telemetry.v1.WatchEvent.event:type_name -> telemetry.v1.TelemetryEvent
+	2,  // 2: telemetry.v1.WatchEvent.status:type_name -> telemetry.v1.WatchStatus
+	10, // 3: telemetry.v1.TelemetryEvent.created_at:type_name -> google.protobuf.Timestamp
+	5,  // 4: telemetry.v1.TelemetryBatch.events:type_name -> telemetry.v1.TelemetryEvent
+	10, // 5: telemetry.v1.ListEventsRequest.since:type_name -> google.protobuf.Timestamp
+	5,  // 6: telemetry.v1.ListEventsResponse.events:type_name -> telemetry.v1.TelemetryEvent
+	5,  // 7: telemetry.v1.DeceptionTelemetry.Report:input_type -> telemetry.v1.TelemetryEvent
+	6,  // 8: telemetry.v1.DeceptionTelemetry.ReportBatch:input_type -> telemetry.v1.TelemetryBatch
+	7,  // 9: telemetry.v1.DeceptionTelemetry.ListEvents:input_type -> telemetry.v1.ListEventsRequest
+	3,  // 10: telemetry.v1.DeceptionTelemetry.GetCoreSnapshot:input_type -> telemetry.v1.GetCoreSnapshotRequest
+	0,  // 11: telemetry.v1.DeceptionTelemetry.WatchEvents:input_type -> telemetry.v1.WatchEventsRequest
+	9,  // 12: telemetry.v1.DeceptionTelemetry.Report:output_type -> telemetry.v1.ReportAck
+	9,  // 13: telemetry.v1.DeceptionTelemetry.ReportBatch:output_type -> telemetry.v1.ReportAck
+	8,  // 14: telemetry.v1.DeceptionTelemetry.ListEvents:output_type -> telemetry.v1.ListEventsResponse
+	4,  // 15: telemetry.v1.DeceptionTelemetry.GetCoreSnapshot:output_type -> telemetry.v1.CoreSnapshot
+	1,  // 16: telemetry.v1.DeceptionTelemetry.WatchEvents:output_type -> telemetry.v1.WatchEvent
+	12, // [12:17] is the sub-list for method output_type
+	7,  // [7:12] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_telemetry_v1_telemetry_proto_init() }
@@ -630,13 +879,17 @@ func file_telemetry_v1_telemetry_proto_init() {
 	if File_telemetry_v1_telemetry_proto != nil {
 		return
 	}
+	file_telemetry_v1_telemetry_proto_msgTypes[1].OneofWrappers = []any{
+		(*WatchEvent_Event)(nil),
+		(*WatchEvent_Status)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_telemetry_v1_telemetry_proto_rawDesc), len(file_telemetry_v1_telemetry_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

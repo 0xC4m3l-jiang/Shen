@@ -35,7 +35,8 @@
 | 方向 | 契约 | 状态 |
 | --- | --- | --- |
 | **输入**（读核心） | 核心 gRPC 读面：`ListEvents`（历史）· `GetCoreSnapshot`（当前态） | ✅ 已实现（快照 2026-09-21 新增） |
-| **输出**（页 / HTTP） | 控制台 10 个**只读** HTTP 接口（含 `/api/config`） | ✅ 已实现 |
+| **输入**（订阅核心） | 核心 gRPC 流：`WatchEvents`（事件推送，`ADR-0027`） | ✅ 已实现（2026-09-21） |
+| **输出**（页 / HTTP） | 控制台 11 个**只读** HTTP 接口（含 `/api/config` 与 SSE 的 `/api/stream`） | ✅ 已实现 |
 | 输入 / 输出（**设计意图**） | 策略平面（`api/policy/v1`）的 `Pull` / `Ack` —— 策略编排所需的**写能力** | ❌ **未实现**：控制台当前只读（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md) 决定 2）；要做得先重开它 |
 
 ## 3. 依赖
@@ -82,6 +83,9 @@
 | 接口（形状） | `/api/summary` · `/api/flow` · `/api/events` · `healthz` 的返回形状 | 实跑（`scripts/demo/run.sh`） |
 | 单元 | **`/api/config` 的键名与失败语义**：snake_case 键齐备；核心未装配快照时**返回错误而不是全零配置** | [`../../console/cmd/console/config_test.go`](../../console/cmd/console/config_test.go) |
 | 单元 | 核心侧快照 RPC：未装配 ⇒ `Unimplemented` · 逐字段映射 · 提供方报错 ⇒ `Internal` | [`../../core/internal/control/telemetry_test.go`](../../core/internal/control/telemetry_test.go)（`TestTelemetryService_Snapshot*`） |
+| 单元 | 广播中心三条纪律：**不阻塞**（慢订阅者拖不死上报）· **丢最旧并计数** · 无订阅者零成本；并发 Publish×Close（`-race`） | [`../../core/internal/telemetry/hub_test.go`](../../core/internal/telemetry/hub_test.go) |
+| 单元 | **幂等命中不重复推**（同 id 第二次上报不产生第二条流消息） | 同上（`TestCollector_DoesNotPublishDuplicates`） |
+| 集成（实测） | 端到端时效：核心记录 → 页面 SSE 收到，**3 ms**（回环）；带 `since` 重连能补到历史 | 变更包 [`../plans/2026-09-21-observability-push.md`](../plans/2026-09-21-observability-push.md) §6 |
 | 安全 | 页面渲染攻击者可控字符串用 DOM + `textContent`（**禁止** `innerHTML` 拼接） | [`../../console/web/index.html`](../../console/web/index.html) 顶部注释 |
 
 > ⚠️ **语言偏离设计**：设计写 TypeScript，本轮实现为 Go + 静态页（按用户裁定不引入前端工具链）——
@@ -107,6 +111,7 @@
 | --- | --- | --- |
 | 2026-09-18 | 创建（设计）：策略编排 + 资产管理 + 审计查询 | 既有清单（`modules.md` §1.1） |
 | 2026-09-21 | **新增「配置」块**（读核心只读快照 `GetCoreSnapshot`）+ **逐判定日志补全字段**（`decision_id` / `severity`）与「看链路」入口；新增 `../spec/console-api.md` 把读面契约收成一处 | [`../plans/2026-09-21-console-config-log.md`](../plans/2026-09-21-console-config-log.md) · [`../spec/console-api.md`](../spec/console-api.md) |
+| 2026-09-21 | **改为推送**：核心 `WatchEvents` 流 + 控制台 `GET /api/stream`（SSE）→ 页面**增量更新**；**删掉「每 5 秒整块刷新」**，改 30 秒对账 + 事件驱动（DAG 去抖 1 秒）；实测延迟 **3 ms** | [`../plans/2026-09-21-observability-push.md`](../plans/2026-09-21-observability-push.md) · [ADR-0027](../background/decisions/0027-observability-push.md) |
 
 ## 9.1 流量调度图（DAG）与链路详情（2026-09-20 新增）
 

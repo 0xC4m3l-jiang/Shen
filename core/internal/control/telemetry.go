@@ -2,8 +2,10 @@ package control
 
 import (
 	"context"
+	"sort"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -21,6 +23,7 @@ type TelemetryService struct {
 	collector telemetry.Telemetry
 	lister    EventLister      // 可空；为空时 ListEvents 返回空（控制台会显示「暂无数据」）
 	snapshot  SnapshotProvider // 可空；为空时 GetCoreSnapshot 返回 Unimplemented（不返回全零假快照）
+	hub       *telemetry.Hub   // 可空；为空时 WatchEvents 返回 Unimplemented（不挂住订阅方）
 }
 
 // NewTelemetryService 构造服务端。collector 为 nil 时 panic。
@@ -112,6 +115,140 @@ func toProtoSnapshot(s contract.CoreSnapshot) *telemetryv1.CoreSnapshot {
 		AiManifestResources: int32(s.AI.ManifestResources),
 		AiManifestContents:  int32(s.AI.ManifestContents),
 	}
+}
+
+// WithEventHub 给遥测面挂上**事件推送**（观测面订阅，`ADR-0027`）。
+func WithEventHub(h *telemetry.Hub) TelemetryOption {
+	return func(s *TelemetryService) { s.hub = h }
+}
+
+// 订阅的默认参数（**不是**契约值：契约里 0 = 服务端默认）。
+const (
+	defaultCatchUpLimit = 500
+	maxCatchUpLimit     = 5000
+	// watchStatusEvery 是状态帧的检查周期；**只在有变化时**才真发（见 WatchEvents）。
+	watchStatusEvery = 2 * time.Second
+)
+
+// WatchEvents 把新事件推给订阅者（观测面推送，`ADR-0027`）。
+//
+// 两个容易被写错的点：
+//
+//	① **先订阅、再补漏**：反过来的话，补漏那段时间新产生的事件会**永久丢失**（读历史读不到未来的）。
+//	   代价是「历史与缓冲可能各含同一条」⇒ 用 `seen` 去重（只可能重一次）。
+//	② **断开不是错误**：订阅方关连接 ⇒ 返回 nil（正常结束），不要报错。
+func (s *TelemetryService) WatchEvents(
+	in *telemetryv1.WatchEventsRequest, stream grpc.ServerStreamingServer[telemetryv1.WatchEvent],
+) error {
+	if s.hub == nil {
+		// 未装配推送 ⇒ 显式 Unimplemented（让订阅方**立刻**知道这条路没通），不挂住调用方
+		// —— 与 `policy.Watch` 同一约定（ADR-0018）。
+		return status.Error(codes.Unimplemented, "control: 核心未装配事件推送（观测面订阅）")
+	}
+
+	types := in.GetEventTypes()
+
+	// ① 先订阅（开始缓冲），再补漏。
+	sub := s.hub.Subscribe(0)
+	defer sub.Close()
+	seen := map[string]struct{}{}
+	if since := in.GetSince(); since != nil {
+		if err := s.catchUp(stream, types, seen, since.AsTime(), int(in.GetCatchUpLimit())); err != nil {
+			return err
+		}
+	}
+
+	// ② 转流：事件 + （有变化时的）状态帧。
+	ticker := time.NewTicker(watchStatusEvery)
+	defer ticker.Stop()
+	var sentDropped uint64
+	sentBuffered := -1
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case ev, ok := <-sub.Events():
+			if !ok {
+				return nil
+			}
+			if _, dup := seen[ev.EventID]; dup {
+				delete(seen, ev.EventID) // 只可能与补漏重叠一次，删掉以免集合无界增长
+				continue
+			}
+			if !wantedType(types, ev.Type) {
+				continue
+			}
+			if err := stream.Send(&telemetryv1.WatchEvent{
+				Body: &telemetryv1.WatchEvent_Event{Event: toProtoEvent(ev)},
+			}); err != nil {
+				return err
+			}
+		case <-ticker.C:
+			dropped, buffered := sub.Dropped(), sub.Buffered()
+			if dropped == sentDropped && buffered == sentBuffered {
+				continue // 没变化就不发：状态帧是告警信号，不是心跳
+			}
+			sentDropped, sentBuffered = dropped, buffered
+			if err := stream.Send(&telemetryv1.WatchEvent{Body: &telemetryv1.WatchEvent_Status{
+				Status: &telemetryv1.WatchStatus{
+					Dropped:    dropped,
+					BufferSize: uint32(buffered),
+					Capacity:   uint32(sub.Capacity()),
+				},
+			}}); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// catchUp 把 `since` 之后的历史补发出去（按**时间正序**，客户端按序插入才不会乱序）。
+//
+// 记录已发过的 id 到 `seen`：补漏与缓冲可能重叠（见 WatchEvents 的第一个坑）。
+func (s *TelemetryService) catchUp(
+	stream grpc.ServerStreamingServer[telemetryv1.WatchEvent],
+	types []string, seen map[string]struct{}, since time.Time, askLimit int,
+) error {
+	if s.lister == nil {
+		return nil // 没装读侧 ⇒ 补不了漏，但仍然转流（不因补漏失败而拒绝订阅）
+	}
+	limit := askLimit
+	if limit <= 0 {
+		limit = defaultCatchUpLimit
+	}
+	if limit > maxCatchUpLimit {
+		limit = maxCatchUpLimit
+	}
+	evs, err := s.lister.ListEvents(stream.Context(), limit, since, "")
+	if err != nil {
+		return status.Errorf(codes.Internal, "control: 补漏读历史失败：%v", err)
+	}
+	sort.SliceStable(evs, func(i, j int) bool { return evs[i].CreatedAt.Before(evs[j].CreatedAt) })
+	for _, ev := range evs {
+		if !wantedType(types, ev.Type) {
+			continue
+		}
+		seen[ev.EventID] = struct{}{}
+		if err := stream.Send(&telemetryv1.WatchEvent{
+			Body: &telemetryv1.WatchEvent_Event{Event: toProtoEvent(ev)},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// wantedType 判断事件类型是否在订阅范围内；**空 = 全部**。
+func wantedType(types []string, t string) bool {
+	if len(types) == 0 {
+		return true
+	}
+	for _, want := range types {
+		if want == t {
+			return true
+		}
+	}
+	return false
 }
 
 // toProtoEvent 把内部事件映射回 proto。

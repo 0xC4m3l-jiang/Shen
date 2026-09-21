@@ -28,6 +28,54 @@ service DeceptionTelemetry {
   // 刻意**不**返回：白名单/隔离名单的**内容**（只给条数）、任何密钥（`ST-20`）。
   // 观测面不等于泄密面：控制台是只读观测台，不是配置导出器。
   rpc GetCoreSnapshot(GetCoreSnapshotRequest) returns (CoreSnapshot);
+
+  // 读侧：**订阅新事件**（观测面推送，`ADR-0027`）。
+  //
+  // 与 `ListEvents` 的分工：`ListEvents` 回答「刚才发生了什么」（**拉**，有窗口）；
+  // `WatchEvents` 回答「**正在发生什么**」（**推**，长连接）。
+  //
+  // 三条不可破的语义：
+  //
+  //  ① **旁路**：推送在落库之后进行，投递失败**不得**影响任何写入路径（`NI-1` / `AR-6`）；
+  //  ② **无背压**：订阅者跟不上就**丢**（每订阅者有界缓冲 + 丢最旧），丢了多少**随流告知**；
+  //  ③ **可补漏**：`since` 非空时先补一段历史再转流 —— 断线重连不静默丢数据。
+  //
+  // 刻意**不**在服务端保留事件（那是 `store` 的事）：流的缓冲只是投递队列，不是历史。
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEvent);
+}
+
+// WatchEventsRequest 是订阅参数。
+message WatchEventsRequest {
+  // 只订阅这些事件类型；**空 = 全部**。过滤在服务端做（订阅者不必自己丢无用的）。
+  repeated string event_types = 1;
+  // 补漏起点：非空时先补「该时刻之后、最多 catch_up_limit 条」的历史，再转流。
+  google.protobuf.Timestamp since = 2;
+  // 补漏上限；0 = 服务端默认（500）。防止断线很久后一次灌爆客户端。
+  uint32 catch_up_limit = 3;
+  // 订阅者标识（进日志，便于分辨「谁在订阅」）。
+  string subscriber_id = 4;
+}
+
+// WatchEvent 是流上的一条消息：**事件**或**流自身状态**。
+//
+// 为什么不用裸 `TelemetryEvent` 流：订阅者需要知道「我漏了多少」——
+// 丢事件是无背压的必然代价（见 `WatchEvents` 语义②）。状态帧让丢包**可见**，
+// 而不是让页面把「漏了」误读成「没发生」。
+message WatchEvent {
+  oneof body {
+    TelemetryEvent event = 1;
+    WatchStatus status = 2;
+  }
+}
+
+// WatchStatus 是本订阅者的缓冲区状态（服务端只在**有变化时**发，不刷屏）。
+message WatchStatus {
+  // dropped = 本订阅者累计被丢弃的事件数（缓冲满时丢最旧 / 塞不进）。
+  uint64 dropped = 1;
+  // buffer_size = 当前缓冲里待投递的条数（越大说明订阅者越慢）。
+  uint32 buffer_size = 2;
+  // capacity = 本订阅者的缓冲容量（常量，便于客户端自解释）。
+  uint32 capacity = 3;
 }
 
 // GetCoreSnapshotRequest 无参数 —— 快照就是「现在」，不接受时间窗（要历史去读事件）。

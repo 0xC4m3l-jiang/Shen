@@ -23,6 +23,7 @@ const (
 	DeceptionTelemetry_ReportBatch_FullMethodName     = "/telemetry.v1.DeceptionTelemetry/ReportBatch"
 	DeceptionTelemetry_ListEvents_FullMethodName      = "/telemetry.v1.DeceptionTelemetry/ListEvents"
 	DeceptionTelemetry_GetCoreSnapshot_FullMethodName = "/telemetry.v1.DeceptionTelemetry/GetCoreSnapshot"
+	DeceptionTelemetry_WatchEvents_FullMethodName     = "/telemetry.v1.DeceptionTelemetry/WatchEvents"
 )
 
 // DeceptionTelemetryClient is the client API for DeceptionTelemetry service.
@@ -49,6 +50,19 @@ type DeceptionTelemetryClient interface {
 	// 刻意**不**返回：白名单/隔离名单的**内容**（只给条数）、任何密钥（`ST-20`）。
 	// 观测面不等于泄密面：控制台是只读观测台，不是配置导出器。
 	GetCoreSnapshot(ctx context.Context, in *GetCoreSnapshotRequest, opts ...grpc.CallOption) (*CoreSnapshot, error)
+	// 读侧：**订阅新事件**（观测面推送，`ADR-0027`）。
+	//
+	// 与 `ListEvents` 的分工：`ListEvents` 回答「刚才发生了什么」（**拉**，有窗口）；
+	// `WatchEvents` 回答「**正在发生什么**」（**推**，长连接）。
+	//
+	// 三条不可破的语义：
+	//
+	//	① **旁路**：推送在落库之后进行，投递失败**不得**影响任何写入路径（`NI-1` / `AR-6`）；
+	//	② **无背压**：订阅者跟不上就**丢**（每订阅者有界缓冲 + 丢最旧），丢了多少**随流告知**；
+	//	③ **可补漏**：`since` 非空时先补一段历史再转流 —— 断线重连不静默丢数据。
+	//
+	// 刻意**不**在服务端保留事件（那是 `store` 的事）：流的缓冲只是投递队列，不是历史。
+	WatchEvents(ctx context.Context, in *WatchEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error)
 }
 
 type deceptionTelemetryClient struct {
@@ -99,6 +113,25 @@ func (c *deceptionTelemetryClient) GetCoreSnapshot(ctx context.Context, in *GetC
 	return out, nil
 }
 
+func (c *deceptionTelemetryClient) WatchEvents(ctx context.Context, in *WatchEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DeceptionTelemetry_ServiceDesc.Streams[0], DeceptionTelemetry_WatchEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchEventsRequest, WatchEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DeceptionTelemetry_WatchEventsClient = grpc.ServerStreamingClient[WatchEvent]
+
 // DeceptionTelemetryServer is the server API for DeceptionTelemetry service.
 // All implementations must embed UnimplementedDeceptionTelemetryServer
 // for forward compatibility.
@@ -123,6 +156,19 @@ type DeceptionTelemetryServer interface {
 	// 刻意**不**返回：白名单/隔离名单的**内容**（只给条数）、任何密钥（`ST-20`）。
 	// 观测面不等于泄密面：控制台是只读观测台，不是配置导出器。
 	GetCoreSnapshot(context.Context, *GetCoreSnapshotRequest) (*CoreSnapshot, error)
+	// 读侧：**订阅新事件**（观测面推送，`ADR-0027`）。
+	//
+	// 与 `ListEvents` 的分工：`ListEvents` 回答「刚才发生了什么」（**拉**，有窗口）；
+	// `WatchEvents` 回答「**正在发生什么**」（**推**，长连接）。
+	//
+	// 三条不可破的语义：
+	//
+	//	① **旁路**：推送在落库之后进行，投递失败**不得**影响任何写入路径（`NI-1` / `AR-6`）；
+	//	② **无背压**：订阅者跟不上就**丢**（每订阅者有界缓冲 + 丢最旧），丢了多少**随流告知**；
+	//	③ **可补漏**：`since` 非空时先补一段历史再转流 —— 断线重连不静默丢数据。
+	//
+	// 刻意**不**在服务端保留事件（那是 `store` 的事）：流的缓冲只是投递队列，不是历史。
+	WatchEvents(*WatchEventsRequest, grpc.ServerStreamingServer[WatchEvent]) error
 	mustEmbedUnimplementedDeceptionTelemetryServer()
 }
 
@@ -144,6 +190,9 @@ func (UnimplementedDeceptionTelemetryServer) ListEvents(context.Context, *ListEv
 }
 func (UnimplementedDeceptionTelemetryServer) GetCoreSnapshot(context.Context, *GetCoreSnapshotRequest) (*CoreSnapshot, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCoreSnapshot not implemented")
+}
+func (UnimplementedDeceptionTelemetryServer) WatchEvents(*WatchEventsRequest, grpc.ServerStreamingServer[WatchEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchEvents not implemented")
 }
 func (UnimplementedDeceptionTelemetryServer) mustEmbedUnimplementedDeceptionTelemetryServer() {}
 func (UnimplementedDeceptionTelemetryServer) testEmbeddedByValue()                            {}
@@ -238,6 +287,17 @@ func _DeceptionTelemetry_GetCoreSnapshot_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeceptionTelemetry_WatchEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DeceptionTelemetryServer).WatchEvents(m, &grpc.GenericServerStream[WatchEventsRequest, WatchEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DeceptionTelemetry_WatchEventsServer = grpc.ServerStreamingServer[WatchEvent]
+
 // DeceptionTelemetry_ServiceDesc is the grpc.ServiceDesc for DeceptionTelemetry service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -262,6 +322,12 @@ var DeceptionTelemetry_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DeceptionTelemetry_GetCoreSnapshot_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchEvents",
+			Handler:       _DeceptionTelemetry_WatchEvents_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "telemetry/v1/telemetry.proto",
 }

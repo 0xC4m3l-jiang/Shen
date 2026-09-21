@@ -33,7 +33,7 @@ func ev(id string) contract.Event {
 
 // TestReport_Idempotent：同一 event_id 重复上报不产生重复记录。
 func TestReport_Idempotent(t *testing.T) {
-	c := New(newStubSink())
+	c := New(newStubSink(), nil)
 
 	first, err := c.Report(context.Background(), ev("e-1"))
 	if err != nil {
@@ -54,7 +54,7 @@ func TestReport_Idempotent(t *testing.T) {
 
 // TestReportBatch_DropsEventsWithoutID 断言无幂等键的事件被丢弃。
 func TestReportBatch_DropsEventsWithoutID(t *testing.T) {
-	c := New(newStubSink())
+	c := New(newStubSink(), nil)
 	res, err := c.ReportBatch(context.Background(), []contract.Event{ev(""), ev("e-2"), ev("e-2")})
 	if err != nil {
 		t.Fatal(err)
