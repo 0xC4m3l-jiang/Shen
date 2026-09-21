@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -394,3 +396,36 @@ def _demo_profile_with(*checked: str) -> _registry.GuardrailProfile:
         style_terms=(DEMO_TEXT,),
         checked_fields=checked,
     )
+
+
+# ── 导入结构：每个入口模块**单独**导入不得有循环依赖 ─────────────────────────────
+
+
+def test_no_entry_module_requires_an_import_order() -> None:
+    """消费方最自然的写法是「直接 import 自己那个任务模块」——它**不得**依赖导入顺序。
+
+    为什么必须起子进程：同一进程里前面已经 import 过 `service`，循环就看不出来了。
+    实测过的真实失败（修前）：`import analysis.aicap.tasks.content` 抛
+    `ImportError: cannot import name 'CONTENT_TASK' from partially initialized module`
+    （报告为 circular import）。
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    for module in (
+        "analysis.aicap.service",
+        "analysis.aicap.model",
+        "analysis.aicap.content",
+        "analysis.aicap.tasks._registry",
+        "analysis.aicap.tasks.content",
+        "analysis.aicap.guardrail.inspect",
+        "analysis.aicap.__main__",
+    ):
+        proc = subprocess.run(
+            [sys.executable, "-c", f"import {module}"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+            check=False,
+        )
+        assert proc.returncode == 0, (
+            f"`import {module}` 单独导入失败（循环依赖？）：\n{proc.stderr[-500:]}"
+        )

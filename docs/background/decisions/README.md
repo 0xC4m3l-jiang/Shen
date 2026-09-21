@@ -49,6 +49,7 @@
 | [0023](0023-deception-content-injection.md) | **欺骗内容注入**：库形态的共享生成出口（新模块 `ai-capability`）+ 强制护栏 + **离线生成 → 策略面下发 → 适配器确定性命中**；热路径永不调模型 | ✅ **已采纳** | `AR-33`（新增）· `AR-15` `AR-22` `AR-30` `AR-31` `AR-32` · `INT-8` · `NI-1` · [`spec/ai-contract.md`](../../spec/ai-contract.md)（新） | 6 项 |
 | [0024](0024-ai-oss-reuse-boundary.md) | **AI 能力层的开源复用边界**：按能力分层复用（判据 = 默认行为是否 fail-closed，不看功能表）+ **补上 Python 依赖审计面**（`TB-16` 的实现缺口）+ 本轮只判定不改 AI 代码 | ✅ **已采纳** | `AR-15` `AR-21` `AR-22` `AR-30` `AR-33` · `TB-16` · [`spec/dependencies.md`](../../spec/dependencies.md) · [`research/ai-oss-reuse.md`](../research/ai-oss-reuse.md) | 4 项（含 ADR-0023 未解决 1/2 的前置条件已解除） |
 | [0025](0025-generic-guardrailed-outlet.md) | **AI 生成出口解耦**：内核任务无关化（不认识「内容」）+ 消费方登记 + 产物交给 `Sink` 缝隙 +「独立」由门禁 `MD-4` 保证；并让 `checked_fields` / `max_output` 两个空声明真的生效。**连带走完「`AR-33` 口径放宽为任何生成」的升格**（2026-09-20 用户确认） | ✅ **已采纳**（决定 1–4） | `AR-15` `AR-22` `AR-23` `AR-33`（口径放宽）`MD-4` · [`spec/ai-contract.md`](../../spec/ai-contract.md) · [`plans/2026-09-20-aicap-decoupling.md`](../../plans/2026-09-20-aicap-decoupling.md) | 4 项 |
+| [0026](0026-cloud-model-backend.md) | **云模型后端（DeepSeek）**：信任边界（只发**去敏画像 + 已在数据区的结构化观测**）· 密钥只经环境变量 · **澄清「生成期确定性」不是 `AR-30` 的要求**（它只管响应路径）· 适配器只落在唯一接缝且只用标准库 | ✅ **已采纳**（2026-09-21 用户确认） | `AR-15` `AR-30`（澄清）`AR-32` `AR-33` · `ST-20` `ST-21` · [`research/ai-live-probe/`](../research/ai-live-probe/README.md)（实测） | 5 项 |
 
 > **未决项的权威位置就是各 ADR 的「未解决」段**（依据用户的裁定）。
 > 尚未成决策的议题在 [`../notes/implementation-discussion.md`](../notes/implementation-discussion.md) §6.1，

@@ -6,7 +6,10 @@
 
 1. **内容对象**：`content_id` / `resource` / `profile_id` / `variant` / `body` / `marker` /
    `checksum` / `version` / `generated_at` / `generator`
-   —— `content_id` 与 `checksum` **必须**是确定性函数（同输入逐字节同输出，`AR-30` 的前提）；
+   —— `content_id` 与 `checksum` **必须**是确定性函数（同输入逐字节同输出）。
+   注意这是**产物层**的性质，与「生成期能不能复现」是两件事：接模型后生成不可复现，
+   但同一份内容仍必得同一个 id
+   （[ADR-0026](../../docs/background/decisions/0026-cloud-model-backend.md) 决定 2）；
 2. **内容库**：键 = 一致性键 `content:<profile_id>:<resource>:<variant>:<version>`
    （会话只决定**选哪个变体**，不进键 —— 见 `AR-30` 的划界）；
    阶段 A 是内存实现，生产侧是核心的 `store.ContentStore`；

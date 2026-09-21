@@ -143,7 +143,13 @@
 | `generator` | `template-v1` = 确定性模板生成器；阶段 B 接模型后写 `prompt-<模板版本>` |
 
 > **阶段 A 的生成器是确定性的**：同输入（同一 resource / variant / version / profile）必得**逐字节相同**的 `body`
-> —— 这既是 `AR-30` 的前提，也让生成结果可回归（同一份输入两次生成必须完全一致）。
+> —— 这是**阶段 A 的工程性质**（让生成结果可回归、清单可复现），**不是** `AR-30` 的要求：
+> `AR-30` 管的是**响应路径**（同会话同资源同答案）。
+>
+> **接模型后这条性质不成立**（实测 `temperature=0` 也不可复现，见
+> [`../background/research/ai-live-probe/README.md`](../background/research/ai-live-probe/README.md) §1.2）。
+> 热路径字节一致改由三条保证：产物**冻结进清单** + `content_id` 由**内容体**算出 + **会话钉定**
+> （[ADR-0026](../background/decisions/0026-cloud-model-backend.md) 决定 2）。
 
 ---
 

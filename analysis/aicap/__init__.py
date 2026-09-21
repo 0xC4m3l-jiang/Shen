@@ -2,7 +2,8 @@
 
 规则落点：`AR-33`（本模块存在的理由）·
 `AR-15` / `AR-22` / `AR-23` / `AR-24` / `AR-31`（护栏与提示词纪律）·
-`AR-30`（生成必须确定性）· `AR-32`（无执行面）·
+`AR-30`（热路径同会话同资源同答案 —— 它**不要求**生成期可复现，
+那只是阶段 A 的工程性质）· `AR-32`（无执行面）·
 `MD-3` / `MD-5`（契约只在 `../../docs/spec/ai-contract.md`）。
 决策与失效条件见 `../../docs/background/decisions/0023-deception-content-injection.md`
 与 `../../docs/background/decisions/0025-generic-guardrailed-outlet.md`。

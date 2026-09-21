@@ -1,8 +1,13 @@
 """`kind=content`：产出「资源 × 变体」的欺骗内容（阶段 A：**确定性模板生成器**）。
 
-**为什么是确定性的**：热路径永不调模型（`AR-30` / `AR-29`），因此同一
-`(resource, profile_id, variant, version)` 的生成结果**必须**逐字节可复现 —— 这既是
-`AR-30`（同会话同资源同答案）的前提，也让内容可回归（同一份输入两次生成必须完全一致）。
+**为什么是确定性的**：这是**阶段 A 的工程性质**，**不是** `AR-30` 的要求 ——
+`AR-30` 管的是**响应路径**（「禁止在响应路径上引入非确定性」，见 `docs/design/architecture.md`）。
+同一 `(resource, profile_id, variant, version)` 逐字节可复现，让内容可回归、清单可复现。
+
+**接模型后这条性质不成立**（实测：`temperature=0` 也 3 次 3 个结果，见
+`docs/background/research/ai-live-probe/README.md` §1.2）。热路径的一致改由三条保证：
+产物**冻结进清单** + `content_id` 由**内容体**算出 + **会话钉定**
+（[ADR-0026](../../../docs/background/decisions/0026-cloud-model-backend.md) 决定 2）。
 
 阶段 B 接模型时，**只换 `produce`**：提示词已在 `service.generate()` 内渲染并校验过
 （三段式 + 数据区），后置四关也照旧执行。本任务的 `requires_model=False` 就是这个意思：

@@ -9,6 +9,88 @@
 
 ---
 
+## 2026-09-21 · 接云模型的前置：修循环导入 · ADR-0026（信任边界 / 密钥 / 确定性澄清）· 纠正 18 处过度声称 · 探针入仓
+
+**做了什么**：用户要求接 DeepSeek 做功能验证。动手前发现三件事必须先处理，本轮把它们做完（**没接适配器**，那是下一轮）：
+
+1. **修掉一个真缺陷**：`import analysis.aicap.tasks.content`（消费方最自然的写法）会**循环导入失败** ——
+   登记表在模块级构造，而任务实现又要 import 登记表。改为**惰性构造**（首次访问时建 + 缓存，仍是只读常量），
+   并新增一条**子进程**单测（同一进程里看不出循环依赖）。
+2. **定下云模型的决策**：[ADR-0026](background/decisions/0026-cloud-model-backend.md)（失效条件 4 要求的那个 ADR）。
+   四条：① 出网面压到最小（**只发去敏画像 + 已在数据区的结构化观测**，不发原始 URI 查询串 / UA / 来源 IP）；
+   ② 密钥只经环境变量（`ST-20` / `ST-21`，不入库、不进日志）；③ 适配器只落在**唯一接缝**且只依赖标准库；
+   ④ **澄清「生成期确定性」不是 `AR-30` 的要求**。
+3. **纠正 18 处过度声称**：多处文档把「生成器必须逐字节可复现」写成 `AR-30` 的前提 ——
+   而 **`AR-30` 原文只管响应路径**（它一字不改）。热路径的字节一致改由三条保证：
+   产物**冻结进清单** + `content_id` 由**内容体**算出 + **会话钉定**。
+4. **实测证据入仓**：`scripts/dev/ai-model-probe.py`（ruff 干净 · 只用标准库 · 端点强制 https ·
+   显式证书校验）五小节跑完，原始输出逐字记录在 `docs/background/research/ai-live-probe/README.md`。
+
+**实测结论**（真实模型 × 仓库真实护栏）：可用模型只有 `deepseek-flash` 与 `deepseek-v4-pro`
+（用户说的「v4.1 flash」**不存在**）· 正常输入 **3/3 过后置四关** · **`temperature=0` 也不可复现**（3 次 3 个 sha256）·
+端点支持 `json_object`（返回纯 JSON）· **正对照：泄露 / 自曝 / 超长三类篡改全部被拦**（证明护栏承重）·
+数据区塞指令**未被诱导**（**样本量=1，不作结论**）。
+
+**改了哪些文件**：新增 `docs/background/decisions/0026-cloud-model-backend.md` ·
+`docs/background/research/ai-live-probe/README.md` · `scripts/dev/ai-model-probe.py` ·
+`docs/plans/2026-09-21-cloud-model-prereq.md`；修改 `analysis/aicap/tasks/_registry.py`（惰性登记表）·
+`analysis/aicap/__init__.py` · `analysis/aicap/tasks/content.py` · `analysis/aicap/content.py` ·
+`analysis/tests/test_aicap_content.py` · `analysis/tests/test_aicap_guardrail.py`（新增导入顺序测试）·
+`docs/spec/ai-contract.md` · `docs/modules/ai-capability.md` · `docs/modules/_map.md` ·
+`docs/kb/ai-capabilities.md` · `docs/kb/capabilities.md` · `docs/background/research/README.md`（新增 `E3` 小节）·
+`docs/background/research/ai-oss-reuse.md` · `docs/background/decisions/README.md`（索引）·
+`docs/background/decisions/0023-deception-content-injection.md`（**追加「修正」条目**，正文不改）· `docs/log.md`。
+
+**对应文档**：`docs/plans/2026-09-21-cloud-model-prereq.md`（含追溯矩阵 · 8 条场景表 · 审视 8 条）·
+`docs/background/decisions/0026-cloud-model-backend.md` · `docs/background/research/ai-live-probe/README.md`。
+
+**验证**：`make gate` 通过（含 `make trace` · `make archcheck` 的 `AR-33`/`MD-4` 项 · **80 例** pytest）。
+`analysis/` 的对外行为未变（只改构造时机与文档转述）。
+**独立评审**（冷上下文 `reviewer`，只看产物与 diff）：**有异议 P1 ×5 + P2 ×4，已全部修完** ——
+其中两条是**我自己的证据不自洽**（ADR 与证据档引用了不同两次运行的数字；证据档有几节当时不能由入仓脚本复跑）——
+已把探针补全（新增模型清单接口、tokens、`json_object`、注入标识四节）并重跑一次，两处改为同一次运行的同一组数字；
+另修：**「零残留」被 8+ 处反证**（已逐处纠正到 18 处，术语表拆成「生成期 / 响应路径」两行）·
+探针漏捕 `http.client.HTTPException` · `BASE_URL` 带路径被静默丢弃 · 非 200 时原样回显服务端 body；
+并把 ADR 里被泛化的「响应路径永不调模型」限定为「本轮接的是**离线** `produce`」。
+
+**证据**：
+
+```console
+$ make gate
+架构检查通过。
+  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）
+追溯检查通过。
+80 passed in 0.34s
+门禁通过。
+
+# 修前必炸的那个写法（现在 OK）
+$ analysis/.venv/bin/python -c "import analysis.aicap.tasks.content; print('OK')"
+OK：直接 import 任务模块成功
+
+# 探针（五小节全部跑完）
+$ SHEN_AICAP_MODEL_KEY=… analysis/.venv/bin/python scripts/dev/ai-model-probe.py
+① 可用模型：deepseek-flash · deepseek-v4-pro
+② 正常输入 × 3：3/3 后置四关通过；逐字节可复现：False（3 个不同结果 / 3 次）
+③ json_object：两次都返回纯 JSON，键落在契约四个字段内
+④ 数据区塞指令：没有被诱导（样本量=1，不得推广）
+⑤ 正对照：泄露 / 自曝 / 超长三类全被拦；⑤b 注入标识也被拦
+
+# 密钥未落盘
+$ grep -rl "sk-afa7185" . /tmp/ai-probe | grep -v "^./.git/"
+（无输出）
+```
+
+**没做 / 遗留**：① **适配器未写**（`aicap/model.py` 的 DeepSeek 实现，下一轮；落点与约束已定）；
+② **控制台看不到生成信息** —— 你要的「相关信息可在控制平台查看」需要一条新的上报/读取通路，
+属下一轮（ADR-0026 未解决 1，需定「上报事件」还是「只读接口另取」）；
+③ 成本与配额上限未定；④ 护栏素材「可在控制平台完善」仍未答（与 `ADR-0020` / `AR-24` 的调和）；
+⑤ `run_two_phase` 仍无生产调用方。
+去向：`docs/plans/2026-09-21-cloud-model-prereq.md` §7 与 `docs/background/decisions/0026-cloud-model-backend.md` 未解决段。
+
+**另一件事**：用户给的 key 已出现在对话记录里 —— 应视为已泄露，**建议轮换**（仓库与脚本内均未落盘，已验证）。
+
+---
+
 ## 2026-09-20 · `AR-33` 口径放宽为「任何 LLM 生成」（用户确认的升格）
 
 **做了什么**：把 `AR-33` 的适用范围从「**欺骗内容**生成」放宽为「**任何** LLM 生成」，

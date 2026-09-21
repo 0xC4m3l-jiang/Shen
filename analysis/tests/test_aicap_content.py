@@ -1,7 +1,8 @@
-"""`ai-capability` 的内容与清单测试（`AR-30` 的确定性 · 幂等 · 清单形状 · CLI 关卡）。
+"""`ai-capability` 的内容与清单测试（产物层确定性 · 幂等 · 清单形状 · CLI 关卡）。
 
-它要证明的是**内容可复现、清单可信**：同输入逐字节同输出（否则热路径的字节一致无从谈起）、
-`content_id` / `checksum` 由内容算出、没过护栏的内容**进不了内容库也进不了清单**。
+它要证明的是**内容可复现、清单可信**：同一份输入与内容必得同一个 `content_id` / `checksum`、
+同一份内容两次建对象必得相同 `to_wire()`、没过护栏的内容**进不了内容库也进不了清单**。
+注：这是**产物层**的确定性；生成期的「同输入同字节」是阶段 A 的工程性质（`AR-30` 只管响应路径）。
 """
 
 # pyright: reportMissingImports=false, reportMissingModuleSource=false
@@ -35,7 +36,7 @@ from analysis.aicap.tasks.content import (
 STAMP = "2026-09-20T00:00:00+00:00"
 
 
-# ── 内容对象：确定性（AR-30 的前提）──────────────────────────────────────────
+# ── 内容对象：产物层的确定性（`content_id` / `checksum` 由内容算出）─────────────
 
 
 def test_checksum_and_id_are_deterministic() -> None:
@@ -105,7 +106,7 @@ def test_make_content_rejects_empty_body() -> None:
 def test_template_generator_is_reproducible() -> None:
     first = _render_body(resource="/", profile_id="site-a", variant=2, version=1)
     second = _render_body(resource="/", profile_id="site-a", variant=2, version=1)
-    assert first == second, "模板生成必须确定性（AR-30）"
+    assert first == second, "模板生成在阶段 A 必须可复现（工程性质；AR-30 只管响应路径）"
 
 
 def test_template_generator_changes_with_variant_and_version() -> None:

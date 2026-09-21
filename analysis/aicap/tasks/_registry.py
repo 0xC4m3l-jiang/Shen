@@ -130,17 +130,41 @@ def _registry() -> dict[str, Task]:
     return {CONTENT_TASK.kind: CONTENT_TASK}
 
 
-_REGISTRY: Mapping[str, Task] = MappingProxyType(_registry())
-"""已登记的任务（只读映射 —— 登记表是常量，不是运行期可变的容器）。"""
+_TABLE: Mapping[str, Task] | None = None
+"""已登记的任务（只读映射，**首次访问时才构造**）。
+
+为什么惰性：每个任务实现都要 import 本模块拿 `Task` / `GuardrailProfile` / `TaskLimits`，
+而本模块构造登记表时又要 import 任务实现 —— 在模块级构造就是**方向相反的两条 import**，
+于是「消费方直接 import 自己的任务模块」这个最自然的写法会炸：
+
+```console
+$ python -c "import analysis.aicap.tasks.content"
+ImportError: cannot import name 'CONTENT_TASK' from partially initialized module … circular import
+```
+
+惰性构造把其中一条推迟到首次使用时，两条导入路径都能成立；登记表仍是**只读**的常量
+（`MappingProxyType` + 构造一次后缓存）。
+"""
+
+
+def _table() -> Mapping[str, Task]:
+    """取登记表（首次调用时构造并缓存）。
+
+    多线程下最多重复构造一次，结果幂等 —— 不值得为此加锁。
+    """
+    global _TABLE
+    if _TABLE is None:
+        _TABLE = MappingProxyType(_registry())
+    return _TABLE
 
 
 def kinds() -> tuple[str, ...]:
-    return tuple(sorted(_REGISTRY))
+    return tuple(sorted(_table()))
 
 
 def task_for(kind: str) -> Task:
     """取任务定义；未登记**必须**拒绝（`AR-33`）。"""
-    task = _REGISTRY.get(kind)
+    task = _table().get(kind)
     if task is None:
         raise UnregisteredKind(
             f"未登记的任务种类 {kind!r}；已登记：{list(kinds())}（AR-33：禁止绕过护栏的生成路径）"
@@ -158,7 +182,7 @@ def assert_startup(*, prompt_dir: Any = None) -> tuple[str, ...]:
     3. 长度用途已登记；
     4. 注册表非空（空注册表说明导入路径坏了 —— 静默通过等于放行一切）。
     """
-    if not _REGISTRY:
+    if not _table():
         raise AssertionError("任务注册表为空 —— 注册路径可能坏了（AR-33）")
     names = (
         guardrail_prompts.assert_startup()
