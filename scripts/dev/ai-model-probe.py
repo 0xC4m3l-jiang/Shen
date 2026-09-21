@@ -13,12 +13,12 @@
 5. **正对照**：把真实输出**人为篡改**成违规内容，验证四关**真的会拦**
    （不然「护栏通过」可能只是没测到）。
 
-用法：
+用法（环境变量名与 `analysis/aicap/model.py` 的适配器一致）：
 
-    SHEN_AICAP_MODEL_KEY=… analysis/.venv/bin/python scripts/dev/ai-model-probe.py
+    SHEN_AI_KEY=… analysis/.venv/bin/python scripts/dev/ai-model-probe.py
 
     # 换模型 / 换端点（端点**不得**带路径）
-    SHEN_AICAP_MODEL_KEY=… MODEL=deepseek-v4-pro BASE_URL=https://api.deepseek.com \\
+    SHEN_AI_KEY=… SHEN_AI_MODEL=deepseek-v4-pro SHEN_AI_BASE=https://api.deepseek.com \\
         analysis/.venv/bin/python scripts/dev/ai-model-probe.py
 
 退出码：`0` = 探针跑完（**不代表每条都合规**，逐条结果看输出）；
@@ -302,12 +302,12 @@ def main(argv: list[str]) -> int:
     if argv[1:]:
         print("本脚本不接受参数；用环境变量配置（见文件头用法）。", file=sys.stderr)
         return 1
-    key = os.environ.get("SHEN_AICAP_MODEL_KEY") or os.environ.get("DEEPSEEK_KEY", "")
+    key = os.environ.get("SHEN_AI_KEY", "").strip()
     if not key:
-        print("缺 key：设 SHEN_AICAP_MODEL_KEY=… 再跑（探针不会把 key 落盘）。", file=sys.stderr)
+        print("缺 key：设 SHEN_AI_KEY=… 再跑（探针不会把 key 落盘）。", file=sys.stderr)
         return 1
-    url = os.environ.get("BASE_URL", "https://api.deepseek.com").rstrip("/")
-    model = os.environ.get("MODEL", "deepseek-flash")
+    url = os.environ.get("SHEN_AI_BASE", "https://api.deepseek.com").rstrip("/")
+    model = os.environ.get("SHEN_AI_MODEL", "deepseek-flash").strip() or "deepseek-flash"
     print(f"端点 = {url} · 模型 = {model}\n")
     client = ModelClient(url, key, model)
     try:

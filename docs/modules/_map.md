@@ -199,9 +199,10 @@
 | 核心配置（规则 · 阈值 · 白名单 · 诱饵 · 蜜罐 · 注入） | [`deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml) → 运行时经 `SHEN_CONFIG` | `common/core/cmd/core` |
 | 事件载荷契约（`decision` / `analysis`） | [`../spec/events.md`](../spec/events.md) + 夹具 [`common/api/telemetry/v1/testdata/decision_event.json`](../../common/api/telemetry/v1/testdata/decision_event.json) | 核心写 · 控制台与 L4 读 |
 | 策略载荷契约（后端表 / 白名单 / 注入规则 / AI 内容清单） | [`../spec/policy-payload.md`](../spec/policy-payload.md) | `policy` 写 · 适配器读 |
-| AI 能力契约（`TaskSpec` / `Envelope` / 护栏 / 内容对象 / 清单文件） | [`../spec/ai-contract.md`](../spec/ai-contract.md) | `ai-capability` 写 · `policy` 装载与投影 · 适配器消费 |
+| AI 能力契约（`TaskSpec` / `Envelope` / 护栏 / 内容对象 / 清单文件 / **L4 三任务契约 §7**） | [`../spec/ai-contract.md`](../spec/ai-contract.md) | `ai-capability` 写 · `policy` 装载与投影 · 适配器与 `worker` 消费 |
 | 内容清单文件（生成期产物） | `ai.manifest` 指向的文件（`python -m analysis.aicap --out …`） | `common/core/cmd/core` 启动装载 → `store.ContentStore` |
-| 话术与提示词（随版本分发，`AR-24`） | [`analysis/llm/resources/prompts/`](../../analysis/llm/resources/prompts) · [`analysis/llm/resources/blacklist.yaml`](../../analysis/llm/resources/blacklist.yaml) | `llm-components` |
+| 话术与提示词（随版本分发，`AR-24`） | **各 kind 的提示词**：[`analysis/aicap/resources/prompts/`](../../analysis/aicap/resources/prompts)（`content` / `intent` / `chain` / `strategy`，三段式）· **收尾提示词**：[`analysis/llm/resources/prompts/`](../../analysis/llm/resources/prompts)（只剩 `finalize.md`，属 `twophase`）· 黑名单：[`analysis/llm/resources/blacklist.yaml`](../../analysis/llm/resources/blacklist.yaml) | `ai-capability`（入口渲染）· `llm-components`（资源化与黑名单） |
+| 模型后端的环境变量（`SHEN_AI_*`，只有 `--llm` 需要） | [`../ops/runbook.md`](../ops/runbook.md) §6.1 | `analysis/worker`（经 `aicap/model.py`） |
 | 适配器环境变量 | [`deploy/docker/README.md`](../../deploy/docker/README.md) · [`modules/deception/proxy/config/front-proxy.example.env`](../../modules/deception/proxy/config/front-proxy.example.env) | 各适配器进程 |
 | 代理侧默认配置模板 | [`modules/deception/proxy/config/sidecar.example.yaml`](../../modules/deception/proxy/config/sidecar.example.yaml) | 形态 ④ 部署时 |
 

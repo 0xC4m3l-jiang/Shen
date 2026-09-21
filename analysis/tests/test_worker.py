@@ -121,6 +121,9 @@ def test_ar32_worker_only_reads_and_reports_structured_conclusions() -> None:
             "analyzed",
             "evidence_ids",
             "event_id",
+            # 审计字段：结论是谁产的 + 模型那一路为何没成（AR-33 / AR-15）
+            "generator",
+            "model_rejected",
         }, f"结论不得夹带执行类字段：{sorted(payload)}"
         assert not any(key in payload for key in ("command", "payload_b64", "target", "url"))
 

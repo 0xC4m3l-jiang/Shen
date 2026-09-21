@@ -36,13 +36,19 @@
 
 | 键 | 类型 | 说明 |
 | --- | --- | --- |
-| `kind` | string | 结论类型：`intent` / `strategy` |
+| `kind` | string | 结论类型：`intent` / `strategy`（`chain` 经唯一出口产出但不单独上报 —— 它的结果进 `strategy` 的输入） |
 | `accepted` | bool | 统一信封（`AR-16`） |
-| `data` | object | `accepted=true` 时的结构化结论 |
+| `data` | object | `accepted=true` 时的结构化结论。字段集由 `kind` 决定（见 [`ai-contract.md`](ai-contract.md) §7）；**可以带可选的审计键** —— 例如规则路会多带 `truncations`（`AR-18` 的截断记录，模型路没有）。消费者**不得**假定两侧键集相等 |
 | `rejected_reason` | string | `accepted=false` 时的拒绝原因（**必须**有） |
 | `analyzed` | number | 本轮参与分析的事件数（`AR-14` 去重后） |
 | `evidence_ids` | string[] | 引用到的 `decision_id` 集合（`AR-12`：写入前校验存在） |
+| `generator` | string | **谁产出的这份结论**：`rules-v1`（确定性规则）或 `model-v1`（模型路径，`--llm`）。两者可信度不同，读结论的人必须能分辨 |
+| `model_rejected` | string \| null | 模型那一路**为什么没成**（可空）。非空表示这一步回落到了规则版 —— 例如 `Unavailable: 分析用模型未配置…` 或 `StrategyBoundError: 灰度 100% 超过上限 20%（INT-11）` |
 | `event_id` | string | `analysis:<kind>:<内容摘要>` —— 由结论内容决定，重跑同窗口**不产生重复**（`AR-11`） |
+
+> `generator` / `model_rejected` 于 2026-09-21 新增（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 5）。
+> 它们是**审计字段**，不是判定输入：**热路径不读结论事件**（`AR-30`）。
+> 加字段会改变 `event_id` 的摘要 —— 升级后同一批事件会产生新结论事件（旧结论仍在，靠 `AR-11` 去重）。
 
 ## 4. 改键的规矩（防漂移）
 

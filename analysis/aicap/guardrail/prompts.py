@@ -31,8 +31,12 @@ if TYPE_CHECKING:  # pragma: no cover - 只用于类型标注，避免运行期�
 DEFAULT_DIR = Path(__file__).resolve().parent.parent / "resources" / "prompts"
 """提示词目录：`analysis/aicap/resources/prompts/`（随版本分发，`AR-24`）。"""
 
-REQUIRED_PROMPTS: tuple[str, ...] = ("content",)
-"""本模块**必须**存在的提示词模板名。"""
+REQUIRED_PROMPTS: tuple[str, ...] = ("content", "intent", "chain", "strategy")
+"""本模块**必须**存在的提示词模板名（缺任一个 ⇒ 启动期断言失败）。
+
+它们与任务登记表一一对应：每个 `kind` 的护栏档案都指向这里的一个模板（`AR-24`）。
+新增 `kind` 时必须同步加进来 —— 否则那个任务能登记、却没有任何人能启动它。
+"""
 
 SECTION_TASK = "# 任务"
 SECTION_PROFILE = "# 画像"

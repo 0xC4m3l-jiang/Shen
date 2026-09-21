@@ -45,6 +45,11 @@ line-length = 100
 target-version = "py313"
 # 生成物（proto 桩）不守本仓库风格，与 Go 侧生成物同理。
 extend-exclude = [".venv", "proto"]
+# 为什么还必须有 force-exclude：不带它时，**显式传路径**的调用（编辑器 / 预提交 / 各种
+# 「只检查我改过的文件」的工具）会绕过上面的排除，于是生成物被格式化 —— 而下一次
+# `make pygen` 又会把它生成为原始形态。这就是「pygen 永远有 diff」的根因
+# （见 docs/kb/known-issues.md 的 K-28）。
+force-exclude = true
 
 [tool.ruff.lint]
 # TB-14：禁止裸 except（E722）

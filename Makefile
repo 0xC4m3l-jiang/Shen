@@ -20,7 +20,7 @@ PROTOS := $(shell find common/api -name '*.proto')
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
         check-config replay smoke dev ai-check commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
-        pyenv pyfmt-check pylint pytest pygen analysis \
+        pyenv pyfmt-check pylint pytest pygen check-pydeps analysis analysis-llm \
         docker-build up down docker-ps docker-logs docker-log check-ignore \
         start status app-smoke traffic verify
 
@@ -135,11 +135,16 @@ analysis: ## 跑一轮 L4 近线分析（读核心遥测 → 上报结论事件�
 	$(require_pyenv)
 	@$(PY) -m analysis.worker --core $${SHEN_CORE_ADDR:-127.0.0.1:9443} --once
 
+analysis-llm: ## 同 analysis，但启用模型路径（--llm；需 SHEN_AI_KEY，未设则回落确定性）
+	$(require_pyenv)
+	@$(PY) -m analysis.worker --core $${SHEN_CORE_ADDR:-127.0.0.1:9443} --once --llm
+
 pyenv: ## 建/更新 L4 的 analysis/.venv 并安装锁定依赖（首次或改锁文件后跑）
 	@test -d $(PY_VENV) || python3 -m venv $(PY_VENV)
 	@$(PY_VENV)/bin/pip install -q --upgrade pip
 	@$(PY_VENV)/bin/pip install -q -r $(ANALYSIS)/requirements-dev.txt -r $(ANALYSIS)/requirements.txt
 	@cd $(ANALYSIS) && .venv/bin/pip install -q -e .
+	@$(CURDIR)/scripts/gate/check-pydeps.sh
 	@echo "L4 环境就绪（$(PY_VENV)）：`$(PY) --version`、ruff `$(PY_VENV)/bin/ruff --version | cut -d' ' -f2`"
 
 define require_pyenv
@@ -161,7 +166,10 @@ pytest: ## L4 单测（pytest）
 	@cd $(ANALYSIS) && .venv/bin/pytest
 	@echo "✓ L4 单测（pytest）"
 
-lint: fmt-check vet staticcheck errcheck pyfmt-check pylint check-ignore archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
+check-pydeps: ## 锁文件 ↔ venv 一致性（依据 TB-16；不一致即失败，指向 make pyenv）
+	@$(CURDIR)/scripts/gate/check-pydeps.sh
+
+lint: fmt-check vet staticcheck errcheck pyfmt-check check-pydeps pylint check-ignore archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
 
 # ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
 #

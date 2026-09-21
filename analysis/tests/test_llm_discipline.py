@@ -100,13 +100,17 @@ def test_ar22_blacklist_three_classes() -> None:
 
 
 def test_ar24_prompt_resources_validated() -> None:
-    store = assert_startup(required=("intent", "chain", "strategy", "finalize"))
-    assert set(store.names) >= {"intent", "chain", "strategy", "finalize"}
+    """`llm/` 只剩收尾提示词：三个 L4 任务的模板已归到 `aicap/resources/prompts/`。
+
+    为什么要归过去：那些模板本就是**任务**的提示词，而任务必须在 `aicap` 注册表里
+    （`AR-33`）—— 留在 `llm/` 下等于开两条互不相干的提示词路径。
+    收尾（`finalize`）是唯一例外：它属于 `twophase`，今天没有生产调用方。
+    """
+    store = assert_startup(required=("finalize",))
+    assert set(store.names) >= {"finalize"}
     with pytest.raises(PromptResourceError):
-        store.render("intent")  # 缺占位符 → 抛异常，不静默渲染（AR-24）
-    rendered = store.render(
-        "intent", session_id="s-1", observation_schema="x", untrusted_events="y"
-    )
+        store.render("finalize")  # 缺占位符 → 抛异常，不静默渲染（AR-24）
+    rendered = store.render("finalize", session_id="s-1", observed_actions="a-1")
     assert "s-1" in rendered
 
 

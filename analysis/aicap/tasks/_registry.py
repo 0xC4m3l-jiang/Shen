@@ -125,9 +125,17 @@ class UnregisteredKind(LookupError):
 
 def _registry() -> dict[str, Task]:
     # 延迟导入：任务实现需要 service 的 TaskSpec（类型），反过来 service 只需要本函数。
+    from .chain import CHAIN_TASK
     from .content import CONTENT_TASK
+    from .intent import INTENT_TASK
+    from .strategy import STRATEGY_TASK
 
-    return {CONTENT_TASK.kind: CONTENT_TASK}
+    return {
+        CONTENT_TASK.kind: CONTENT_TASK,
+        INTENT_TASK.kind: INTENT_TASK,
+        CHAIN_TASK.kind: CHAIN_TASK,
+        STRATEGY_TASK.kind: STRATEGY_TASK,
+    }
 
 
 _TABLE: Mapping[str, Task] | None = None

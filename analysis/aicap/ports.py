@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 
@@ -26,6 +27,23 @@ class Artifact(Protocol):
     """
 
     def to_wire(self) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class WireArtifact:
+    """最小产物：一段**已经是 wire 形状**的数据（`Artifact` 的结构性实现）。
+
+    为什么放在这里：`intent` / `chain` / `strategy` 三个消费方的产物就是「结构化结论本身」，
+    没有额外对象语义（不像 `content` 还有 `content_id` / `checksum` / 插入标记）。
+    三处各写一个行为完全相同的小类，只会制造三份需要同步的代码。
+
+    冻结 + 复制入参：产物一旦建出来就不该再被调用方改写（改写过的产物没人验证过）。
+    """
+
+    data: dict[str, Any]
+
+    def to_wire(self) -> dict[str, Any]:
+        return dict(self.data)
 
 
 class Sink(Protocol):

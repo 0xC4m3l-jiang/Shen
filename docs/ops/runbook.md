@@ -190,11 +190,18 @@ go build ./...                    # 验证 vendor/modules.txt 与 go.mod 一致
 
 ```sh
 # 依赖：改 analysis/requirements*.txt 后
-make pyenv                        # 重建 analysis/.venv（锁定版本）
+make pyenv                        # 重建 analysis/.venv（锁定版本）—— 末尾自动跑 make check-pydeps
+make check-pydeps                 # 只校「锁文件 ↔ venv 版本逐条一致」（门禁里也有一条）
 # 契约：改了 common/api/ 下的 .proto 后
 make pygen                        # 重新生成 analysis/proto（并一起提交）
-make pytest                       # 37 例
+make pytest                       # 118 例
 ```
+
+> **锁文件是权威，环境向它对齐**：改了 `requirements*.txt` 而没重建 venv ⇒ `make check-pydeps` 会红，
+> 并指向 `make pyenv`。这不是坑，是那道检查在干活（同类陷阱见 [`../kb/known-issues.md`](../kb/known-issues.md) 的 `K-26`）。
+>
+> `make pygen` 的生成物**不在** ruff 的检查范围内（`force-exclude`）—— 别手工格式化 `analysis/proto/`，
+> 那会让下次 `make pygen` 又出现 diff（`K-28`）。
 
 ### 4.4 升级基础镜像 / 工具链
 
@@ -232,6 +239,24 @@ make check-ignore           # 忽略清单不能误伤已入库文件
 | `SHEN_CORE_ADDR` | `127.0.0.1:9443` | 适配器 / 控制台 / L4 访问核心判定面的地址 |
 | `SHEN_CONFIG` | `/etc/shen/config.yaml`（容器内） | 核心配置（挂载自 `deploy/config/config.example.yaml`） |
 | `SHEN_BLOCK_ENABLED` | `false` | 是否允许产出 `block`（拦截）；打开后 `score ≥ thresholds.block` 才拦截（`Q5` · `INT-12`） |
+
+### 6.1 模型路径的环境变量（只有 `--llm` 需要）
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `SHEN_AI_KEY` | ——（必需） | 模型密钥。**只经环境变量，禁止入库**（`ST-20` / `ST-21`） |
+| `SHEN_AI_BASE` | `https://api.deepseek.com` | 端点。**不得带路径**（带路径直接报错，不默默打错地方） |
+| `SHEN_AI_MODEL` | `deepseek-flash` | 模型名 |
+| `SHEN_AI_TIMEOUT_S` | `30` | 单步超时（秒）。**写错即失败**，不悄悄换默认值 |
+
+```sh
+make analysis            # 确定性路径（默认；不需要任何密钥）
+make analysis-llm        # 模型路径（= --llm）：模型优先、失败回落
+```
+
+**未设 `SHEN_AI_KEY` 时跑 `make analysis-llm`**：三步全部回落确定性版，
+每步的回落原因逐行打印并写进结论事件的 `model_rejected`；**整轮仍然成功**（退出码 0，`NI-1`）。
+这是**设计内的降级**，不是错误 —— 但它能看出来：`[L4] … · 模型回落 3 步`。
 
 > 核心判定面是**明文 gRPC**，只允许回环地址（`assertPlaintextListenIsLocal` 兜底）。
 > 容器里靠「除核心外都共享核心的网络命名空间」维持「同机」前提 —— 详见 [`../../deploy/docker/README.md`](../../deploy/docker/README.md)。

@@ -9,6 +9,72 @@
 
 ---
 
+## 2026-09-21 · L4 三任务接模型（经唯一出口 + 护欏、失败回落）+ 锁文件门禁 + `make pygen` 零 diff
+
+**做了什么**：四件事，都是在「不引新运行期依赖」的前提下做完的。
+
+1. **模型路径真的接上了**：`intent` / `chain` / `strategy` 三个 L4 任务登记为 `kind`（注册表从 1 个变 4 个），
+   模型调用**必须**走 `aicap.service.generate()` 的两位护欏（`AR-33`）—— 而不是在 `worker.py` 里直接调客户端；
+2. **失败回落，整轮不炋**：`python -m analysis.worker --once --llm`（`make analysis-llm`）下，模型不可用/被拒/越界
+   就回落到确定性版，原因记进结论的 `model_rejected`；结论另有 `generator`（`rules-v1` / `model-v1`）；
+   默认（不加 `--llm`）与接模型之前**逐字一致**；
+3. **越界不再静默回落**：`analysis/llm/contract.py` 新增 `Field.allowed` 守闭集，`intent` 的越界类别改为**拒绝**
+   （此前会被静默回落成 `reconnaissance` —— 那是默认值，`AR-15` 禁止）；
+4. **两项稳定性**：`scripts/gate/check-pydeps.sh` 校「锁文件 ↔ venv 版本」；
+   `ruff` 加 `force-exclude = true`（`make pygen` 永远有 diff 的**根因**），生成物接受一次原始形态入库；
+5. **独立评审（L 档）提出的 P1 已修**：模型产出的**意图**结论里 `data.evidence_ids` 此前**没过 `AR-12`**
+   —— 结论里另有一份永远为真的顶层 `evidence_ids`，读的人分不出哪份是模型编的。
+   现与链同语义：校验不通过就作废该步、回落规则版并记原因；
+   新增回归用例并**实证它真能拦住**（把校验临时关掉 ⇒ 用例红：`rules-v1` vs `model-v1`）。
+
+**改了哪些文件**：
+
+- 新增：`analysis/llm/deepseek.py` · `analysis/llm/schemas.py` · `analysis/aicap/tasks/intent.py` · `analysis/aicap/tasks/chain.py` · `analysis/aicap/tasks/strategy.py` · `analysis/aicap/tasks/_produce.py` · `analysis/aicap/resources/prompts/intent.md` · `analysis/aicap/resources/prompts/chain.md` · `analysis/aicap/resources/prompts/strategy.md` · `scripts/gate/check-pydeps.sh` · `analysis/tests/test_llm_deepseek.py` · `analysis/tests/test_aicap_l4_tasks.py` · `analysis/tests/test_gate_pydeps.py` · `docs/plans/2026-09-21-l4-model-and-stability.md` · `docs/background/research/l4-oss-reuse.md` · `docs/background/decisions/0031-analysis-reuse-and-model-backend.md`
+- 修改：`analysis/llm/contract.py` · `analysis/aicap/model.py` · `analysis/aicap/ports.py` · `analysis/aicap/tasks/_registry.py` · `analysis/aicap/guardrail/prompts.py` · `analysis/intent/recognize.py` · `analysis/chain/reconstruct.py` · `analysis/strategy/generate.py` · `analysis/worker.py` · `analysis/pyproject.toml` · `Makefile` · `scripts/dev/ai-model-probe.py` · `analysis/proto/telemetry/v1/*` · `analysis/tests/test_llm_contract.py` · `analysis/tests/test_llm_discipline.py` · `analysis/tests/test_worker.py`
+- **迁移**（非删除）：`analysis/llm/resources/prompts/` 下的 intent / chain / strategy 三个模板 → `analysis/aicap/resources/prompts/` 并改写为三段式（`llm/` 下只剩 `finalize.md`）
+
+**对应文档**：`docs/plans/2026-09-21-l4-model-and-stability.md` · `docs/background/decisions/0031-analysis-reuse-and-model-backend.md` · `docs/background/research/l4-oss-reuse.md` · `docs/spec/ai-contract.md` §7 · `docs/spec/events.md` §3 · `docs/modules/ai-capability.md` · `docs/modules/llm-components.md` · `docs/modules/intent.md` · `docs/modules/chain.md` · `docs/modules/strategy.md` · `docs/modules/_map.md` · `docs/kb/ai-capabilities.md` · `docs/kb/known-issues.md` · `docs/ops/runbook.md` · `docs/progress.md`
+
+**验证**：`make gate` 通过（**118 例 pytest** · 新增 `check-pydeps` 绿 · `trace` 零错误）·
+`make dev` **6/6 全过**（L4 段输出与上一轮一致）· `make analysis-llm`（不起 `SHEN_AI_KEY`）回落 3 步且**退出码 0** ·
+`make pygen` 连跑两次**字节零 diff** · `make check-pydeps` 绿。
+**未验**：`make ai-check`（需 Docker；本轮无改通路）· 真实模型的端到端调用（无密钥）。
+
+**证据**：
+
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 不启用模型（`client=None`） | 三步全 `rules-v1`、`rejected==0` | ✅ |
+| 模型全失败（无 key） | 回落 3 步、**仍产出 2 条结论**、`errors==[]`、退出码 0 | ✅ |
+| 模型全成功（替身） | 三步 `model-v1`、`errors==[]` | ✅ |
+| 模型链引用不存在的证据 | 链作废 + 回落规则版；**不拖垮**其他步（`AR-12`） | ✅ |
+| 模型**意图**引用不存在的证据（评审 P1） | 该步作废 + 回落规则版（原因含 `AR-12`）；正对照（引用真证据）放行 | ✅ |
+| 模型给越界策略数值（`gray_pct=100`） | 抛 `StrategyBoundError` ⇒ 回落（**不夹紧**，`INT-11`） | ✅ |
+| 模型给闭集外类别 | 拒绝（`data=={}`，原因含「闭集」） | ✅ |
+| 密钥泄露 | 不在异常 / repr / 日志里（`ST-20`） | ✅ |
+| 锁文件 vs venv 不一致（fixture） | 非零退出 + 指向 `make pyenv` | ✅ |
+| `make pygen` ×2 | 字节零 diff | ✅ |
+
+**关键结论（复用审计）**：五个候选 **⛔×3 + 🟡×2** ⇒ **零新增运行期依赖**（仍三项）。
+最值得记的是 `NetworkX`：许可干净、极其活跃，**缺的是需求**（链还原是分组 + 证据校验，没有图算法）。
+`Sigma` 的 DRL-1.1 把**署名义务压到输出上**；`OSSEM` 停更 31 个月（触发 ADR-0024 失效条件 2）。
+
+**没做 / 遗留**：
+
+1. 计划里「新增受检项」的**字面意图未实现** —— 内核的四个检查点是固定的（ADR-0025 决定 1），加第五关会破坏「内核任务无关」；
+   实际落实＝模板写死禁令 + `rationale` 走既有黑名单/长度/风格。**原始 URI 查询串与 UA 的机器识别仍缺**（ADR-0031 未解决 3）；
+2. `chain` 的 `stages[].name` / `broken_decoy_signals[]` **闭集无机器守卫**（ADR-0031 未解决 2）；
+3. `generator` 写 `model-v1` 而非**模型名**（要模型名得再开一个公开成员，与 `AR-32` 的单成员面冲突）；
+4. 模型 vs 规则的**质量对照基准**未做（ADR-0031 未解决 1，另开一轮）；
+5. 未接 `kind=content` 的模型路径（阶段 B）· `twophase` 仍无生产调用方（旧发现 3）；
+5.1 `assert_no_execution_surface` 的**子串黑名单**拦不住新加的 `fetch()` / `get()` 类公开方法（评审 P2-6）——
+    本轮只在适配器单测里加了白名单断言，内核那层未改（改了会扩到 `analysis/llm/client.py` 与所有调用方）；
+6. 结论新增两个字段 ⇒ **幂等键摘要变了**：升级后同一批事件会产生新结论事件（旧结论仍在，不会重复入库）。
+
+> 审核记录（L 档，12 条发现）与独立评审（**P1×1 已修 + P2×6 已处置**）见变更包 §7.1 / §7.3。
+
+---
+
 ## 2026-09-21 · 顶层收成两级：`modules/`（三个大模块）+ `common/`（公用代码）
 
 **做了什么**：你提的两件事都做了 —— ① 三个大模块的根目录收进**一个容器**，② **公用代码有了自己的位置**。

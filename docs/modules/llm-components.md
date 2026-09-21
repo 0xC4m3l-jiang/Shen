@@ -6,8 +6,8 @@
 | 所属层 | `L4`（依据 MD-1） |
 | 实现语言 | `Python`（依据 [`../design/language.md`](../design/language.md) §1 与 `TB-2`） |
 | 负责人 | — |
-| 状态 | ✅ **已实现（框架 + 确定性部分）**（阶段 3，Python）：契约（`AR-15`/`AR-16`/`AR-17`）· 长度（`AR-18`/`AR-23`）· 超时（`AR-19`…`AR-21`）· 内容（`AR-22`/`AR-24`）· 注入防护（`AR-31`/`AR-32`） |
-| 最后更新 | 2026-09-20 |
+| 状态 | ✅ **已实现**（阶段 3，Python）：契约（`AR-15`/`AR-16`/`AR-17`）· 长度（`AR-18`/`AR-23`）· 超时（`AR-19`…`AR-21`）· 内容（`AR-22`/`AR-24`）· 注入防护（`AR-31`/`AR-32`）· **L4 三任务契约（`schemas.py`）与云模型适配器（`deepseek.py`）**（2026-09-21） |
+| 最后更新 | 2026-09-21 |
 
 ---
 
@@ -23,6 +23,13 @@
   （后者供 `ai-capability` 的欺骗内容使用，见 [ADR-0023](../background/decisions/0023-deception-content-injection.md)）；
 - **间接注入防护**（[ADR-0015](../background/decisions/0015-indirect-prompt-injection.md)）：
   攻击者可控内容**必须**以结构化数据传入（`AR-31`）；分析 LLM **禁止**持有执行能力（`AR-32`）；
+- **L4 三任务的输出契约**（`llm/schemas.py`，2026-09-21）：`intent` / `chain` / `strategy` 的 schema、
+  五类意图的**闭集**（`Field.allowed`）、`INT-11` 的灰度上限与阈值下界。
+  为什么住在本层：`aicap` 只允许依赖 `analysis.llm` 与自己（`MD-4`），而两边都要用同一份定义（`MD-5`）；
+  既有先例是 `twophase.FINALIZE_SCHEMA`。领域模块（`intent` / `strategy`）从这里导入，不各写一份；
+- **云模型适配器**（`llm/deepseek.py`，2026-09-21）：`DeepSeekClient` —— 只用标准库（`http.client`）、
+  **只暴露一个公开方法** `complete`（`AR-32` 的成员名检查会对它生效）、失败即 `Unavailable`（**不重试**：
+  重试会把「没生成出来」掩盖成「生成得慢」）；密钥只经环境变量，**不得**入日志与异常；
 - **高保真内容预生成**：离线/近线生成诱饵内容（假用户 / 假订单 / 假日志），落库供 `responder` 消费。
 
 **明确不做什么**：
@@ -49,12 +56,12 @@
 
 | 允许依赖 | 原因 |
 | --- | --- |
-| LLM 运行时（vLLM / Transformers 等） | 推理 |
-| 标准库（`json` / `re`） | 容错解析 |
+| 模型后端（经 `llm/deepseek.py` 的适配器；端点与密钥只经环境变量，[ADR-0026](../background/decisions/0026-cloud-model-backend.md)） | 推理 |
+| 标准库（`json` / `re` / `http.client`） | 容错解析与适配器的传输 |
 
 | 禁止依赖 | 原因 |
 | --- | --- |
-| **任何执行能力**（命令执行 / 网络外呼 / 载荷生成） | `SB-1` / `SB-2` / `AR-32` |
+| **客户端上的执行类成员**（工具调用 / 函数调用 / 命令执行 / 通用 HTTP 客户端） | `SB-1` / `SB-2` / `AR-32` —— 适配器只做「提示词进、文本出」，**不**提供任何工具入口。判据是 `assert_no_execution_surface` 的**成员名子串**检查（所以连 `execute()` 这种命名也拦） |
 | `judge` / `director` 的判定与决策逻辑 | `AR-2` / `MD-12`；依赖方向单向 |
 | 判定缓存 / 响应路径 | 分析结论**禁止**直接回写响应（`AR-32`） |
 
@@ -121,7 +128,9 @@
 | **注入样本回归** | 攻击者内容含指令时，**结论不得改变**（`AR-31`） | 同上（`test_ar31_*`，与 `MD-7` 正负样本同构） |
 | 超时注入 | 双阶段收尾 + 整体作废 | 同上（`test_ar19_*` / `test_ar21_*`） |
 | **跨语言契约** | 真实事件载荷可被本层解析（键名漂移即红） | `analysis/tests/test_event_contract.py`（夹具由 Go 结构体生成，见 [`../spec/events.md`](../spec/events.md)） |
-| 运行时链路 | 近线 worker 读事件 → 去重 → 结论上报 | `analysis/tests/test_worker.py` + `make analysis`（[ADR-0022](../background/decisions/0022-l4-near-line-worker.md)） |
+| 运行时链路 | 近线 worker 读事件 → 去重 → 结论上报（含模型优先/回落） | `analysis/tests/test_worker.py` · `analysis/tests/test_aicap_l4_tasks.py` + `make analysis`（[ADR-0022](../background/decisions/0022-l4-near-line-worker.md)） |
+| 单元 | **模型适配器**：非 2xx / 不可解析 / 形状不合 / 超时均归一为 `Unavailable` · 密钥不入异常与日志（`ST-20`）· 无执行面 · `resolve()` 三分支 | `analysis/tests/test_llm_deepseek.py` |
+| 单元 | **闭集与向后兼容**：`Field.allowed` 越界必拒 · 不写 `allowed` 时行为与以前一致 | `analysis/tests/test_llm_contract.py` |
 | 分支穷尽性 | `accepted` 真假两分支 | `analysis/llm/envelope.py` 的 `__post_init__` + 上述用例 |
 
 ## 8. 未决项
@@ -132,8 +141,9 @@
 | 2 | 注入样本测试集的构建 | 回归保障 | 同上 |
 | 3 | `strategy` 生成策略时的注入面 | 策略链路安全 | [`strategy.md`](strategy.md)（已实现：只出数据、经 `policy` 下发） |
 | 4 | 预生成内容的触发时机与规模 | LLM 成本 | [ADR-0014](../background/decisions/0014-generative-deceptive-response.md) |
-| 5 | 6 项手写能力能否换成开源实现（`json_repair` 等） | 本模块的自研维护成本 | 调研已做：[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md)；判据与失效条件在 [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md)。**落地要等行为对齐测试**（本轮不改代码） |
-| 6 | `AR-22` 泄露类拟改用 Presidio 的识别器（本模块只保留处置语义） | 泄露类覆盖度 | 同上 §3.2；阶段 B，需先量离线模型体积 |
+| 5 | 6 项手写能力能否换成开源实现（`json_repair` 等） | 本模块的自研维护成本 | **已定**（2026-09-21）：本轮**不引**（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 1/2）。调研：[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md)；判据与失效条件：[ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md)。失效条件 1（提取失败率 > 10%）仍开着 |
+| 6 | `AR-22` 泄露类拟改用 Presidio 的识别器（本模块只保留处置语义） | 泄露类覆盖度 | **本轮不引**（ADR-0031 决定 2；触发条件见其失效条件 2）；阶段 B，需先量离线模型体积 |
+| 7 | 结论里**谁产的**（`rules-v1` / `model-v1`）已如实标注，但**质量对照基准未做** | 「接模型值不值」无定量回答 | ADR-0031 未解决 1（另开一轮，按 skill `evidence-and-decisions` §3） |
 
 ## 9. 变更记录
 
@@ -142,3 +152,4 @@
 | 2026-09-18 | 创建（设计）：LLM 契约纪律 + 间接注入防护 + 内容预生成 | [ADR-0015](../background/decisions/0015-indirect-prompt-injection.md) · [`../design/architecture.md`](../design/architecture.md) §5（`AR-15`…`AR-27`） |
 | 2026-09-20 | 新增长度用途 `deception_content`（65536），供 `ai-capability` 的欺骗内容使用；本层增加第二个消费者（仍**只能**经 `ai-capability` 的护栏出口，`AR-33`） | [`../plans/2026-09-20-ai-capability-guardrail.md`](../plans/2026-09-20-ai-capability-guardrail.md) · [ADR-0023](../background/decisions/0023-deception-content-injection.md) |
 | 2026-09-20 | §3 增「复用候选」表（逐项写明为什么不引）· §8 增未决项 5/6 · 删 §1 中重复的一段「已登记用途」（同一段写了两次） | [`../plans/2026-09-20-ai-oss-reuse.md`](../plans/2026-09-20-ai-oss-reuse.md) · [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) |
+| 2026-09-21 | 新增 `schemas.py`（三任务契约 + 闭集 + `INT-11` 边界）与 `deepseek.py`（云模型适配器）· §3 依赖改为「端点经适配器 + 只禁客户端上的执行类成员」· §7 增适配器与闭集用例 · §8 未决项 5/6 结案、增第 7 项 | [`../plans/2026-09-21-l4-model-and-stability.md`](../plans/2026-09-21-l4-model-and-stability.md) · [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) |

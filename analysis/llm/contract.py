@@ -26,6 +26,14 @@ class Field:
     required: bool = True
     max_len: int | None = None
     """字符串/列表的长度上限；超限即失败（长度纪律另见 `limits.py` 的分用途上限）。"""
+    allowed: tuple[str, ...] | None = None
+    """闭集白名单（可选，作用于字符串字段）：值**必须**在其中，越界即失败。
+
+    为什么需要它：`types=(str,)` 只挡「不是字符串」，挡不住「是字符串但不在闭集里」。
+    越界值在消费方很容易变成 `x if x in SET else DEFAULT` 这种回落 ——
+    那就是默认值，`AR-15` 明确禁止（实证：`intent.recognize` 曾把越界类别静默回落成
+    `reconnaissance`；今天不可达，接模型后可达）。
+    """
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,12 @@ def validate(payload: Mapping[str, Any], schema: Schema) -> dict[str, Any]:
             expected = "/".join(t.__name__ for t in field_def.types)
             raise ContractError(
                 f"{schema.name}.{field_def.name}: 期望 {expected}，实际 {type(value).__name__}"
+            )
+        if field_def.allowed is not None and value not in field_def.allowed:
+            # 越界**不回落、不修正**：回落是默认值，而 AR-15 禁止默认值（也禁止修复后放行）
+            raise ContractError(
+                f"{schema.name}.{field_def.name}: 必须是闭集之一 "
+                f"{list(field_def.allowed)}，实际 {value!r}"
             )
         if field_def.max_len is not None:
             if not isinstance(value, Sized):

@@ -15,28 +15,24 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from ..events import Observation
-from ..llm.contract import Field, Schema, validate
+from ..llm.contract import validate
 from ..llm.envelope import Envelope, accept, reject
 from ..llm.limits import Truncation, truncate_list
+from ..llm.schemas import CATEGORIES, INTENT_SCHEMA
 
-CATEGORIES = (
-    "reconnaissance",
-    "exploitation",
-    "lateral_movement",
-    "exfiltration",
-    "persistence",
-)
-"""五类意图；**禁止**新增第六类（`AR-16` 的契约由 `INTENT_SCHEMA` 守住）。"""
+__all__ = [
+    "CATEGORIES",
+    "INTENT_SCHEMA",
+    "IntentRuleHit",
+    "recognize",
+    "rule_hits",
+]
+"""`CATEGORIES` / `INTENT_SCHEMA` 在这里是**再导出**：契约只在 `llm.schemas` 定义一次（`MD-5`）。
 
-INTENT_SCHEMA = Schema(
-    name="intent",
-    fields=(
-        Field("category", (str,), True, 32),
-        Field("confidence", (float, int), True),
-        Field("evidence_ids", (list,), True, 256),
-        Field("rationale", (str,), True, 500),
-    ),
-)
+为什么定义不在本模块：任务登记项**必须**声明 schema（`Task.schema`），而 `analysis/aicap/**`
+只允许依赖 `analysis.llm` 与它自己（`MD-4`）。两边都要用的契约因此只能住在那一层；
+本模块与 `chain` 都从那里导入，不各写一份（两处各写一份而不同步的教训见 `spec/events.md` §4）。
+"""
 
 _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -87,7 +83,10 @@ def recognize(observations: Sequence[Observation]) -> Envelope:
     try:
         payload = validate(
             {
-                "category": category if category in CATEGORIES else "reconnaissance",
+                # 不再回落：越界由 `INTENT_SCHEMA.category.allowed` 拒绝（`AR-15`）。
+                # 被删掉的写法：`category if category in CATEGORIES else "reconnaissance"` ——
+                # 那是默认值；今天不可达（`_PATTERNS` 只用五类），接模型后可达。
+                "category": category,
                 "confidence": round(float(confidence), 3),
                 "evidence_ids": truncate_list(evidence, field="evidence_ids", log=truncations),
                 "rationale": f"命中 {len(evidence)} 条规则（{category}）",

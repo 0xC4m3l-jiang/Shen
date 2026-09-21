@@ -64,6 +64,11 @@
 | `produce` | callable | `(prompt, spec, client) → 候选输出`（**未过护栏**） |
 | `build` | callable | `(checked, spec, generated_at) → Artifact`；内核只要求产物能 `to_wire()` |
 | `generator` | string | 生成器标识（进产物，供审计定位「这份东西是哪个版本产出的」） |
+| `requires_model` | bool | 产出**是否依赖模型**。`False` = 确定性生成器（今天只有 `content`）；`True` = 必须调模型才能产（L4 的三个任务）。它不影响护栏 —— 两条路都过同样四关 |
+
+**已登记的 `kind`（四个）**：`content`（除骗内容，阶段 A）· `intent` · `chain` · `strategy`（L4 三任务，
+[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md)）。
+后三者的具体契约见 §7。
 
 ### 1.4 护栏档案 `GuardrailProfile`
 
@@ -88,6 +93,13 @@
 ```
 
 启动期**必须**校验：模板存在、占位符齐全、数据区标记成对且非空。
+
+**模板目录**：**每一个 `kind` 的提示词都在 `analysis/aicap/resources/prompts/`**，
+文件名＝护栏档案的 `prompt` 字段（`content` / `intent` / `chain` / `strategy`）。
+`analysis/llm/resources/prompts/` 下只剩 `finalize.md` —— 它属于 `twophase`（`AR-19` / `AR-20`），
+**不是任何一个 `kind` 的提示词**，所以不进注册表。
+（2026-09-21 之前 `intent` / `chain` / `strategy` 在 `llm/` 下、不在注册表里 ——
+那意味着它们不受 `AR-33` 出口约束。已迁入并登记。）
 
 ### 1.6 后置护栏（`analysis/aicap/guardrail/inspect.py`）
 
@@ -242,3 +254,36 @@
 
 **由结构检查保证的部分**：`analysis/aicap/**` 的仓内依赖只允许 `analysis.llm` 与它自己
 （`make archcheck` 的 `MD-4` 项）—— 想顺手引用别的模块，会在门禁处失败。
+
+---
+
+## 7. L4 三个 `kind`（`intent` / `chain` / `strategy`）
+
+它们是三个**消费方**（每个都遵守 §6 的三步），契约共用一份定义：
+[`analysis/llm/schemas.py`](../../analysis/llm/schemas.py)。
+
+**为什么契约在 `llm/` 而不是各自的领域模块**：`aicap` 只允许依赖 `analysis.llm` 与自己（`MD-4`），
+所以两边都要用的契约只能住在那里 —— 而两边各写一份就会漂移（`MD-5`）。
+领域模块（`analysis/intent/` · `analysis/strategy/`）从它导入。
+
+| `kind` | schema（必填字段） | 受检字段 | 长度用途 / 任务上限 | 生成器标识 |
+| --- | --- | --- | --- | --- |
+| `intent` | `category` · `confidence` · `evidence_ids` · `rationale` | `rationale` | `conclusion` / 4000 | `model-v1` |
+| `chain` | `stages` · `broken_decoy_signals` · `rationale` | `rationale` | `conclusion` / 4000 | `model-v1` |
+| `strategy` | `decoy_selection` · `gray_pct` · `threshold_suggestions` · `rationale` | `rationale` | `conclusion` / 4000 | `model-v1` |
+
+**闭集（`Field.allowed`）**：`intent.category` **必须是** `CATEGORIES` 五类之一，越界即 `ContractError`
+（拒绝，**不**回落成某个默认类别 —— `AR-15`）。
+
+**`INT-11` 的数值边界**在 `kind=strategy` 的 `build` 里强制（灰度 ≤ 20%、阈值 ≥ 下界）：
+越界**抛 `StrategyBoundError`**（它不属于内核固定的四个检查点 ——
+见 [ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md) 决定 1）。
+语义：**该条不入库**（不给 sink），调用方按失败路径处理（worker 回落确定性版并记原因）。
+
+**已知缺口**：`chain.broken_decoy_signals[]` 与 `stages[].name` 的闭集**没有机器守卫**
+（`Field.allowed` 只作用于字符串字段）；取值靠提示词约束 + worker 的形状校验（每项必须是带
+`name` / `evidence_ids` 的对象）。这条记在 [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 2。
+
+**调用方（worker）的语义**：三步各自「模型优先、失败回落」；
+回落原因进结论载荷的 `model_rejected`（见 [`events.md`](events.md) §3）；
+`AR-12` 在模型路径上仍然强制（阶段里引用的证据 ID 必须真实存在于遥测）。

@@ -43,6 +43,7 @@
 | [`ai-oss-reuse.md`](ai-oss-reuse.md) | 153 | **开源复用审查**（候选 × 许可 × 活跃度 × 规则冲突） | **A**（15/15 许可正文逐字核 · 活跃度取 GitHub API） | `analysis/llm` + `analysis/aicap` 的手写能力逐项对比开源实现：6 处功能重叠、12 处无对等物、1 处已归档禁用项（`protectai/llm-guard`）、1 处新发现的审计缺口（Python 依赖无许可审计面） |
 | [`ai-live-probe/`](ai-live-probe/README.md) | 148 | **实机探针**（真实模型 × 仓库真实护栏） | **A**（脚本可复跑 · 输出逐字记录） | 3 次正常输入全过四关 · **`temperature=0` 也不可复现** · 数据区塞指令未被诱导（样本量=1）· **正对照**证实护栏承重；结论用于 [ADR-0026](../decisions/0026-cloud-model-backend.md) |
 | [`AgentCapture.txt`](AgentCapture.txt) | 105 | 产品自述 | **C** | 宣传口径，仅作线索，**不得作基线** |
+| [`l4-oss-reuse.md`](l4-oss-reuse.md) | 149 | **L4 复用审查**（1268 行消费侧代码 × 五个候选 × 许可逐字 × 活跃度快照） | **A**（5/5 许可逐字取到 · 活跃度取 GitHub API） | 结论 **⛔×3 + 🟡×2**：`NetworkX` 许可干净且极活跃，缺的是**需求**（链还原里没有图算法）；`Sigma` 的 DRL-1.1 把署名义务压到**输出**上；`OSSEM` 停更 31 个月（触发 ADR-0024 失效条件 2）→ **零新增运行期依赖**。结论进 [ADR-0031](../decisions/0031-analysis-reuse-and-model-backend.md) |
 
 > **行数已按 2026-09-17 归档后实测校正**（原稿写的「6 份 / 约 1960 行」已过时）。
 

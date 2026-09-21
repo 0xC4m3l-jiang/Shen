@@ -6,8 +6,8 @@
 | 所属层 | `L4`（依据 `MD-1`：一个模块只属于一层） |
 | 实现语言 | `Python`（依据 [`../design/language.md`](../design/language.md) §1 的 L4 行、`TB-2` / `TB-20`） |
 | 负责人 | —— |
-| 状态 | 阶段 A 已实现（通路 · 开关 · 强制护栏）；模型后端与风格画像属阶段 B |
-| 最后更新 | 2026-09-20 |
+| 状态 | 阶段 A 已实现（通路 · 开关 · 强制护栏）；模型后端与风格画像属阶段 B；**三个 L4 任务（`intent` / `chain` / `strategy`）已登记为 kind**，模型后端已接（`llm/deepseek.py`，`--llm` 才走） |
+| 最后更新 | 2026-09-21 |
 
 ---
 
@@ -30,6 +30,9 @@
   只有过了护栏才会调 `put`；
 - **阶段 A 的任务**：`kind=content` —— 产出「资源 × 变体」的欺骗内容对象，
   并（由 `__main__` 的生成器）产出**内容清单**文件给核心装载；
+- **L4 的三个消费方**（2026-09-21 接入，[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md)）：
+  `intent` / `chain` / `strategy` —— 它们是 `analysis/worker` 用的**结论生成**任务，
+  与 `content` 共用同一个出口与同一套护欏（契约见 [`../spec/ai-contract.md`](../spec/ai-contract.md) §7）；
 - **可开关**：`kinds` 未启用即不产出（`ai.enabled=false` 时对系统零影响）。
 
 **明确不做什么**：
@@ -55,6 +58,7 @@
 | 输出 | `Envelope` 与**产物**（`Artifact`：只需 `to_wire()`） | 同上 §1.2 / §2 |
 | 输出（文件） | 内容清单（JSON）—— `kind=content` 专有 | 同上 §3 |
 | 接入新消费方 | 三步（登记 + 产物出口） | 同上 §6 |
+| L4 三任务的契约 | `intent` / `chain` / `strategy` 的 schema · 闭集 · 边界 | 同上 §7 |
 | 消费方 | 核心 `policy`（装载 + 投影）· 适配器 `modules/deception/proxy`（消费） | 同上 §3 / §4 |
 
 本模块内部的数据结构（不跨模块）：
@@ -69,13 +73,13 @@
 
 | 允许依赖 | 原因 |
 | --- | --- |
-| `analysis.llm.*`（`contract` / `envelope` / `blacklist` / `limits` / `prompts` / `untrusted` / `client`） | 纪律层：契约校验、信封、黑名单、长度、提示词资源、不可信数据区 —— **本模块是 `llm.client` 的允许调用者**（`AR-33`） |
+| `analysis.llm.*`（`contract` / `schemas` / `envelope` / `blacklist` / `limits` / `prompts` / `untrusted` / `extract` / `client` / `deepseek`） | 纪律层：契约校验、三任务契约、信封、黑名单、长度、提示词资源、不可信数据区、提取、模型客户端 —— **本模块是 `llm.client` 的允许调用者**（`AR-33`） |
 
 | 禁止依赖 | 原因 |
 | --- | --- |
 | 任何核心 / 边缘 / 控制台代码 | 平面隔离（`ST-2` / `ST-4`）；跨语言只走 wire format（`TB-24`） |
 | 事件/存储客户端（`analysis.telemetry`） | 它不经遥测面写结论（那是 `analysis.worker` 的事）；内容经清单文件交给核心 |
-| 任何网络出站库 | 阶段 A 无模型后端；阶段 B 的模型必须本地/自托管（除非单独 ADR） |
+| 任何第三方网络出站库（含模型 SDK） | `llm/deepseek.py` 只用**标准库** `http.client`（少一个依赖面就少一次许可与供应链审查，[ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md)） |
 
 > `MD-4` 依赖方向单向；`MD-6` 的「核心模块禁止外呼」不适用本模块（它不是核心模块），
 > 但**它同样禁止在生成期依赖系统时钟做判定**：`generated_at` 只作审计，不参与任何决策。
@@ -127,6 +131,8 @@
 | 任务缺护栏档案 / schema / limits | **启动期断言失败**（fail-closed） | ✅（起不来 ≠ 业务受影响） | `AR-33` |
 | 提示词模板缺失 / 占位符不齐 | 启动期断言失败（`AR-24`） | ✅ | `AR-24` |
 | 模型未配置而任务需要模型 | `Unavailable` 显式失败；**禁止**用模板冒充模型输出 | ✅ | `AR-15` |
+| 模型被拒 / 不可用 / 输出越界（L4 三任务） | 调用方（`worker`）**回落确定性版**并记原因（`model_rejected`）；模型失败不得拖垮整轮 | ✅（近线，`NI-1`） | [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 6 |
+| 模型给出越界的策略数值（`gray_pct` > 20% 等） | `build` 抛 `StrategyBoundError` ⇒ **不入库**；调用方回落确定性版（**不夹紧、不改写**） | ✅ | `INT-11` / `AR-15` |
 | 后置校验任一关不过 | 内容**不入库**、**不进清单**；拒绝原因进日志 | ✅ | `AR-15` / `AR-22` / `AR-23` |
 | 内容体超单条上限（64 KiB） | 该条**不入清单** + warn（不整份作废） | ✅ | `spec/ai-contract.md` §3 |
 | 清单文件缺失 / 版本读不懂 / `variants` 与配置不一致 | 核心**启动失败**（配置类输入的严格度） | ✅（宁可起不来，不可下发错内容） | `ST-21` 的精神 |
@@ -147,6 +153,9 @@
 | 结构 | **内核任务无关**：`analysis/aicap/**` 的仓内依赖只允许 `analysis.llm` 与自己；`analysis/llm/**` 禁止反向依赖 `aicap` | `make archcheck`（`MD-4` 项） |
 | 单元 | **假 kind 走完整内核**（只在测试里存在、字段名与产物都不是「内容」）—— 解耦的可执行证明 | `analysis/tests/test_aicap_guardrail.py::test_run_task_is_task_agnostic` |
 | 单元 | 声明即纪律：受检字段缺失/非字符串必拒 · 任务级 `max_output` 真的生效 · 多字段逐个检查 | 同上（`test_run_task_rejects_*` / `test_run_task_*cap*` / `test_run_task_scans_every_checked_field`） |
+| 单元 | **L4 三任务**：四条 kind 全登记 · 缺新模板即启动失败 · 每 kind 指向自己的模板 · 越界类别被拒（闭集）· 泄露类与风格不一致被拒 · `INT-11` 边界对模型路径同样生效 | `analysis/tests/test_aicap_l4_tasks.py` |
+| 单元 | **模型适配器**：非 2xx / 不可解析 / 形状不合 / 超时均归一为 `Unavailable` · 密钥不入异常与日志 · 无执行面 · `resolve()` 三分支 | `analysis/tests/test_llm_deepseek.py` |
+| 单元 | **worker 的模型优先/回落**：`client=None` 时与接模型前逐字一致 · 三步全回落仍出结论 · `AR-12` 在模型路径上仍强制 · 越界策略回落 | 同上 `test_aicap_l4_tasks.py` · `analysis/tests/test_worker.py` |
 | 集成 | 生成 → 核心装载 → 投影 → 适配器命中（端到端） | `make dev` + `make ai-check` |
 
 > 故障注入（`NI-12` 的 `V-1…V-5`）与本模块无关：它不在请求路径上，任何失败都不影响业务响应。
@@ -155,8 +164,8 @@
 
 | # | 未决 | 阻塞什么 | 去向 |
 | --- | --- | --- | --- |
-| 1 | 模型后端与结构化输出框架（Outlines / Instructor 等） | 阶段 B 的生成质量与多样性 | [ADR-0023](../background/decisions/0023-deception-content-injection.md) 未解决 1；**调研与许可已做**（[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md) §3.3），判据在 [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) —— 本项仍需在阶段 B 单独评估（含出网风险） |
-| 2 | PII / 泄露检测（Presidio 类） | `AR-22` 泄露类的覆盖度 | 同上 2；调研已确认 Presidio 为 MIT、仓库已迁至 `data-privacy-stack/presidio`；**别名 `detect-secrets` 的 `protectai/llm-guard` 已归档，禁止引入**（同上 §3.2） |
+| 1 | ~~模型后端与结构化输出框架（Outlines / Instructor 等）~~ | —— | ✅ **已定**（2026-09-21）：云模型（[ADR-0026](../background/decisions/0026-cloud-model-backend.md)）+ 既有三段式提取 + 独立契约校验；**不引** Outlines/Instructor（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 1）。该项的**阶段 B 部分**（`kind=content` 接模型）仍未做 |
+| 2 | PII / 泄露检测（Presidio 类） | `AR-22` 泄露类的覆盖度 | 同上 2；**本轮决定不引**（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 2），改为提示词禁令 + `rationale` 受检字段；**机器识别原始 URI 查询串/UA 仍缺**（ADR-0031 未解决 3）。调研已确认 Presidio 为 MIT；**`protectai/llm-guard` 已归档，禁止引入**（[`../background/research/ai-oss-reuse.md`](../background/research/ai-oss-reuse.md) §3.2） |
 | 3 | 风格画像的来源（真实站点采样 → 去敏 → 入库） | 内容「像不像」 | 同上 3 |
 | 4 | 轮换与识破信号的接线（`strategy` → 清单版本 +1） | 被识破后的自愈 | 同上 4 |
 | 5 | 清单纯量上限与分片拉取接口 | 内容规模 | 同上 5 |
@@ -164,6 +173,8 @@
 | 7 | ~~`AR-33` 的措辞仍只覆盖「欺骗内容生成」~~ | —— | ✅ **已解决**（2026-09-20 用户确认放宽为「**任何** LLM 生成」，[ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md) 决定 4）：L4 的意图 / 链 / 策略接模型时**必须**登记成 kind 走本模块 |
 | 8 | 产物契约未用跨语言标准（JSON Schema） | 其它语言侧要自己写校验器 | ADR-0025 未解决 3（需第二个消费方到场才定） |
 | 9 | 注册表仍是显式两行登记（无自动发现） | 接入新 kind 要改一个文件 | 有意为之；消费方 ≥ 3 个时再评估（ADR-0025 失效条件 3） |
+| 10 | `chain` 的 `broken_decoy_signals[]` 与 `stages[].name` 的**闭集没有机器守卫** | 模型可给越界阶段名/信号种类 | [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 2 |
+| 11 | **模型结果与确定性结果的质量对照**未做 | 「接模型值不值」无定量回答 | ADR-0031 未解决 1（另开一轮，按 skill `evidence-and-decisions` §3） |
 
 ## 9. 变更记录
 
@@ -172,3 +183,4 @@
 | 2026-09-20 | 首版：阶段 A（通路 · 开关 · 强制护栏）—— 唯一出口 `generate` · 任务注册表 · 三段式提示词 · 四关后置校验 · 内容对象与清单 · 确定性模板生成器 | 用户确认新增模块（`AR-33`）+ [ADR-0023](../background/decisions/0023-deception-content-injection.md) |
 | 2026-09-20 | §3 增「复用候选」表 · §8 未决项 1/2 补上调研结论与已归档禁用项（本轮**不改代码**） | [`../plans/2026-09-20-ai-oss-reuse.md`](../plans/2026-09-20-ai-oss-reuse.md) · [ADR-0024](../background/decisions/0024-ai-oss-reuse-boundary.md) |
 | 2026-09-20 | **出口解耦**：内核任务无关化（不认识「内容」）· 产物出口改为 `Sink` 缝（`aicap/ports.py`）· 受检字段与任务上限**声明化并真的生效** · 新消费方接入只需 §6 三步 | [`../plans/2026-09-20-aicap-decoupling.md`](../plans/2026-09-20-aicap-decoupling.md) · [ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md) |
+| 2026-09-21 | **L4 三任务接入**：`intent` / `chain` / `strategy` 登记为 kind（四个）· `llm/schemas.py` 收齐三份契约（闭集 + `INT-11` 边界）· `llm/deepseek.py` 模型适配器 · `tasks/_produce.py` 共用 produce · `ports.WireArtifact` · 三个提示词模板迁入并改三段式 · worker 「模型优先、失败回落」 | [`../plans/2026-09-21-l4-model-and-stability.md`](../plans/2026-09-21-l4-model-and-stability.md) · [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) |

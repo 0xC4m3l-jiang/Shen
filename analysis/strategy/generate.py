@@ -13,24 +13,25 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from ..llm.contract import Field, Schema, validate
+from ..llm.contract import validate
 from ..llm.envelope import Envelope, accept, reject
 from ..llm.limits import Truncation, truncate_list
+from ..llm.schemas import MAX_GRAY_PCT, STRATEGY_SCHEMA, THRESHOLD_FLOOR
 
-STRATEGY_SCHEMA = Schema(
-    name="strategy",
-    fields=(
-        Field("decoy_selection", (list,), True, 64),
-        Field("gray_pct", (int,), True),
-        Field("threshold_suggestions", (dict,), True),
-    ),
-)
+__all__ = [
+    "MAX_GRAY_PCT",
+    "STRATEGY_SCHEMA",
+    "THRESHOLD_FLOOR",
+    "StrategyInput",
+    "generate",
+    "summarize_chain",
+]
+"""`STRATEGY_SCHEMA` / `MAX_GRAY_PCT` / `THRESHOLD_FLOOR` 在这里是**再导出**。
 
-MAX_GRAY_PCT = 20
-"""灰度上限：策略永远**不得**建议一次性全量接管（`INT-11` 的阶梯放开）。"""
-
-THRESHOLD_FLOOR = {"route_mirage": 0.3, "block": 0.6}
-"""阈值下界：建议值**禁止**低于它（否则影子期就会开始改道/拦截）。"""
+为什么定义不在本模块：任务登记项**必须**声明 schema 与长度用途（`Task.schema`），
+而 `analysis/aicap/**` 只允许依赖 `analysis.llm` 与它自己（`MD-4`）。
+契约与上限因此只住在那一层（`MD-5`：**只定义一次**）—— 两边各写一份会漂移。
+"""
 
 
 @dataclass
@@ -49,7 +50,11 @@ def generate(data: StrategyInput) -> Envelope:
     if not decoys:
         return reject("没有可用诱饵：不生成无依据的策略（AR-15）")
 
-    gray = min(MAX_GRAY_PCT, max(data.current_gray_pct, 5 if data.intent_category else 0))
+    try:
+        gray = int(min(MAX_GRAY_PCT, max(data.current_gray_pct, 5 if data.intent_category else 0)))
+    except (TypeError, ValueError):
+        # 输入不是整数就是输入坏了：**拒绝**，不夹紧、不取默认值（AR-15）
+        return reject(f"当前灰度不是整数：{data.current_gray_pct!r}（AR-15）")
     thresholds = {
         "route_mirage": THRESHOLD_FLOOR["route_mirage"],
         "block": THRESHOLD_FLOOR["block"],
@@ -60,8 +65,16 @@ def generate(data: StrategyInput) -> Envelope:
     truncations: list[Truncation] = []
     payload = {
         "decoy_selection": truncate_list(decoys, field="decoy_selection", log=truncations),
-        "gray_pct": int(gray),
+        "gray_pct": gray,
         "threshold_suggestions": thresholds,
+        # `rationale` 也是规则路径的必填字段：两端产出同一个形状，才谈得上对比
+        # （模型说的与规则算的摆在一起看 —— 那是阶段 B 质量对照的前提）。
+        "rationale": (
+            f"意图 {data.intent_category or '（未分类）'} · 链阶段 {len(data.chain_stages)} 个 · "
+            f"可用诱饵 {len(decoys)} 个 · 灰度 {gray}%（上限 {MAX_GRAY_PCT}%）· "
+            f"阈值 route_mirage={thresholds['route_mirage']} / block={thresholds['block']}"
+            "（灰度与阈值均受 INT-11 约束）"
+        ),
     }
     try:
         checked = validate(payload, STRATEGY_SCHEMA)

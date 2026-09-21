@@ -13,12 +13,15 @@
 
 ```sh
 # key 只从环境变量读；脚本不写任何文件、不打日志（已核：仓库与脚本里搜不到 key）
-SHEN_AICAP_MODEL_KEY=<key> analysis/.venv/bin/python scripts/dev/ai-model-probe.py
+SHEN_AI_KEY=<key> analysis/.venv/bin/python scripts/dev/ai-model-probe.py
 
 # 换模型（端点**不得**带路径，带路径会直接报错而不是静默打错地方）
-SHEN_AICAP_MODEL_KEY=<key> MODEL=deepseek-v4-pro \
+SHEN_AI_KEY=<key> SHEN_AI_MODEL=deepseek-v4-pro \
     analysis/.venv/bin/python scripts/dev/ai-model-probe.py
 ```
+
+> 环境变量名于 2026-09-21 统一为 `SHEN_AI_*`（与 `analysis/aicap/model.py` 的适配器同名）；
+> 本文 §1 是**当时那一次运行**的逐字输出，里面的旧变量名不改 —— 它是快照。
 
 脚本五节，**全部用仓库真实实现**（`aicap.guardrail.prompts.render` / `llm.extract.extract_json` /
 `aicap.guardrail.inspect.check`），不是复刻：

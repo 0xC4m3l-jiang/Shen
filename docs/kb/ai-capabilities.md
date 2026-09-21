@@ -9,28 +9,34 @@
 > `analysis/intent|chain|strategy/` 的消费者），而其中**没有任何一条生产链路真的在调模型**。
 > 先把「我们打算让模型做什么、今天用什么代替、边界在哪」完整写出来，再谈优化才有共同语言。
 >
-> 最后更新：2026-09-20（对着当时的代码逐项核对，不是印象）。
-> **状态列是 2026-09-20 的快照**，权威状态在 [`capabilities.md`](capabilities.md)（本文不重复维护它）。
+> 最后更新：2026-09-21（对着当时的代码逐项核对，不是印象）。
+> **状态列是 2026-09-21 的快照**，权威状态在 [`capabilities.md`](capabilities.md)（本文不重复维护它）。
 
 ---
 
 ## 0. 一页速览
 
-**一句话结论**：**今天没有任何一条生产链路在调模型**。模型只出现在两个「待接」的位置 ——
-`ai-capability` 的 `produce`（阶段 B）与 L4 分析（意图 / 攻击链 / 策略，今天全是确定性 Python）。
+**一句话结论**：**默认路径上没有任何一条生产链路在调模型**；L4 的三步分析（意图 / 攻击链 / 策略）
+已具备**模型路径**（`--llm` 显式开启，默认关闭），失败即回落确定性版。
+欺骗内容生成仍是确定性模板生成器（阶段 B 待接）。
 
 | # | 能力 | 代码位置 | 今天靠什么产出 | 模型接了吗 | 产物 | 消费者 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | **欺骗内容生成** | [`analysis/aicap/`](../../analysis/aicap) | 确定性模板生成器 | ❌ 待接（阶段 B） | 内容对象 + 内容清单 | 核心 `policy` → 适配器 `modules/deception/proxy` | ✅ 阶段 A（通路已通） |
-| 2 | **意图识别** | [`analysis/intent/`](../../analysis/intent) | 正则规则表（`rule_hits`） | ❌ **未接** | `Envelope{category, confidence, evidence_ids, rationale}` | `chain` / `strategy` / 遥测结论 | ✅ 确定性版 |
-| 3 | **攻击链还原** | [`analysis/chain/`](../../analysis/chain) | 阶段排序 + 证据校验 | ❌ **未接** | `{stages[], broken_decoy_signals[]}` | `strategy` | ✅ 确定性版 |
-| 4 | **策略生成** | [`analysis/strategy/`](../../analysis/strategy) | 阈值下界 + 灰度上限 | ❌ **未接** | `{decoy_selection[], gray_pct, threshold_suggestions{}}` | 核心 `policy`（经版本化下发） | ✅ 确定性版 |
+| 2 | **意图识别** | [`analysis/intent/`](../../analysis/intent) | 正则规则表（`rule_hits`）；模型路径为 `aicap` 的 `kind=intent` | ✅ **已接**（`--llm`，默认关） | `Envelope{category, confidence, evidence_ids, rationale}` | `chain` / `strategy` / 遥测结论 | ✅ 双路（规则 / 模型） |
+| 3 | **攻击链还原** | [`analysis/chain/`](../../analysis/chain) | 阶段排序 + 证据校验；模型路径为 `kind=chain` | ✅ **已接**（`--llm`，默认关） | `{stages[], broken_decoy_signals[], rationale}` | `strategy` | ✅ 双路 |
+| 4 | **策略生成** | [`analysis/strategy/`](../../analysis/strategy) | 阈值下界 + 灰度上限；模型路径为 `kind=strategy` | ✅ **已接**（`--llm`，默认关） | `{decoy_selection[], gray_pct, threshold_suggestions{}, rationale}` | 核心 `policy`（经版本化下发） | ✅ 双路 |
 | 5 | **双阶段收尾** | [`analysis/llm/twophase.py`](../../analysis/llm/twophase.py) | —— | ❌ **无生产调用方** | 只含事实类字段的收尾结论 | —— | 🟡 骨架（只有单测） |
 | 6 | **内容轮换**（识破信号 → 清单版本 +1） | `strategy` 已产出信号，**消费方未接** | —— | ❌ | 清单 `version` 递增 | 生成器 → 核心 | ❌ 未接通 |
 | 7 | **动态沙箱规格** | 未立项 | —— | ❌ | 待定 | 动态沙箱（形态待用户裁定） | ❌ 未立项 |
 
-> 第 2–4 项的**提示词已经写好了**（`analysis/llm/resources/prompts/{intent,chain,strategy}.md`），
-> 但**只被单测渲染过**，生产代码一行都没用它们 —— 详见 §10 关键发现 1。
+> 第 2–4 项的提示词**已归到 `analysis/aicap/resources/prompts/`**（三段式），
+> 并已登记进任务注册表 —— 即它们现在真的走唯一出口 + 两道护栏（`AR-33`）。
+> 为何当初不在那里（以及为什么不能留在两处）见 §10 关键发现 1。
+>
+> **两条路的产物同形、可信度不同**：结论事件的 `generator` 字段说明是 `rules-v1` 还是 `model-v1`，
+> `model_rejected` 说明模型那一路为何回落（见 [`../spec/events.md`](../spec/events.md) §3）。
+> 决策与失效条件见 [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md)。
 
 ---
 
@@ -123,9 +129,14 @@
 
 ---
 
-## 3. 能力 2–4：L4 分析三件套（今天全是确定性）
+## 3. 能力 2–4：L4 分析三件套（双路：确定性规则 / 模型）
 
-这三者的**形状**已经是「模型的形状」（结构化结论 + 证据引用 + 置信度 + 置信理由），只是**填内容的是规则**。
+这三者的**形状**已经是「模型的形状」（结构化结论 + 证据引用 + 置信度 + 置信理由）。
+今天有**两条路**：确定性规则（默认）与模型（`--llm`），且 worker 的语义是
+**模型优先、失败回落** —— 回落原因记进结论事件的 `model_rejected`。
+
+> 两条路的产物**同形**（共用 `analysis/llm/schemas.py` 的 schema），
+> 那样才有可能并排对比 —— 而对比本身还没做（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 1）。
 
 ### 3.1 意图识别（`intent`）
 
@@ -133,9 +144,9 @@
 | --- | --- |
 | 输入 | 一批 `Observation`（去重后的判定事件） |
 | 输出契约 | `{category, confidence, evidence_ids[], rationale}` |
-| 今天的实现 | [`analysis/intent/recognize.py`](../../analysis/intent/recognize.py)：`CATEGORIES` 五类 + `rule_hits` 正则规则表 |
-| 约束 | `CATEGORIES` 定义了五类。⚠️ **但 schema 并没有守住这个闭集**：`INTENT_SCHEMA` 对 `category` 只查 `(str,)` + 长度 ≤32；越界值会被**静默回落**成 `"reconnaissance"`（`recognize.py:90`）。今天该回落不可达（`_PATTERNS` 只用五类），但**加第六类时会静默误标而不是报错** —— 见 §8.5 优化点 17 |
-| 提示词 | 已写好：[`llm/resources/prompts/intent.md`](../../analysis/llm/resources/prompts/intent.md)（**只被单测渲染**） |
+| 今天的实现 | [`analysis/intent/recognize.py`](../../analysis/intent/recognize.py)：`CATEGORIES` 五类（定义在 `analysis/llm/schemas.py`）+ `rule_hits` 正则规则表 |
+| 约束 | `CATEGORIES` 定义了五类，且 `INTENT_SCHEMA.category.allowed` **守着闭集**：越界即拒绝（`Field.allowed`，2026-09-21 修）。此前越界会被**静默回落**成 `"reconnaissance"`（那是默认值，`AR-15` 禁止）；今天该回落已删除，接模型后越界真的会被拦住 |
+| 提示词 | [`analysis/aicap/resources/prompts/intent.md`](../../analysis/aicap/resources/prompts/intent.md)（三段式，经 `aicap` 出口渲染；**已投入生产路径**） |
 | 证据纪律 | `evidence_ids` 必须来自真实存在的 `event_id`，引用不存在即整轮作废（`AR-12`） |
 
 ### 3.2 攻击链还原（`chain`）
@@ -146,7 +157,7 @@
 | 输出契约 | `{stages[{name, evidence_ids[], confidence}], broken_decoy_signals[]}` —— 实现里**没有** `conclusion` 字段（只有提示词模板里写了它，而那份模板未接通） |
 | 今天的实现 | [`analysis/chain/reconstruct.py`](../../analysis/chain/reconstruct.py)：按 `STAGE_ORDER` 排序 + `assert_exists` 逐条校验证据 |
 | 识破信号 | 四类：`skipped` / `hit_without_followup` / `explicit_compare` / `multi_session_same_method`（[`chain/broken.py`](../../analysis/chain/broken.py)） |
-| 提示词 | 已写好：[`chain.md`](../../analysis/llm/resources/prompts/chain.md)（**只被单测渲染**） |
+| 提示词 | [`analysis/aicap/resources/prompts/chain.md`](../../analysis/aicap/resources/prompts/chain.md)（三段式） |
 
 ### 3.3 策略生成（`strategy`）
 
@@ -156,7 +167,8 @@
 | 输出契约 | `{decoy_selection[], gray_pct, threshold_suggestions{route_mirage, block}}` |
 | 今天的实现 | [`analysis/strategy/generate.py`](../../analysis/strategy/generate.py)：阈值**下界** `route_mirage≥0.3` / `block≥0.6`、灰度上限 20%（`INT-11`） |
 | **不做什么** | 不做判定（`AR-2`）、不做决策（`MD-12`）、不执行（`SB-1`）、不直接回写响应（`AR-32`）—— 只出**数据** |
-| 提示词 | 已写好：[`strategy.md`](../../analysis/llm/resources/prompts/strategy.md)（**只被单测渲染**） |
+| 今天常被拒 | `没有可用诱饵：不生成无依据的策略` —— 演示栈里诱饵面 0 个资产启用（`make dev` 里 `strategy: accepted=False` 就是这个原因，不是 bug） |
+| 提示词 | [`analysis/aicap/resources/prompts/strategy.md`](../../analysis/aicap/resources/prompts/strategy.md)（三段式） |
 | 今天常被拒 | `没有可用诱饵：不生成无依据的策略` —— 演示栈里诱饵面 0 个资产启用（`make dev` 里 `strategy: accepted=False` 就是这个原因，不是 bug） |
 
 ---
@@ -216,6 +228,11 @@ class AnalysisClient(Protocol):
 | 1 | 实现 `AnalysisClient`（或适配现有推理后端） | 能力**之外**（部署侧注入）；能力内只有 `aicap/model.py` 是接缝 |
 | 2 | 把一个任务的 `produce` 换成「渲染好的提示词 → 模型 → 候选输出」 | `analysis/aicap/tasks/<任务>.py` |
 | 3 | 其余一行不改 | 前置护栏、后置四关、`Sink`、`Envelope` 全在 `service.run_task()` 内 |
+
+**已经合好的实现**（2026-09-21）：`analysis/llm/deepseek.py` 的 `DeepSeekClient` ——
+只用标准库（`http.client`）、**只暴露一个公开方法** `complete`（`AR-32` 的成员名检查会对它生效）、
+失败即 `Unavailable`（非 2xx / 超时 / 响应不可解析 / **越界输出**都归一到同一种语义，**不重试**）。
+接缝在 `aicap/model.py::resolve()`：环境变量齐备 ⇒ 它；缺 key ⇒ 显式失败的实现。
 
 **为什么只换 `produce`**：提示词由内核渲染并校验（三段式 + 数据区），产物由 `build` 建，出口由 `Sink` 拿 ——
 所以「换成模型」不会动到任何护栏。**这一点有单测证明**（假 kind 走完整内核，见
@@ -290,17 +307,19 @@ class AnalysisClient(Protocol):
 ## 10. 关键发现（这轮读代码发现的，可能是问题）
 
 > ⚠️ **本节是 2026-09-20 读代码时的快照**，不是持续维护的列表。其中：
-> **发现 1 / 5 里关于「`AR-33` 文字口径」的那一半已经解决**（口径已于 2026-09-20 经用户确认放宽为「任何 LLM 生成」，见 §1.1 与 §8.1 优化点 1）；
-> 但它们的另一半 **仍未解决** —— 「两套提示词系统没合并」与「四个模型任务没登记成 kind」。
+> **发现 1 / 5 / 6 已于 2026-09-21 处理**（三个 L4 任务登记为 kind + 提示词归到 `aicap/resources/prompts/` +
+> 越界类别改为拒绝），逐条修正见下表各行末尾的「**已修**」栏；
+> **发现 2 / 3 / 4 仍未变**（`llm/` 的收尾模板仍只有单测在守、`twophase` 仍无生产调用方、
+> 演示栈里 `strategy` 仍常被拒）。
 
 | # | 发现 | 证据 | 为什么值得你看一眼 |
 | --- | --- | --- | --- |
-| 1 ★ | **两套提示词系统**：`analysis/llm/resources/prompts/`（intent / chain / strategy / finalize）与 `analysis/aicap/resources/prompts/content.md` | `grep -rn "prompts.render\|prompts.load\|assert_startup" analysis/`（排除 `tests/`）→ 生产里只有 `aicap/service.py:135` 调 `guardrail_prompts.render`，以及 `aicap/guardrail/prompts.py` / `aicap/tasks/_registry.py` 的 `assert_startup`；**`llm/` 那四个模板在生产里一次都没被 `render` 过**（只在 `test_llm_discipline.py` 里） | 前四个模板是「按有模型时写好的」，但既没有生产调用方，**也不在 `aicap` 注册表里** ⇒ 它们不受 `AR-33` 出口约束。接模型时要先决定：这四条走 `aicap` 的 kind 登记，还是留在 `llm/` 里另开一条路径 |
-| 2 | `llm.prompts.assert_startup` **不在生产启动路径上** | `grep` 只有 `test_llm_discipline.py` 调用；生产启动只校验 `aicap` 的模板目录 | `AR-24` 说「启动期必须校验模板存在与占位符齐全」—— 对那四个模板，今天只有**测试**在守 |
-| 3 | `llm.twophase.run_two_phase` **没有生产调用方** | `grep -rn run_two_phase` → 只有 `twophase.py` 自己与 `test_llm_discipline.py` | 双阶段收尾是**骨架**：规则写完了、测试过了，但没有任何真实链路用它 |
-| 4 | `strategy` 在演示栈里**经常被拒** | `make dev` 输出 `strategy: accepted=False data={}`；`generate()` 返回 `没有可用诱饵`。**准确成因**：可用诱饵从**事件里的 `backend` 字段**取（`worker.py` 的 `_decoys()`），演示栈里没有幻境后端 ⇒ 事件不带 `backend` ⇒ 诱饵列表为空 | 这是**设计内的 fail-closed**（不生成无依据的策略），不是 bug。但它意味着「策略生成」在幻境后端接通前**基本不产出** |
-| 5 | L4 的四个模型任务（intent/chain/strategy/finalize）**不在 `aicap` 的 kind 注册表里** | `analysis/aicap/tasks/_registry.py` 只 `return {CONTENT_TASK.kind: CONTENT_TASK}`（只登记 `content`） | 与发现 1 是同一件事的两面：`AR-33` 的**文字**只覆盖欺骗内容，而**门禁**是全局的 ⇒ 接模型时会撞上一个「文字没写、门禁会拦」的缝 |
-| 6 | `intent` 的越界类别被**静默回落**成 `reconnaissance`，且 schema 守不住闭集 | `analysis/intent/recognize.py`：`INTENT_SCHEMA` 只有 `Field("category", (str,), True, 32)`；写入前是 `category if category in CATEGORIES else "reconnaissance"` | 与 `AR-15`（禁止默认值）的精神相左。今天不可达（`_PATTERNS` 只用五类），但**加第六类的那天会静默误标**。见 §8.5 优化点 17 |
+| 1 ★ | **两套提示词系统**：`analysis/llm/resources/prompts/`（intent / chain / strategy / finalize）与 `analysis/aicap/resources/prompts/content.md` | `grep -rn "prompts.render\|prompts.load\|assert_startup" analysis/`（排除 `tests/`）→ 生产里只有 `aicap/service.py:135` 调 `guardrail_prompts.render` | **已修（2026-09-21）**：`intent` / `chain` / `strategy` 三个模板**迁到 `analysis/aicap/resources/prompts/`** 并按三段式改写，登记进注册表；`analysis/llm/resources/prompts/` 只剩 `finalize.md`（它属于 `twophase`，本来就无生产调用方 —— 发现 3） |
+| 2 | `llm.prompts.assert_startup` **不在生产启动路径上** | `grep` 只有 `test_llm_discipline.py` 调用；生产启动只校验 `aicap` 的模板目录 | `AR-24` 说「启动期必须校验模板存在与占位符齐全」—— 对 `finalize` 这个**唯一剩下**的模板，今天只有**测试**在守（连同发现 3 一起看） |
+| 3 | `llm.twophase.run_two_phase` **没有生产调用方** | `grep -rn run_two_phase` → 只有 `twophase.py` 自己与 `test_llm_discipline.py` | 双阶段收尾是**骨架**：规则写完了、测试过了，但没有任何真实链路用它。本轮也没有接 —— 近线三步的 `deadline_s` 已传进适配器，但收尾本身仍未接 |
+| 4 | `strategy` 在演示栈里**经常被拒** | `make dev` 输出 `strategy: accepted=False data={}`；`generate()` 返回 `没有可用诱饵`。**准确成因**：可用诱饵从**事件里的 `backend` 字段**取（`worker.py` 的 `_decoys()`），演示栈里没有幻境后端 ⇒ 事件不带 `backend` ⇒ 诱饵列表为空 | 这是**设计内的 fail-closed**（不生成无依据的策略），不是 bug。但它意味着「策略生成」在幻境后端接通前**基本不产出** —— 两条路都一样（模型也需要诱饵输入） |
+| 5 | L4 的四个模型任务（intent/chain/strategy/finalize）**不在 `aicap` 的 kind 注册表里** | `analysis/aicap/tasks/_registry.py` 只 `return {CONTENT_TASK.kind: CONTENT_TASK}`（只登记 `content`） | **已修（2026-09-21）**：`intent` / `chain` / `strategy` 三条已登记（`kinds()` 现为四个）；`finalize` **仍未登记**（它没有生产调用方，登记它等于给一条没人走的路修桥 —— 等发现 3 解决时一并做） |
+| 6 | `intent` 的越界类别被**静默回落**成 `reconnaissance`，且 schema 守不住闭集 | `analysis/intent/recognize.py`：曾写 `category if category in CATEGORIES else "reconnaissance"` | **已修（2026-09-21）**：`Field.allowed` 守闭集（`INTENT_SCHEMA.category.allowed=CATEGORIES`），回落已删；越界现在**抛 `ContractError`** ⇒ 结论被拒而不是误标 |
 
 ---
 
@@ -515,3 +534,4 @@ SHEN_PROXY_INJECT_CONTENT=true
 | --- | --- | --- |
 | 2026-09-20 | 首版：7 个能力逐个详解（输入 / 输出 / 提示词 / 护栏 / 确定性 / 失败语义 / 怎么验）· 模型后端 8 条硬约束 · 接缝 · 16 条优化点候选 · 6 条关键发现 | 用户要求「把对应模型能力介绍写详细，后面再分析是否合理」；对着代码逐项核对 |
 | 2026-09-20 | 新增 §12 模块生命周期（全生命周期时间轴 · 三阶段寿命 · 逐步失败语义 · 三层开关）与 §13 接入与使用（三种角色 · 两种用法 · 消费侧配置 · 8 项接线清单 · 六个常见误解） | 用户要求「说清这个模块的生命周期是什么、怎么接入被使用」 |
+| 2026-09-21 | **能力 2–4 接模型**：§0 表把这三项改为「已接（`--llm`，默认关）」并补 `generator` / `model_rejected`；§3 改为「双路」；§3.1 的闭集缺口标为已修；§7 补 `DeepSeekClient`；§10 发现 1 / 5 / 6 标为已处理（发现 2 / 3 / 4 仍未变） | [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md)（收口 ADR-0024 四项未解决）· [`../spec/ai-contract.md`](../spec/ai-contract.md) §7 · [`../spec/events.md`](../spec/events.md) §3 |

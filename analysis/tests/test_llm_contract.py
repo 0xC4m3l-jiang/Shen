@@ -33,6 +33,29 @@ def test_ar15_extra_field_is_rejected() -> None:
         validate({"a": "x", "b": "y"}, schema)
 
 
+def test_ar15_allowed_is_a_closed_set() -> None:
+    """`Field.allowed` 守闭集：越界**必须**拒绝，不得回落成某个默认值（`AR-15`）。
+
+    为什么这条重要：`types=(str,)` 只挡「不是字符串」—— 越界值在消费方很容易被
+    `x if x in SET else DEFAULT` 吞掉（`intent.recognize` 真实发生过）。
+    """
+    from analysis.llm.contract import validate
+
+    schema = Schema("s", (Field("category", (str,), True, 32, allowed=("a", "b")),))
+    assert validate({"category": "b"}, schema) == {"category": "b"}
+    with pytest.raises(ContractError) as excinfo:
+        validate({"category": "c"}, schema)
+    assert "闭集" in str(excinfo.value)
+
+
+def test_ar15_allowed_defaults_to_none_for_backward_compatibility() -> None:
+    """不写 `allowed` 时行为与以前逐字一致（向后兼容：既有 schema 不受影响）。"""
+    from analysis.llm.contract import validate
+
+    assert Field("x", (str,)).allowed is None
+    assert validate({"x": "随便什么值"}, Schema("s", (Field("x", (str,)),))) == {"x": "随便什么值"}
+
+
 def test_ar16_envelope_shape_and_reason() -> None:
     assert accept({"k": 1}).to_wire() == {"accepted": True, "data": {"k": 1}}
     wire = reject("坏输出").to_wire()
