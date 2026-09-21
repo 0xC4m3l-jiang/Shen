@@ -11,8 +11,9 @@
 > **L1 语言由 Lua 改为 Go**（[ADR-0008](../background/decisions/0008-edge-language-go.md)）。
 > ✅ 用户于同日确认 **`MD-23` / `MD-24`** 与改写后的 **`MD-12`（决策取值只在 director 定义一次） / `MD-13`（severity 与决策取值并列输出）**。
 > ✅ 用户于 2026-09-20 确认**新增 `ai-capability` 为第 25 个模块**（L4 · Python · `analysis/aicap/`）与
-> [`architecture.md`](architecture.md) 的 **`AR-33`**（欺骗内容生成必须经护栏出口）—— 依据
-> [ADR-0023](../background/decisions/0023-deception-content-injection.md)。
+> [`architecture.md`](architecture.md) 的 **`AR-33`**（**任何 LLM 生成**必须经护栏出口；口径于同日由「欺骗内容」放宽）—— 依据
+> [ADR-0023](../background/decisions/0023-deception-content-injection.md)（新增模块）与
+> [ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md)（口径放宽）。
 > ⚠️ MD-8 的强制手段是 CI 测试，**不是编译器** —— 可被绕过的风险登记在实现期处理。
 
 ---

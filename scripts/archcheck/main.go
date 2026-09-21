@@ -11,7 +11,7 @@
 //	modules.md   §1.1   模块与源码目录的一一映射
 //	modules.md          MD-18 / MD-19（清单与目录一致）/ MD-20（store 是唯一 I/O 出口）
 //	language.md         TB-20 / TB-21（语言层数上限）/ TB-24（禁止 CGO 与本地库）
-//	architecture.md     AR-33（欺骗内容生成必须经 ai-capability 的护栏出口）
+//	architecture.md     AR-33（任何 LLM 生成必须经 ai-capability 的护栏出口）
 //	modules.md   §3     MD-4（依赖方向单向 —— Python 侧的 AI 能力独立性）
 //
 // 清单**从文档解析，不硬编码** —— 文档改则检查跟着改，不会两边漂移。
@@ -771,7 +771,7 @@ var guardrailSoleExitPrefixes = []string{
 }
 
 // checkGuardrailIsSoleExit 把 `AR-33` 的「无绕过路径」变成可执行检查：
-// 欺骗内容的生成**必须**走 `ai-capability` 的护栏出口；别处一旦直接 import 模型客户端，
+// 任何生成**必须**走 `ai-capability` 的护栏出口；别处一旦直接 import 模型客户端，
 // 就等于开了一条不过护栏的生成路径（它会绕开 schema / 黑名单 / 长度 / 风格四关）。
 func checkGuardrailIsSoleExit(root string) []finding {
 	dir := filepath.Join(root, "analysis")

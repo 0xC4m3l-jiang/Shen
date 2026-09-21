@@ -10,7 +10,7 @@
 > · **决策取值轮**（[ADR-0002](../background/decisions/0002-decision-model.md) 裁定「三值 + `severity`」）写入 6 条：
 > `TM-12`（severity 必须是旁路字段，禁止并入枚举） `TM-13`（severity 档位只能用登记过的值） `MD-23`（severity 的加重必须可归因于环境） `MD-24`（新增）与 `MD-12` `MD-13`（改写）—— ✅ 用户已确认（2026-09-17）
 > · **模块确认轮**（用户确认新增 `control` 为第 22 个模块）—— 修 `architecture.md` §10.2 缺口 12 与 `modules.md` §1.1
-> · **AI 能力轮**（用户确认新增第 25 个模块 `ai-capability` 与 `AR-33`）—— 欺骗内容生成必须经护栏出口；见 [`../background/decisions/0023-deception-content-injection.md`](../background/decisions/0023-deception-content-injection.md)
+> · **AI 能力轮**（用户确认新增第 25 个模块 `ai-capability` 与 `AR-33`）—— **任何** LLM 生成必须经护栏出口（口径于 2026-09-20 经用户确认由「欺骗内容」放宽，[ADR-0025](../background/decisions/0025-generic-guardrailed-outlet.md)）；见 [`../background/decisions/0023-deception-content-injection.md`](../background/decisions/0023-deception-content-injection.md)
 >
 > 与代码冲突时以本目录为准；发现冲突时按 [`../../AGENTS.md`](../../AGENTS.md) 规则 **P-3** 停下并报告，
 > **不得**修改本目录来迁就实现。

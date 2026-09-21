@@ -9,6 +9,71 @@
 
 ---
 
+## 2026-09-20 · `AR-33` 口径放宽为「任何 LLM 生成」（用户确认的升格）
+
+**做了什么**：把 `AR-33` 的适用范围从「**欺骗内容**生成」放宽为「**任何** LLM 生成」，
+并把它写进 `docs/design/`（升格）。这件事早就该做 —— 因为 `make archcheck` 的 `AR-33` 项
+**本来就是全局的**（`analysis/` 下除出口、接缝、`llm/` 自身与测试外，一律禁止 import 模型客户端），
+于是「规则说一半、门禁管全部」：读者会以为「想接模型就接，只要别 import 客户端就行」。
+
+同时把交付禁令泛化：原措辞「未经护栏校验的**内容**禁止入库 / 下发到边缘」
+→ 「未经护栏校验的**产物**禁止交付给**任何消费方**（入库 / 下发 / 上报；**校验拒绝记录不属「产物」**，按 `AR-16` 必须记录原因）」。
+
+**直接后果（这是实质收益）**：L4 的意图 / 攻击链 / 策略在阶段 3 接模型时，**必须**登记成 kind
+走 `ai-capability` 出口，**不能**自己在 `analysis/llm/` 里另起一条路 —— 而这条约束现在是**已确认的规则**，
+不再是 ADR 里的待定提案。
+
+**代码逻辑一行未改**：只改 `scripts/archcheck/main.go` 的 **2 处注释/文案**（工具本来就是全局检查）。
+
+**改了哪些文件**：修改 `docs/design/architecture.md`（规则本体 + §5 适用范围）· `docs/design/modules.md` ·
+`docs/design/README.md`（升格台账三处）· `docs/background/decisions/0025-generic-guardrailed-outlet.md`
+（状态行 → 决定 1–4 · 决定 4 → ✅ + 「已落地」表 · 失效条件 1 收窄 · 未解决 1/4 闭合）·
+`docs/background/decisions/README.md`（索引状态）· `docs/modules/ai-capability.md`（§4 + §8 未决 7）·
+`docs/modules/llm-components.md`（§4 **新增** `AR-33` 行 —— 本层消费者从此受约束）·
+`docs/kb/ai-capabilities.md`（§1.1 硬约束 · §8.1 优化点 1 · §10 加快照声明）·
+`scripts/archcheck/main.go`（仅 2 处文案）；新增 `docs/plans/2026-09-20-ar33-scope-widening.md`；修改 `docs/log.md`。
+
+**对应文档**：`docs/plans/2026-09-20-ar33-scope-widening.md`（含追溯矩阵、7 条场景证据、审视 6 条）·
+`docs/design/architecture.md` 的 `AR-33` · `docs/background/decisions/0025-generic-guardrailed-outlet.md` 决定 4。
+
+**验证**：`make gate` 通过（含 `make trace` 的规则 ID 引用检查、`make archcheck` 的 `AR-33`/`MD-4` 项、79 例 pytest）。
+`git diff --stat analysis/` → **空**（本层一行未动）；`git diff --stat scripts/archcheck/main.go` → **2 行**（仅注释/字符串）。
+
+**独立评审**（冷上下文 `reviewer`，只看产物与 diff）：**有异议 P1 ×5 + P2 ×6，已全部修完** ——
+其中四条 P1 都是「**规则改了、下游引用没跟上**」：模块文档 §8 还写着「待用户确认」、
+`docs/kb/ai-capabilities.md` §10 用现在时描述已解决的问题、日志缺本轮条目、变更包证据段空白。
+另修了 6 处 P2，包括：`docs/design/architecture.md` §5 的「适用范围」与同一节规则表自相矛盾、
+规则里「能力之外一律禁止」与验证方式（豁免 `llm/` 自身）不一致、ADR 失效条件 1 仍允许无条件回退、
+ADR 未解决 4 应闭合而未闭合。
+
+**证据**：
+
+```console
+$ make gate
+架构检查通过。            ← 含 AR-33 项（模型客户端唯一出口）与 MD-4 项（依赖白名单）
+追溯检查通过。            ← 含 D-3 规则 ID 引用存在性
+79 passed · L4 单测（pytest）
+门禁通过。
+
+$ grep -c "任何 LLM 生成必须经" docs/design/architecture.md
+1
+$ grep -rn "欺骗内容生成必须经" docs/ scripts/ | grep -v .venv
+（仅命中本变更包 §5 自己写的「怎么核」那一行 —— 活跃文档零残留）
+$ sed -n '3p' docs/background/decisions/0025-generic-guardrailed-outlet.md
+- 状态：✅ **已采纳**（决定 1–4；其中决定 4 的 `AR-33` 措辞放宽于 **2026-09-20 经用户确认**）
+$ grep -rn "任何.*LLM 生成" docs/design/
+architecture.md:149 · modules.md:14 · README.md:13        ← 升格台账三处一致
+```
+
+**没做 / 遗留**：① L4 的四个模型任务（intent / chain / strategy / finalize）**还没登记成 kind**
+（今天不调模型，所以不阻塞；阶段 3 接模型时必须先登记）；
+② 两套提示词系统（`analysis/llm/resources/prompts/` 与 `analysis/aicap/resources/prompts/`）**未合并**；
+③ 用户本轮同时提的「**保证生成信息的安全与合规**」与「**护栏可在控制平台完善**」
+**与 `ADR-0020` 决定 2（控制台只读）和 `AR-24`（提示词与资源必须仓库内、禁止运行期可变存储）存在冲突** ——
+已按 `P-3` **停下报告**并出访谈题，**本轮不实现**。
+
+---
+
 ## 2026-09-20 · AI 能力详解补上「生命周期」与「怎么接入使用」（§12 / §13）
 
 **做了什么**：上一轮交的 AI 能力详解讲了「有哪些能力」，但没讲清用户明确要看的两件事，本轮补上：
