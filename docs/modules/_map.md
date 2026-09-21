@@ -32,7 +32,7 @@
 | [`edge/`](../../edge) | L1 数据平面：四个接入形态的适配器 + L1 处置 | Go / 配置 | 是 |
 | [`deception/`](../../deception) | L2+L3 执行平面：蜜罐接入架构 · 网络欺骗声明式产物 | Go / 声明式 | 是 |
 | [`analysis/`](../../analysis) | L4 分析平面 + 其**私有工具链**（`pyproject.toml` · `requirements*.txt` · `.venv`） | Python | 是 |
-| [`console/`](../../console) | 控制平面：只读观测控制台（Web UI + 4 个接口） | Go + 静态页 | 是 |
+| [`console/`](../../console) | 控制平面：只读观测控制台（Web UI + 只读接口；清单见 [`../spec/console-api.md`](../spec/console-api.md) §2） | Go + 静态页 | 是 |
 | [`deploy/`](../../deploy) | 部署物料：Docker（`docker/`）与配置模板（`config/`） | YAML / Dockerfile | 物料 |
 | [`scripts/`](../../scripts) | 门禁与运维工具（`archcheck` 等）· 演示环境 · 本地 `bin/` 工具缓存 | Go / sh / Python | 是 |
 | [`docs/`](../README.md) | 全部文档（设计 · 模块 · 规格 · 运行 · 背景） | Markdown | 文档 |
@@ -40,9 +40,65 @@
 
 > 顶层目录白名单由 `ST-1` 守着（[`../design/structure.md`](../design/structure.md) §1.1）；`vendor/` 与 `scripts/bin/` 是产物形态，不进白名单。
 
+### 1.1 三个大模块（**功能视角**）↔ 五个平面（**代码视角**）
+
+两套说法都对，但回答的问题不同：**三个大模块**回答「这套系统对外提供什么能力」；
+**五个平面**回答「代码在哪、谁能依赖谁」。它们**不是一对一** —— `core/` 是三者**共用的内核**，
+不属于任何单独一个大模块。
+
+> 判据与理由（尤其「为什么核心不能拆散」）见 [ADR-0028](../background/decisions/0028-three-module-view.md)。
+
+| 大模块 | 功能上属于它的目录 | 它用到**共享内核**（`core/`）的哪些部分 |
+| --- | --- | --- |
+| ① **欺骗层**（反向代理 + 欺骗内容注入） | `edge/` 四个适配器与改写（`proxy` ③前置 + ④Sidecar · `mirror` ①镜像 · `dns` ②引流 · `injection` 响应改写）· `analysis/aicap/`（生成欺骗内容）· `deception/netpolicy/`（网络层欺骗：假拓扑 / 微隔离） | `judge`（判定）· `director`（三值决策）· `responder`（欺骗响应生成）· `session` · `isolation` · `policy`（版本与下发）· `decoy`（诱饵面） |
+| ② **AI 蜜罐层**（入口 + 关联不同蜜罐） | `deception/honeypot/`（协议仿真框架）· `deception/shell/`（假 shell，**未建**） | `honeypot`（**入口与后端池**：代码在核心、功能属本层）· `analysis/` 的 `intent` · `chain` · `strategy` · `llm` 与 worker（蜜罐「聪明的那一半」） |
+| ③ **管控平台** | `console/`（页面 + 只读接口） | `control`（服务面）· `telemetry`（事件管道）· `store`（读侧） |
+| —— **共享内核与底座** | `core/`（不属于任何单个大模块）· `api/`（契约）· `scripts/`（工具）· `deploy/`（物料）· `vendor/`（依赖副本） | —— |
+
+**怎么用这张表**：要改「欺骗层」的功能 → 先在第二列找到目录，再分清要动的是**独占目录**还是**共享内核**；
+动共享内核要额外想一步「另外两个大模块会不会被影响」（判定与响应生成本来就服务三者）。
+
+**两条容易踩的边界**：
+
+| 边界 | 现状 | 理由 |
+| --- | --- | --- |
+| 蜜罐的「**启动**」 | **编排的归属已经划给 `honeypot`**（[ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md) 写明了「生命周期：启动 / 停止 / 健康 / 资源上限」）；**本轮没做的是它的实现面**（起容器 / 进程）。当前可用的是**路由 / 关联**（把流量指到已存在的后端池） | 蜜罐注定会被拿下；「起容器」这一实现面要单独论证信任边界与失败面（[ADR-0028](../background/decisions/0028-three-module-view.md) 决定 4） |
+| 管控平台的「**控**」 | **只读**（查看 + 实时流 + 配置快照） | [ADR-0020](../background/decisions/0020-console-minimal-static-ui.md) 决定 2；加写能力前必须先有鉴权 |
+
+### 1.2 每个平面用什么库 · 怎么跑
+
+**第三方库**（权威台账：[`../spec/dependencies.md`](../spec/dependencies.md)，由 `make license-ledger` 生成）：
+
+| 平面 / 目录 | 语言 | 值得知道的三方库 | 说明 |
+| --- | --- | --- | --- |
+| `core/` | Go | `google.golang.org/grpc` · `google.golang.org/protobuf` · `gopkg.in/yaml.v3` | 判定与决策**零业务库**：不引规则引擎、不引决策框架（`TB-22`：自研一次） |
+| `edge/` | Go | **内嵌 Caddy**（`github.com/caddyserver/caddy/v2`，Apache-2.0；**传递依赖树很大**——上一行的 `go list` 输出几乎全是它的依赖）· gRPC · protobuf | 转发与 TLS 终结**复用** Caddy（[ADR-0017](../background/decisions/0017-caddy-l1-base.md)）；本层只写判定胶水 |
+| `deception/` | Go / Rust / 声明式 | 暂无（只有框架） | L2 协议栈内容待专项调研；L3 复用 Cilium / Tetragon（声明式产物） |
+| `analysis/` | Python | `grpcio` · `protobuf` · `PyYAML`（**运行期仅此 3 个**） | AI 框架（PyTorch / vLLM / Transformers / NetworkX）属**规划**，**尚未引入** |
+| `console/` | Go + 静态页 | **无**（只有 gRPC / protobuf） | **无前端构建步骤、无前端依赖**（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)） |
+| 基础设施（**不自研**） | —— | Envoy / Nginx / HAProxy（L0）· CoreDNS（DNS 引流）· Cilium / Tetragon（L3） | 「基础设施复用开源，业务逻辑自研」—— 汇总见 [`../progress.md`](../progress.md) §1a |
+| 存储（**尚未接入**） | —— | Redis · ClickHouse · PostgreSQL | 规划见 [`../design/structure.md`](../design/structure.md) §3 |
+
+> 许可审计：`make licensecheck`（**Go + Python 两侧**）；台账 158 个 Go 模块 + 4 个 Python 发行版，全部宽松许可。
+> 「**没有引库**」也是结论：`console/` 与 `deception/` 确实没有任何非 google 的第三方依赖（`go list -deps` 实测）。
+
+**怎么跑**（细节在 [`../ops/runbook.md`](../ops/runbook.md)，新人五分钟版在 [`../kb/quick-tour.md`](../kb/quick-tour.md) §4）：
+
+| 我想… | 命令 |
+| --- | --- |
+| 一键起全套（只需 Docker） | `make up`（= `docker compose up -d --build`，**不等就绪**）· 起完再**等就绪**用 `make start`（= `scripts/shen.sh up`，含健康等待） |
+| 看状态 / 日志 / 接入自检 | `make status` · `make docker-log S=core` · `make doctor` |
+| 开发内循环（快） | `make check`（构建 + 格式 + vet + 架构 + 追溯 + 泄漏） |
+| 一轮的验收 | `make gate`（含单测 `-race`）· `make dev`（效果验证） |
+| 端到端发流量并核对 | `make traffic` · `make smoke` · `make replay` |
+| 只跑某一层 | `go test ./core/...` · `go test ./edge/...` · 在 `analysis/` 里跑 `.venv/bin/pytest` |
+
 ---
 
-## 2. 模块总表（22 个模块：目录 · 能力 · 对外接口 · 接线）
+## 2. 模块总表（**24 个有效模块**：目录 · 能力 · 对外接口 · 接线）
+
+> 模块清单的权威是 [`../design/modules.md`](../design/modules.md) §1.1（**25 行，其中第 12 行 `adapter-sidecar` 已并入 `adapter-proxy`** ⇒ 24 个有效模块）。
+> 本节只列**目录 · 能力 · 接口 · 接线**；完成度在 [`../progress.md`](../progress.md)，规则在 [`../design/`](../design/README.md) —— 三处不重叠。
 
 **读取方式**：一个模块 = 一个目录 + 一份文档（`MD-2`）；`iface.go` 是它**对外承诺**的接口（`ST-4`：一模块一目录，接口单独成文件）。
 
@@ -91,7 +147,7 @@
 
 | # | 模块 | 目录 | 能力 | 对外接口 | 接线 |
 | --- | --- | --- | --- | --- | --- |
-| 21 | `console` | [`console/cmd/console/`](../../console/cmd/console) · [`console/web/`](../../console/web) | 只读观测台：概览 · 告警 · 流量访问与流动（含**分值/命中信号**）· **L4 分析结论** | HTTP：`/` · `/api/summary` · `/api/flow` · `/api/analysis` · `/api/events` | 只读 `ListEvents`（`AR-10`：禁止参与请求级判定） |
+| 21 | `console` | [`console/cmd/console/`](../../console/cmd/console) · [`console/web/`](../../console/web) | 只读观测台：概览（含**观测新鲜度**）· **配置快照** · **逐请求链路（DAG）** · 告警 · **逐判定日志** · L4 分析结论 · 原始事件；**实时流（SSE）** 记到即推（实测 3 ms） | HTTP：**11 个**只读接口 —— 清单与字段以 [`../spec/console-api.md`](../spec/console-api.md) 为权威（本文不逐一罗列，避免两处计数漂移） | 只读 `ListEvents` · 订阅 `WatchEvents` · 快照 `GetCoreSnapshot`（`AR-10`：禁止参与请求级判定） |
 
 ---
 

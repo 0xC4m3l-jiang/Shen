@@ -9,6 +9,57 @@
 
 ---
 
+## 2026-09-21 · 三个大模块（功能视角）↔ 五个平面：映射、索引与六处过期标记校准
+
+**做了什么**：你用「**三个大模块**」（欺骗层 / AI 蜜罐层 / 管控平台）想这套系统，而代码目录是**五个平面** ——
+两套说法**不是一对一**（`core/` 是三者**共用的内核**）。本轮把对应关系写成权威索引，**不动代码、不动 design/**。
+
+1. **ADR-0028**：六条决定（核心不拆散 · 本轮不搬目录 · 沿用行业术语 · 蜜罐先路由后编排 · 管控平台只读 · 先方案后搬），
+   含候选 A–D 的取舍与「**为什么核心不能拆**」的书面理由；
+2. **`docs/modules/_map.md` 新增 §1.1**：三模块 ↔ 五平面映射表（含「它用到共享内核的哪些部分」那一列）+ 两条边界；
+3. **`docs/modules/_map.md` 新增 §1.2**：每个平面**用什么库**（逐条 `go list -deps` 实测）+ **怎么跑**（10 个 Makefile 入口）；
+4. **修六处过期标记**（模块数 22 → 24 · 三处「4 个接口」· 一处「23 模块」）。
+
+**独立评审抓到两个 P1（改的是**事实与理由**，不是措辞）**：
+① **`responder` 在三行里都没出现** ⇒「覆盖 24 个模块」不成立；且 ADR 里「10 个模块」实为 **11**；
+② **拿被引文件反证自己**：我引 ADR-0011 支撑「不做编排」，而它原文写的是「只做**管理与编排**」+
+「生命周期：启动 / 停止 / 健康 / 资源上限」—— 结论不变，但理由换成了真的。
+另修三处 P2：`make up` 与 `make start` 写混了 · 把 `AR-2`/`AR-5` 说成「机器判据」是夸大（其实是 `ST-2`/`ST-4` 的结构支撑 + 代码评审）·
+另四处过期计数未一并修。
+
+**改了哪些文件**：新增 `docs/background/decisions/0028-three-module-view.md` ·
+`docs/plans/2026-09-21-three-module-view-and-index.md`；修改 `docs/modules/_map.md`（+§1.1/§1.2，修两处）·
+`docs/background/decisions/README.md`（索引）· `docs/README.md`（指针 + 修「23 模块」）·
+`docs/kb/quick-tour.md`（指针）· `docs/progress.md` · `docs/ops/runbook.md`（修计数）· `docs/log.md`。
+**零代码改动、零 `docs/design/` 改动。**
+
+**验证**：`make gate` 通过（80 例 pytest · 结构 / 追溯 / 泄漏 / 许可全绿）。
+逐条实测：13 个目录都存在 · `console/` 与 `deception/` **确实无第三方依赖** · `core/` 只有 gopkg.in/yaml.v3 ·
+`edge/` 有内嵌 Caddy · `analysis/` 运行期恰 3 个 · 控制台接口 **11** 个 · 模块清单 25 行（**24 有效**）。
+
+**证据**：
+
+```console
+$ go list -deps（逐个平面，排掉 google/golang）
+  console      （空 —— 无第三方依赖）
+  deception    （空 —— 无第三方依赖）
+  core         gopkg.in/yaml.v3
+  edge         github.com/caddyserver/caddy/v2（+ 其传递依赖树）
+
+$ grep -c 'mux.HandleFunc(' console/cmd/console/main.go
+11
+
+$ make gate
+架构检查通过。追溯检查通过。泄漏检查通过。许可审计通过。80 passed in 0.40s 门禁通过。
+```
+
+**没做 / 遗留**：① **没搬目录**（顶层目录是 `docs/design/structure.md` §1.1 的白名单，待你确认方案）；
+② **你说的两份设计方案我仍没收到**（消息里是空白）⇒ 映射表里 `analysis/` 的归属最可能随它调整；
+③ 蜜罐**编排**（起容器 / 进程）未做，需单独 ADR；④ 假 shell 那个目录仍未建（既有未决项）。
+去向：`docs/plans/2026-09-21-three-module-view-and-index.md` §7 与 ADR-0028 未解决段。
+
+---
+
 ## 2026-09-21 · 简化：观测面推送那轮的重复与啰嗦（**无行为变化**）
 
 **做了什么**：对上一轮（观测面推送）自己写的代码做一轮简化，**只动新增/改动的行**：

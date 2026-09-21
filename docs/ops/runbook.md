@@ -77,7 +77,7 @@ scripts/shen.sh local    # 起「本地演示环境」：核心 + 假业务站 +
 | ② 链路 | `scripts/shen.sh smoke` | 三条流量都 `HTTP 200`；「流量流动」里能看到 `score` 与 `signals` |
 | ②’ 判定正确性 | `scripts/shen.sh traffic` | 断言全过（当前示例规则下 `5/5`）；观察类场景只报告不断言 |
 | ③ 仓库 | `scripts/shen.sh check` | `make gate` 通过（格式/vet/staticcheck/errcheck/架构/追溯/泄漏/许可/Python 门禁/单测含 -race）+ `make dev` 全绿 |
-| ④ 观测 | 控制台四块 / 四个接口 | 见下表 |
+| ④ 观测 | 控制台七块 / 11 个只读接口 | 见下表 |
 
 链路检查的**期望输出**（实测）：
 
@@ -93,13 +93,15 @@ scripts/shen.sh local    # 起「本地演示环境」：核心 + 假业务站 +
     10:38:13 route_origin GET  /etc/passwd      score=0     signals=[]
 ```
 
-控制台的四个只读接口（脚本化时直接用）：
+控制台共 **11 个只读接口**（清单与字段以 [`../spec/console-api.md`](../spec/console-api.md) §2 为权威）；脚本化时最常用的是：
 
 | 接口 | 用途 |
 | --- | --- |
 | `/api/summary` | 概览：事件总数 · 按决策分布 · 告警数 · L4 结论数 · 时间范围 |
 | `/api/flow?limit=300` | 判定流动：时间 · 决策 · 来源 · 方法 · 路径 · UA · **分值** · **命中信号** · 后端 |
 | `/api/analysis` | **L4 结论**（意图 / 策略；含拒绝原因与证据引用数） |
+| `/api/config` | **配置快照**：策略版本 / 校验和 / 规则数 / 白名单**条数** + AI 能力装载态（阈值等运行参数**不在其中**） |
+| `/api/stream?since=…` | **SSE 实时流**：事件**记到即推**（带 `since` 重连可补漏）；断线时页面自行带 `since` 重开 |
 | `/api/events?limit=100&type=decision` | 原始事件（`type` 可空；`type=analysis` 只看结论） |
 
 > **每次启动/更新后请确认 `git status --short` 为空** —— 启动**不应该**改动仓库（见 §5）。

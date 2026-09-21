@@ -52,7 +52,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | 目录 | 是什么 | 状态 |
 | --- | --- | --- |
 | [`design/`](design/README.md) | **技术基线**：已确认、无二义、客观的规则 | ✅ 8 份 / 153 条（+ `D-1…D-8`） |
-| [`modules/`](modules/) | **模块设计**：一模块一文件；清单在 [`design/modules.md`](design/modules.md) §1.1 | ✅ **24 个有效模块**（§1.1 共 25 行）· 全部有九章文档；**§0 总览含结构图 + 关系图 + 运行时调用链**；完成度见 [`progress.md`](progress.md)（本表不重复计数，避免两处漂移） |
+| [`modules/`](modules/) | **模块设计**：一模块一文件；清单在 [`design/modules.md`](design/modules.md) §1.1 | ✅ **24 个有效模块**（§1.1 共 25 行）· 全部有九章文档；**§0 总览含结构图 + 关系图 + 运行时调用链**；**三模块（功能视角）↔ 五平面（代码视角）映射 + 每个平面用什么库/怎么跑**见 [`modules/_map.md`](modules/_map.md) §1.1/§1.2；完成度见 [`progress.md`](progress.md)（本表不重复计数，避免两处漂移） |
 | [`spec/`](spec/) | **契约与字典**：对外 / 跨模块的确定性契约 | ✅ **8 份**已建：[`config.md`](spec/config.md) · [`events.md`](spec/events.md) · [`policy-payload.md`](spec/policy-payload.md) · [`ai-contract.md`](spec/ai-contract.md) · [`logs.md`](spec/logs.md) · [`metrics.md`](spec/metrics.md) · [`console-api.md`](spec/console-api.md)（控制台读面）· [`dependencies.md`](spec/dependencies.md)（生成物） |
 
 **仅供参考，不具约束力**：
@@ -106,7 +106,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | **复核某轮改了什么** | [`log.md`](log.md)（一轮一条） | [`plans/`](plans/README.md) 的变更包（含追溯矩阵与证据） |
 | **挑一个模块来开发** | [`progress.md`](progress.md) §1 完成度 + [`modules/README.md`](modules/README.md) §4 下一步（插在哪 / 前置 / 建议顺序） | [`design/structure.md`](design/structure.md) **§1.6 包级地图 + 接缝** |
 | **想知道模块**怎么调用 / 怎么装配 | [`modules/README.md`](modules/README.md) **§0.4 运行时调用链**（谁真的在调用链上） | [`design/structure.md`](design/structure.md) §1.6.1 进程边界 · §1.6.4 接缝现状 |
-| **看模块总览（结构 / 关系图）** | [`modules/README.md`](modules/README.md) **§0**（结构图 · 关系图 · 23 模块一句话解释） | [`design/modules.md`](design/modules.md) §1.1（职责权威） |
+| **看模块总览（结构 / 关系图）** | [`modules/README.md`](modules/README.md) **§0**（结构图 · 关系图 · 24 模块一句话解释） | [`design/modules.md`](design/modules.md) §1.1（职责权威） |
 | **改决策路径** | [`design/constraints.md`](design/constraints.md) 的 `NI-12`（**必须**重跑 `V-1…V-5`） | [`design/architecture.md`](design/architecture.md) §9 未决项 |
 | **新增 / 改字段或事件** | [`design/constraints.md`](design/constraints.md) 的 `OH` 段 | [`design/structure.md`](design/structure.md) §3 数据模型 |
 | **做技术选型** | [`background/decisions/`](background/decisions/README.md) 有无现成 ADR | [`background/notes/implementation-discussion.md`](background/notes/implementation-discussion.md) §6 议题清单 |
