@@ -9,6 +9,68 @@
 
 ---
 
+## 2026-09-21 · 文档准确性审视：修 35 处漂移（知识库 / 模块设计 / 契约）· 补写缺失的 E2 结果段
+
+**做了什么**：按技能 `audit` 对**知识库 + 模块设计 + 直接相关的契约/运维/进度文档**做了一轮审视
+（不是“这一轮改得对不对”，而是“**留下的东西整体还准不准**”）。
+
+1. **过半发现是“文档说未实现、代码里已落地”的反向错误** —— 共 11 处，根因是「同一事实在两处维护」（`docs/progress.md` 与 `docs/modules/README.md` 各维护一份进度，一份没跟）：
+   `policy` 的下发面（`Pull`/`Ack` 已实现）· `isolation` 的接线 · **`whitelist`（`INT-25`）的消费** ·
+   `responder` 的预留接缝 · `decoy` / `honeypot` / `console` 的“设计中”；
+   其中 `docs/modules/README.md` §4 还**与同一文件 §0.4 自相矛盾**；
+2. **上一轮改动的后果没同步到知识库**：`docs/kb/capabilities.md` （它自称“状态权威”）还写着「真实模型后端 ❌ 未接入」；
+   已拆成「**L4 三任务已接**（`--llm`）/ `kind=content` 未接（阶段 B）」；
+3. **删掉易漂的数字**（测试函数数 / 行数）：实测**5 行已漂**（如 proxy 写 58、实为 75）+
+   **3 处行数已漂**（如 `docs/spec/config.md` 写 429、实为 448）——改为「就地给取数命令」，并在 `docs/progress.md` 顶部写下这条约定；
+4. **把一段错位的实证搬回它该在的地方**：`E2`（TLS 指纹）已于 2026-09-19 执行并驱动了 [ADR-0019](background/decisions/0019-tls-termination-belongs-to-l0.md)，
+   而 `docs/background/notes/pending-experiments.md` 还写着「E2 未执行」；它的**结果段被放在 `## E3` 的「成本」之后**（读起来像 E3 的第二次结果）。
+   现把那段**原样搬回 E2**（结论：服务端扩展序列 `51-43` vs `43-51` ⇒ `JA3S` 不同 ⇒ **不可对齐**；OCSP 与证书差异属**测试环境产物**，不作栈结论）；
+   文件头的状态行与「待办状态」表也一并纠正；
+5. **删掉 `docs/modules/README.md` §4 的“阶段 2/3 计划表”**（已完成的路线图 + 与进度重复的现状列）——
+   过技能 `audit` 四道门槛，保留“插在哪 / 前置条件”与新增的 §4.2「非模块阻塞项」（`E3` 未验收 · `D0` 待拍板 · `E2` 已闭合）。
+
+**改了哪些文件**（**零代码改动**：`git status` 里只有 `docs/`）：
+
+- `docs/progress.md` · `docs/README.md`
+- `docs/kb/capabilities.md` · `docs/kb/ai-capabilities.md` · `docs/kb/README.md` · `docs/kb/quick-tour.md`
+- `docs/modules/README.md` · `docs/modules/_map.md` · `docs/modules/adapter-proxy.md` · `docs/modules/control.md` · `docs/modules/decoy.md` · `docs/modules/responder.md` · `docs/modules/director.md`
+- `docs/spec/config.md` · `docs/ops/functional-verification.md`
+- `docs/background/notes/pending-experiments.md` · `docs/background/research/README.md`
+- 新增 `docs/plans/2026-09-21-docs-accuracy-audit.md`（含 45 条审视表 = 首轮 38 + 独立评审追加 7 + 删除清单四道门槛）
+
+**对应文档**：`docs/plans/2026-09-21-docs-accuracy-audit.md`（本轮变更包）· 全局技能 `audit`（审视方法 · 四道删除门槛）·
+[ADR-0019](background/decisions/0019-tls-termination-belongs-to-l0.md)（E2 结论）· [ADR-0031](background/decisions/0031-analysis-reuse-and-model-backend.md)（零新增依赖）
+
+**验证**：`make gate` 通过（**118 例 pytest，与上轮相同 —— 本轮零代码改动**）·
+`make trace` 零错误（悬空链接 / 过期状态标记 / 过期豁免全部通过）·
+漂移断言 grep 清零 · 只改 `docs/` 已核。
+**未验**：`docs/design/`（按规范未审）· `docs/spec/` 其余文件与 `docs/kb/faq.md` / `docs/kb/dev-workflow.md` / `docs/integrate/`（只做 grep 级扫描）——均列入变更包 §7。
+
+**证据**：
+
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| “当前无人调用 / 无预留接缝 / 仍未接线”类旧断言 | 只剩「审视记录」的引用行 | ✅ |
+| 易漂数字（测试数 / 行数）在**现役正文** | 只剩 §14 的历史变更行 | ✅ |
+| 本轮改动是否只涉 `docs/` | 是 | ✅ |
+| E2 结果段与两个原始 JSON | 逐字一致 | ✅ |
+| `make trace` | 零错误 | ✅ |
+
+**没做 / 遗留**：
+
+1. **未逐字核 128 个 `.md`**：范围限在知识库 + 模块设计 + 直接相关的契约/运维/进度文档；
+   `docs/design/`（规则）· `docs/plans/`（历史）· `docs/background/decisions/`（历史）· 既有调研材料 · `docs/integrate/` 未逐节人读；
+   （例外：`docs/design/structure.md` 只删了三处**描述性计数**，未改任何规则文本 —— 见变更包 §4.2）；
+2. **`modules/deception/mirror` 缺 `iface.go`**（导出两个接口）—— 真的结构漂移，但要改**代码**且该约定尚未升格为规则
+   ⇒ 本轮**只记录不动**（技能 `audit` 反模式：一边审视一边顺手重构）；
+3. `docs/spec/` 其余文件（`logs.md` / `metrics.md` / `console-api.md` / `dependencies.md` / `policy-payload.md`）未逐字段核对；
+4. **`docs/design/` 的任何规则文本零改动**（本轮未发现规则与实现冲突；若发现也**应先报告**，不自行改规则 —— `P-3`）；
+5. **独立评审抓到我 2 条 P1**（`AGENTS.md` 漏引被删的节 · E2 那段的重复与过度声称）—— 已全部处置，逐条见变更包 §7.3。
+
+> 审视表（45 条，逐条带 `文件:行` 与命令证据）与独立评审见变更包 §7.1 / §7.3。
+
+---
+
 ## 2026-09-21 · L4 三任务接模型（经唯一出口 + 护欏、失败回落）+ 锁文件门禁 + `make pygen` 零 diff
 
 **做了什么**：四件事，都是在「不引新运行期依赖」的前提下做完的。

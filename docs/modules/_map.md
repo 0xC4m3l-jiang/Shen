@@ -75,7 +75,7 @@
 | `common/core/` | Go | `google.golang.org/grpc` · `google.golang.org/protobuf` · `gopkg.in/yaml.v3` | 判定与决策**零业务库**：不引规则引擎、不引决策框架（`TB-22`：自研一次） |
 | `modules/deception/` | Go | **内嵌 Caddy**（`github.com/caddyserver/caddy/v2`，Apache-2.0；**传递依赖树很大**——上一行的 `go list` 输出几乎全是它的依赖）· gRPC · protobuf | 转发与 TLS 终结**复用** Caddy（[ADR-0017](../background/decisions/0017-caddy-l1-base.md)）；本层只写判定胶水 |
 | `modules/deception/` | Go / Rust / 声明式 | 暂无（只有框架） | L2 协议栈内容待专项调研；L3 复用 Cilium / Tetragon（声明式产物） |
-| `analysis/` | Python | `grpcio` · `protobuf` · `PyYAML`（**运行期仅此 3 个**） | AI 框架（PyTorch / vLLM / Transformers / NetworkX）属**规划**，**尚未引入** |
+| `analysis/` | Python | `grpcio` · `protobuf` · `PyYAML`（**运行期仅此 3 个**） | **不引** AI 框架（PyTorch / vLLM / Transformers）与图库（NetworkX）：模型经自写的**标准库**适配器调用 —— 依据 [ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 决定 4 与 [`../background/research/l4-oss-reuse.md`](../background/research/l4-oss-reuse.md) |
 | `modules/console/` | Go + 静态页 | **无**（只有 gRPC / protobuf） | **无前端构建步骤、无前端依赖**（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)） |
 | 基础设施（**不自研**） | —— | Envoy / Nginx / HAProxy（L0）· CoreDNS（DNS 引流）· Cilium / Tetragon（L3） | 「基础设施复用开源，业务逻辑自研」—— 汇总见 [`../progress.md`](../progress.md) §1a |
 | 存储（**尚未接入**） | —— | Redis · ClickHouse · PostgreSQL | 规划见 [`../design/structure.md`](../design/structure.md) §3 |

@@ -116,7 +116,7 @@
 | --- | --- | --- | --- |
 | 1 | `severity` 档位 | 加重处置能力（当前恒 `none`） | [`../design/terminology.md`](../design/terminology.md) §4.2 · `TM-13` / `MD-24` |
 | 2 | 后端池选择与健康检查 | 多后端改道 | 阶段 3（依赖蜜罐池） |
-| 3 | `whitelist` 消费（`INT-25`） | 核心侧白名单前置 | 本轮未接（边缘侧已由适配器实现）；另开一条 |
+| 3 | 🔴 **`whitelist` 消费（`INT-25`）** | —— | ✅ **已实现（核心侧）**：`loader.Whitelist()` → `director` 的 `whitelisted()`（源网段 / UA / 路径前缀三项任一命中即放行，且**先于**引流判定）；单测 `TestWhitelistByUserAgentSkipsJudgement`。边缘侧另由适配器实现（见 [`adapter-proxy.md`](adapter-proxy.md)） |
 | 4 | `block` 开关进配置 | 运维可编排 | 当前是构造参数；与后端池一起进 `config` |
 | 5 | `guard.false_route_budget` 消费 | 误调度率护栏 | 与观测报表一起 |
 

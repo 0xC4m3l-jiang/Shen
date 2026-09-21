@@ -149,7 +149,7 @@ pi 只检查 **cwd 及其祖先目录**下的 `AGENTS.override.md` / `AGENTS.md`
 | 我要做的事 | 去哪 |
 | --- | --- |
 | 写 / 改代码（动手前必读） | [`docs/design/`](docs/design/README.md) 八份全部 → `docs/modules/<模块>.md` |
-| 挑一个模块来开发 | [`docs/progress.md`](docs/progress.md) §1（完成度）· [`docs/modules/README.md`](docs/modules/README.md) §4（每个模块插在哪 · 建议顺序） |
+| 挑一个模块来开发 | [`docs/progress.md`](docs/progress.md) §1（完成度）· [`docs/modules/README.md`](docs/modules/README.md) §4（每个模块插在哪 · 前置条件）与 §4.2（非模块阻塞项） |
 | 查背景：为什么这么定 / 对手是谁 / 找证据 | [`background/decisions/`](docs/background/decisions/README.md) · [`notes/threat-model.md`](docs/background/notes/threat-model.md) · [`research/`](docs/background/research/README.md)（引用**必须先核验**） |
 | 遇到没见过的问题 | [`docs/kb/known-issues.md`](docs/kb/known-issues.md) |
 | 不知道看哪 | [`docs/README.md`](docs/README.md) |

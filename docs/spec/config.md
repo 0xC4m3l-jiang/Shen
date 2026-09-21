@@ -18,7 +18,7 @@
 | --- | --- |
 | 格式 | YAML（`ST-24`：策略**必须**是数据，**禁止**编译进代码） |
 | 路径 | 环境变量 `SHEN_CONFIG` **必须**显式提供；未设置时进程**必须**启动失败并给出提示 |
-| 装载时机 | **仅在进程启动时装载一次**。本期不支持 SIGHUP 与文件监听 —— 运行时变更属策略下发面（阶段 2 未实现） |
+| 装载时机 | **仅在进程启动时装载一次**。本期不支持 SIGHUP 与文件监听 —— 运行时变更走策略下发面（`Pull` / `Ack` 已实现，[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)；**`Watch` 未实现**，故生效延迟 = 一个轮询间隔） |
 | 解析严格度 | **未知键一律拒绝**（顶层与嵌套），非法值一律拒绝 |
 | 非法配置的后果 | **必须**启动失败（非零退出码）并输出「字段路径 + 违反的约束」 |
 | 监听地址 | 进程取环境变量 `SHEN_LISTEN`（缺省 `127.0.0.1:9443`）；`core.listen` 本期**只校验不消费**（见 §2.0） |
@@ -53,7 +53,7 @@
 | `shadow` | ✅ **已消费** | `cmd/core` 装配（影子 → `ShadowDecider`；关闭 → `director`，`INT-11`） |
 | `whitelist` | ✅ **已消费** | `director`（改道判定前置，`INT-25`）—— 关闭影子模式时经 `loader.Whitelist()` 注入决策层 |
 | `guard` | ⏳ 只解析与校验 | 观测报表（误调度率护栏，阶段 2b+） |
-| `decoys` | ✅ **已消费（核心内）** | `cmd/core` 装配时经 `loader.Decoys()` 写入 `store` → `decoy` 诱饵面 + `MD-25` 前缀集；⚠️ **边缘还取不到**（策略面 `S4` 未实现）—— 见 §2.8 |
+| `decoys` | ✅ **已消费（核心内）** | `cmd/core` 装配时经 `loader.Decoys()` 写入 `store` → `decoy` 诱饵面 + `MD-25` 前缀集；⚠️ **边缘还取不到** —— 卡的不是策略面（已实现），而是**诱饵资产的来源与归属未定** —— 见 §2.8 |
 | `honeypots` | ✅ **已消费（核心内）** | `cmd/core` 装配时经 `loader.Honeypots()` → `honeypot` 类型注册与后端池；⚠️ 同上，边缘不可达 —— 见 §2.9 |
 | `injects` | ✅ **已消费并下发** | `policy` 装载（`loader.Injects()`）→ 策略面 `Pull` 下发（`inject_rules`）→ 适配器应用到改道侧响应；**未写该段**则不下发（适配器用本地 env）—— 见 §2.12 |
 | `ai` | ✅ **部分已消费并下发** | `policy` 装载与校验；`ai.enabled` → 策略载荷 `inject_enabled`，`ai.manifest` → 装载内容清单 → 投影 `content_manifest` → 适配器注入到改道侧。`kinds` / `model` / `content.rotate_cooldown` 阶段 A **只解析与校验**（阶段 B 的生成与轮换消费）—— 见 §2.13 |
@@ -177,7 +177,8 @@
 | `decoys.baits` | bool | ✅ | 三类蜜饵 + SSRF 蜜饵（形态 5） |
 
 > 诱饵面**必须** observe-only（`MD-25`）。本段**已进** [`../../deploy/config/config.example.yaml`](../../deploy/config/config.example.yaml) 与校验器（`policy.go`），
-> 且 `cmd/core` 装配时已消费（`loader.Decoys()` → `store` → 诱饵面）；**未接的只是边缘那一跳** —— 策略面 `S4` 未实现前，适配器拿不到诱饵。
+> 且 `cmd/core` 装配时已消费（`loader.Decoys()` → `store` → 诱饵面）；**未接的只是边缘那一跳** ——
+> 而卡住它的**不是策略面**（`Pull` / `Ack` 已实现），是**诱饵资产「谁产出、存在哪」没有定义**（见 [`../modules/README.md`](../modules/README.md) §0.4 与 [`../modules/decoy.md`](../modules/decoy.md) §8）。
 
 ### 2.9 `honeypots`（阶段 2b 接入）
 

@@ -128,7 +128,7 @@
 | 3 | 诱饵可信度度量 | 「看起来像真的」需可测标准 | `sentinel`（差异哨兵）改造 |
 | 4 | MCP 诱饵的协议版本与工具集 | 实现 | 实现期定 |
 | 5 | 「会话结束」的判据（变体冻结到何时） | 多态生命周期 | [ADR-0016](../background/decisions/0016-decoy-polymorphism.md) |
-| 6 | ⚠️ **未接到请求路径** —— 诱饵定义要到边缘才有用，而**策略面（`common/api/policy/v1`）未实现** | 诱饵面在生产中不生效（当前只在启动装配与日志里出现） | [`../design/structure.md`](../design/structure.md) §1.6.4 · [`README.md`](README.md) §0.4 |
+| 6 | ⚠️ **未接到请求路径** —— 诱饵定义要到边缘才有用；**卡的不是策略面**（`common/api/policy/v1` 的 `Pull` / `Ack` 已实现，[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)），而是**诱饵资产的来源与归属未定**（谁产出、存在哪） | 诱饵面在生产中不生效（当前只在启动装配与日志里出现） | [`../design/structure.md`](../design/structure.md) §1.6.4 · [`README.md`](README.md) §0.4 |
 
 ## 9. 变更记录
 

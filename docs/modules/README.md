@@ -2,7 +2,7 @@
 
 > **权威清单在 [`../design/modules.md`](../design/modules.md) §1.1**（**24 个有效模块**，共 25 行；第 12 行 `adapter-sidecar` 已合并）。
 > **实现进度与完成度见 [`../progress.md`](../progress.md)**（进度唯一维护处，与 [`../log.md`](../log.md) 同在 `docs/`，供人工审计对照）。
-> 本文件回答：模块文档在哪 · 下一步做什么 · 怎么新增模块。
+> 本文件回答：模块文档在哪 · **新模块插在哪** · 怎么新增模块。
 > **不知道从哪看起？**先看 [`_map.md`](_map.md)：每个模块的目录 · 能力 · 对外接口 · 接线一张表列全。
 
 
@@ -213,60 +213,54 @@
 | 偏差记录 | 说明 |
 | --- | --- |
 | `MD-17` | 实现顺序上先写了代码、后补文档，与该条要求的顺序相反。已于 2026-09-17 补齐，**留此记录不再重复** |
-| `MD-18` | `control` 已在代码中实现，但尚未并入 [`../design/modules.md`](../design/modules.md) §1.1 的 21 行清单 —— ✅ **已闭合**（2026-09-17 确认后并入，见该文件 §1.1 第 22 行） |
+| `MD-18` | `control` 已在代码中实现，但尚未并入 [`../design/modules.md`](../design/modules.md) §1.1 的清单（当时 21 行）—— ✅ **已闭合**（2026-09-17 确认后并入，见该文件 §1.1 第 22 行；该清单现已 24 个有效模块 / 25 行） |
 | 开发期工具 | `scripts/devcheck/`（在线冒烟）与 `scripts/dev/smoke.sh`（一键验证）**不是模块**，属 `scripts/` 的工具（`MD-19` 的豁免范围）；`Makefile` 新增 `check-config` / `replay` / `smoke` / `dev` 四个开发期目标 |
 
 ---
 
-## 4. 下一步可选模块
+## 4. 每个模块插进现有代码的位置
 
-阶段 1 已落地。下面每一行都标出**它插进现有代码的位置** ——
+> **本节不维护「进度」** —— 进度的唯一维护处是 [`../progress.md`](../progress.md) §1（完成度）与各模块文档 §8（未决项）；
+> 运行链路上的断点见本文 §0.4。本节只回答一件机器核不了的事：**新模块往哪插、卡在什么前置条件上**。
+>
+> **2026-09-21 审视记录**：本节曾是一张「阶段 2/3 计划表」，逐行写着「尚未接线 / 设计中 / 无预留接缝」；
+> 而到审视时它列的模块**几乎都已落地**（如 `policy` 的下发面、`isolation` 的接线、`decoy` / `honeypot` / `console`），
+> 并且与同一文件 §0.4「策略面（`S4`）**已落地**」自相矛盾。
+> 根因是**同一件事在两处维护**（计划表 + `progress.md`）—— 故本节只留「插在哪 / 前置条件」，删掉重复的现状列与已完成的路线图；
+> 历史次序见 [`../log.md`](../log.md)（那里是记录，不会漂）。
+
 骨架预留的接口及其「阶段 1 由谁顶」见 [`../design/structure.md`](../design/structure.md) **§1.6.4**。
 
-### 4.1 阶段 2 · 核心（插入现有进程，不新增二进制）
-
-| 模块 | 插在哪 | 现状 | 前置条件 |
-| --- | --- | --- | --- |
-| `policy` | 实现 `judge.RuleSource` | ✅ **已实现**（配置装载 + 版本台账 + 规则供给）；下发面（`common/api/policy/v1`）仍未接线 | **无** |
-| `director` | 实现 `control.Decider` | ✅ **已实现**（阈值→三值 + 灰度 + 后端名，[`../modules/director.md`](../modules/director.md)）；`severity` 仍固定 `none` | **无**（`policy` 已就绪） |
-| `isolation` | 调用 `store.IsolationStore` | 接口已实现但**当前无人调用** | `session` 已就绪（无阻塞） |
-| `responder` | 被 `director` 调用 | **无预留接缝**（要新定接口） | 需要 `director` 先定后端选择契约 |
-| `store` 真实后端 | 实现 5 个 store 接口 | 内存实现顶着 | 需选定 Redis / PostgreSQL / ClickHouse 方案 |
-| `telemetry` 真实落库 | `store.EventStore` 换成真实实现 | 内存实现顶着 | 同上（事件表按天分区） |
-| **`decoy`**（诱饵面） | 新模块（阶段 2b） | 设计中（[`../modules/decoy.md`](../modules/decoy.md)） | **无**（与 `director` 的 `route_mirage` 配套）—— 依据 [ADR-0010](../background/decisions/0010-functional-camouflage.md) |
-| **`honeypot`**（蜜罐入口） | 新模块（阶段 2b） | 设计中（[`../modules/honeypot.md`](../modules/honeypot.md)） | 需定义蜜罐接入契约；具体蜜罐接第三方 —— 依据 [ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md) |
-
-### 4.2 阶段 2 · 数据平面
-
-③④ 已合并为 `adapter-proxy`（Go）并实现。数据平面剩下的工作：
-
-| 模块 | 语言 | 现状 |
+| 模块 | 插在哪（现有接口 / 形态） | 前置条件 |
 | --- | --- | --- |
-| `adapter-proxy`（③前置 + ④边车） | Go | ✅ 已实现（39 测试，含内嵌 Caddy 端到端与策略面消费）；**需要 `director` 能产出真实决策后才有处置可做** |
-| `adapter-dns`（② DNS 引流） | 配置 | 🟡 `Corefile.example` 就绪；同上依赖 `director` |
-| `edge-injection` | Go | 被适配器引用，**不独立部署**（`ST-5`）；阶段 2b |
+| `policy` | 实现 `judge.RuleSource` | —— |
+| `director` | 实现 `control.Decider` | —— |
+| `isolation` | 调用 `store.IsolationStore`（`control.WithIsolation` 已接） | —— |
+| `responder` | 实现 `contract.Responder`（[`iface.go`](../../common/core/internal/responder/iface.go) 已定义） | 需 `director` 的后端选择契约（已就绪） |
+| `store` 真实后端 | 实现 5 个 store 接口 | 需选定 Redis / PostgreSQL / ClickHouse 方案（目前内存实现顶着） |
+| `telemetry` 真实落库 | `store.EventStore` 换成真实实现 | 同上（事件表按天分区；目前内存实现顶着） |
+| `decoy`（诱饵面） | 核心内模块（[`decoy.md`](decoy.md)） | —— 依据 [ADR-0010](../background/decisions/0010-functional-camouflage.md) |
+| `honeypot`（蜜罐入口） | 核心内模块（[`honeypot.md`](honeypot.md)） | 蜜罐接入契约；具体蜜罐接第三方 —— 依据 [ADR-0011](../background/decisions/0011-honeypot-entry-external-backends.md) |
+| `adapter-dns`（② DNS 引流） | **纯配置、无源码** | 需在真实 DNS 环境验证（`Corefile.example` 已就绪） |
+| `edge-injection` | 被适配器引用，**不独立部署**（`ST-5`） | —— |
+| `console` | Go 进程 + 静态页（[ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)：暂不引前端工具链） | —— |
+| L2 `honeypot-shell` | [`honeypot-shell.md`](honeypot-shell.md) | 内容层待专项调研（用户裁定） |
+| L3 `netpolicy` | 声明式产物（[`modules/deception/netpolicy/`](../../modules/deception/netpolicy)） | 需集群侧加载 |
 
-### 4.3 阶段 2 · 控制台
+### 4.1 开发期工具（不是模块）
 
-| 模块 | 语言 | 前置条件 |
+`scripts/devcheck/`（在线冒烟）与 `scripts/dev/smoke.sh`（一键验证）属 `scripts/` 的工具（`MD-19` 的豁免范围），
+`Makefile` 的开发期目标（`check-config` / `replay` / `smoke` / `dev` / `check-pydeps` / `analysis` / `analysis-llm`）
+也在此列 —— **它们不占模块编号**。
+
+### 4.2 非模块的阻塞项（与上面那张表正交）
+
+| 阻塞项 | 现状 | 阻塞什么 |
 | --- | --- | --- |
-| `console` | TypeScript | 需要 `policy` 的下发契约与回执对账 |
+| **`E3`**（换底座后的 `AR-29` 实测） | 🟡 只有**空载下界**（2026-09-19）；真实载荷与故障路径**未跑** | 形态 ③④ 能否上线（[ADR-0017](../background/decisions/0017-caddy-l1-base.md) 失效条件 1）——**当前最硬的阻塞项** |
+| **`D0`**（架构律：首跳定终局） | ⏳ **待拍板** | 差异哨兵不变量选取（[`../background/notes/implementation-discussion.md`](../background/notes/implementation-discussion.md) §1） |
 
-### 4.4 阶段 3
-
-L2 / L3 / L4（`honeypot-protocol` · `honeypot-shell` · `netpolicy` · `intent` · `chain` · `strategy` · `llm-components`）
-—— 依赖阶段 2 完成。
-
-### 4.5 建议顺序
-
-1. ~~**`policy`** —— 唯一「零前置」的阶段 2 模块，且 `common/api/policy/v1` 已在等它；做它能同时闭合阶段 1 的空规则集~~ ✅ **已完成（2026-09-18）**
-2. **`director`** —— 让引擎从「只算分」变成「能处置」，**项目的核心价值在此**
-3. **真实存储**（`store` / `telemetry` 后端）—— 影子模式跑两周就需要真实落库
-4. **`isolation`** —— 与 `director` 配套（判定前短路）
-5. **适配器** —— `director` 就绪后才能验证处置
-
-> ⚠️ **两个非模块的阻塞项**（见 [`../background/notes/pending-experiments.md`](../background/notes/pending-experiments.md)）：
-> `E2`（TLS 指纹一致性）是 **P0**，其结论可能推翻整个欺骗命题；`D0`（架构律）尚未拍板。
+> `E2`（TLS 指纹一致性）**已不在此列**：已于 2026-09-19 执行，结论驱动 [ADR-0019](../background/decisions/0019-tls-termination-belongs-to-l0.md)（TLS 终结交客户 L0）。
 
 ---
 

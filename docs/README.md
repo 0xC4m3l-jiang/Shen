@@ -104,7 +104,7 @@ L3 网络层     蜜网编排 · 微隔离 · 假拓扑
 | **开始写代码** | [`design/`](design/README.md) 八份全部 | 对应 [`modules/<模块>.md`](modules/)；**先确认待定项不阻塞你**；流程 = 全局技能 `dev-loop` + 适配面 [`../.pi/devloop.md`](../.pi/devloop.md)，产出照 [`plans/_change-package.md`](plans/_change-package.md) |
 | **想知道开发规范怎么跑起来** | [`kb/dev-workflow.md`](kb/dev-workflow.md)（三层结构 · 一轮时序 · 门禁与追溯链路图 · 技能路由） | [`../AGENTS.md`](../AGENTS.md) §4 + [`.pi/devloop.md`](../.pi/devloop.md) |
 | **复核某轮改了什么** | [`log.md`](log.md)（一轮一条） | [`plans/`](plans/README.md) 的变更包（含追溯矩阵与证据） |
-| **挑一个模块来开发** | [`progress.md`](progress.md) §1 完成度 + [`modules/README.md`](modules/README.md) §4 下一步（插在哪 / 前置 / 建议顺序） | [`design/structure.md`](design/structure.md) **§1.6 包级地图 + 接缝** |
+| **挑一个模块来开发** | [`progress.md`](progress.md) §1 完成度 + [`modules/README.md`](modules/README.md) §4（每个模块**插在哪 / 前置条件**）与 §4.2（非模块阻塞项：`E3` / `D0`） | [`design/structure.md`](design/structure.md) **§1.6 包级地图 + 接缝** |
 | **想知道模块**怎么调用 / 怎么装配 | [`modules/README.md`](modules/README.md) **§0.4 运行时调用链**（谁真的在调用链上） | [`design/structure.md`](design/structure.md) §1.6.1 进程边界 · §1.6.4 接缝现状 |
 | **看模块总览（结构 / 关系图）** | [`modules/README.md`](modules/README.md) **§0**（结构图 · 关系图 · 24 模块一句话解释） | [`design/modules.md`](design/modules.md) §1.1（职责权威） |
 | **改决策路径** | [`design/constraints.md`](design/constraints.md) 的 `NI-12`（**必须**重跑 `V-1…V-5`） | [`design/architecture.md`](design/architecture.md) §9 未决项 |

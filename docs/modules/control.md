@@ -37,7 +37,7 @@
 | 输入 | `common/api/judge/v1` 的 `JudgeRequest` | `common/api/judge/v1/judge.proto` |
 | 输出 | `common/api/judge/v1` 的 `JudgeResponse`（只含 action / severity / backend） | 同上 |
 | 输入 / 输出 | `common/api/telemetry/v1` 的 `TelemetryEvent` / `ReportAck` | `common/api/telemetry/v1/telemetry.proto` |
-| 输入 / 输出 | `common/api/policy/v1`（**阶段 2 未实现**） | `common/api/policy/v1/policy.proto` |
+| 输入 / 输出 | `common/api/policy/v1`（`Pull` / `Watch` / `Ack`；本服务面**不消费**它，供参考） | `common/api/policy/v1/policy.proto` |
 
 ## 3. 依赖
 
@@ -93,7 +93,7 @@
 | # | 未决 | 阻塞什么 | 去向 |
 | --- | --- | --- | --- |
 | 1 | **本模块是否为独立模块**（若否，服务面需挪进 `common/core/cmd/core/`） | 清单与代码的一致性 | `architecture.md` §10.2 缺口 12 |
-| 2 | 策略面（`Pull` / `Watch` / `Ack`）未实现 | 阶段 2 的策略下发 | 阶段 2 |
+| 2 | ~~策略面（`Pull` / `Watch` / `Ack`）未实现~~ | —— | ✅ **已实现（2026-09-19）**：`Pull` + `Ack` 已实现（[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)）；**`Watch` 仍未实现**（本轮用轮询） |
 | 3 | gRPC 的 mTLS —— 阶段 1 用本机明文 | 跨节点部署 | `structure.md` §4 |
 
 ## 9. 变更记录

@@ -104,7 +104,7 @@ scripts/shen.sh doctor      # 接入自检（INT-17 五项）：链路到底通�
 
 | 去哪看 | 内容 |
 | --- | --- |
-| [`../ops/functional-verification.md`](../ops/functional-verification.md) §2 | **缺口清单**：查询串不参与判定 · 编码绕过 · 前缀误伤/绕过 · PUT/PATCH 未建模 · 白名单未消费 · `severity` 恒为 none |
+| [`../ops/functional-verification.md`](../ops/functional-verification.md) §2 | **缺口清单**：查询串不参与判定 · 编码绕过 · 前缀误伤/绕过 · PUT/PATCH 未建模 · `severity` 恒为 none（白名单缺口的那个已于 2026-09-21 **闭合**：核心侧已消费 `whitelist`，`INT-25`） |
 | 同上 §3 | **当前环境验不了的能力**：改道 / 拦截 / 注入 / 诱饵 / 蜜罐 / 隔离 / ① ② ④ 形态 / L3 |
 | [`known-issues.md`](known-issues.md) | 踩过的坑（工具类 · 运行时类 · 历史类） |
 | [`../progress.md`](../progress.md) | 每个模块的完成度（唯一维护处） |

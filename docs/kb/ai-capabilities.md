@@ -5,9 +5,10 @@
 > 字节契约在 [`../spec/ai-contract.md`](../spec/ai-contract.md)，
 > 状态与证据在 [`capabilities.md`](capabilities.md)，模块设计在 [`../modules/ai-capability.md`](../modules/ai-capability.md)。
 >
-> 写这份文档的原因：**「AI 能力」现在散在三个地方**（`analysis/llm/` 的纪律层 · `analysis/aicap/` 的出口 ·
-> `analysis/intent|chain|strategy/` 的消费者），而其中**没有任何一条生产链路真的在调模型**。
-> 先把「我们打算让模型做什么、今天用什么代替、边界在哪」完整写出来，再谈优化才有共同语言。
+> 写这份文档的原因：**「AI 能力」散在三个地方**（`analysis/llm/` 的纪律层 · `analysis/aicap/` 的出口 ·
+> `analysis/intent|chain|strategy/` 的消费者）。首版（2026-09-20）写作时，模型只出现在「待接」的位置；
+> **2026-09-21 起 L4 三步分析已经有了真实的模型路径**（`--llm`，默认关）——
+> 但本节的**边界与纪律**一字未改：先把「模型能做什么、边界在哪」写清楚，再谈优化才有共同语言。
 >
 > 最后更新：2026-09-21（对着当时的代码逐项核对，不是印象）。
 > **状态列是 2026-09-21 的快照**，权威状态在 [`capabilities.md`](capabilities.md)（本文不重复维护它）。
@@ -154,7 +155,7 @@
 | 项 | 内容 |
 | --- | --- |
 | 输入 | 一批 `Observation` + 证据索引（`EvidenceIndex`） |
-| 输出契约 | `{stages[{name, evidence_ids[], confidence}], broken_decoy_signals[]}` —— 实现里**没有** `conclusion` 字段（只有提示词模板里写了它，而那份模板未接通） |
+| 输出契约 | `{stages[{name, evidence_ids[], confidence}], broken_decoy_signals[], rationale}` —— 实现里**没有** `conclusion` 字段（旧提示词里写过它，已在 2026-09-21 随模板改写删去）；`rationale` 是模型路新增的**受检文本字段** |
 | 今天的实现 | [`analysis/chain/reconstruct.py`](../../analysis/chain/reconstruct.py)：按 `STAGE_ORDER` 排序 + `assert_exists` 逐条校验证据 |
 | 识破信号 | 四类：`skipped` / `hit_without_followup` / `explicit_compare` / `multi_session_same_method`（[`chain/broken.py`](../../analysis/chain/broken.py)） |
 | 提示词 | [`analysis/aicap/resources/prompts/chain.md`](../../analysis/aicap/resources/prompts/chain.md)（三段式） |
@@ -284,9 +285,9 @@ class AnalysisClient(Protocol):
 
 | # | 现状 | 问题 | 候选做法 | 代价 |
 | --- | --- | --- | --- | --- |
-| 15 | schema 是自研的 74 行迷你校验器 | 跨语言消费方（Rust 沙箱）要自己再写一份 | 评估换成 [JSON Schema](https://json-schema.org/)（标准、跨语言） | 换掉 `llm/contract.py` 的语义（要保 fail-closed），需 ADR |
+| 15 | schema 是自研的迷你校验器（`analysis/llm/contract.py`） | 跨语言消费方（Rust 沙箱）要自己再写一份 | 评估换成 [JSON Schema](https://json-schema.org/)（标准、跨语言） | 换掉 `analysis/llm/contract.py` 的语义（要保 fail-closed），需 ADR |
 | 16 | 提示词**没有版本标识** | 换了模板后，无法回答「这份内容是哪版提示词产出的」 | 把模板内容哈希写进产物（与 `generator` 并列） | 契约加一个字段 |
-| 17 | `INTENT_SCHEMA` 无法表达**枚举闭集**，靠代码分支兜底 | 越界的 `category` 被**静默回落**成 `"reconnaissance"`（`recognize.py:90`）—— 今天不可达，但违背 `AR-15`（禁止默认值）的**精神**；一旦新增第六类就会被静默误标 | （a）删回落分支，越界即 `reject`；（b）给 `llm.contract.Schema` 加「枚举」字段类型，让闭集进契约 | 这属**代码改动**，本轮未动（纯文档轮）；建议单开一个小轮（S 档） |
+| 17 | ~~`INTENT_SCHEMA` 无法表达**枚举闭集**，靠代码分支兜底~~ | ~~越界的 `category` 被**静默回落**成 `"reconnaissance"`~~ | ✅ **已修（2026-09-21）**：`llm.contract.Field` 新增 `allowed`（闭集），`INTENT_SCHEMA.category.allowed = CATEGORIES`，**回落分支已删**——越界现在抛 `ContractError` ⇒ 结论被拒；回归用例见 [`../plans/2026-09-21-l4-model-and-stability.md`](../plans/2026-09-21-l4-model-and-stability.md) §5 第 7 行 | 已完成；`Field.allowed` 只作用于**字符串字段**，列表元素闭集仍无守卫（[ADR-0031](../background/decisions/0031-analysis-reuse-and-model-backend.md) 未解决 2） |
 
 ---
 

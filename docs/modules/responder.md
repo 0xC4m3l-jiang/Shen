@@ -104,7 +104,7 @@
 | 1 | **一致性键的粒度**（路径含 query？含方法？） | 一致性实现 | [ADR-0014](../background/decisions/0014-generative-deceptive-response.md) 未解决 |
 | 2 | 预生成的触发时机（会话建立 / 首次访问 / 离线批） | 保真度 vs 延迟 | 同上 |
 | 3 | 与 `severity` 的交互（加重是否破坏一致性） | 加重处置 | 同上（倾向：不破坏，只改时序） |
-| 4 | ⚠️ **未接到请求路径** —— `ST-3` 使边缘不能 import 核心内部包，内容只能经**策略面**下发；而该面未实现 | 生成能力到不了边缘 | [`../design/structure.md`](../design/structure.md) §1.6.4 · [`README.md`](README.md) §0.4 |
+| 4 | ⚠️ **未接到请求路径** —— `ST-3` 使边缘不能 import 核心内部包，内容只能经**策略面**下发；而**策略面已实现**（`Pull` / `Ack`，[ADR-0018](../background/decisions/0018-policy-plane-pull-model.md)），**卡的是本模块自己的 `(会话, 资源)` 运行期缓存通路**（当前只有装配 + 启动自检） | 生成能力到不了边缘 | [`../design/structure.md`](../design/structure.md) §1.6.4 · [`README.md`](README.md) §0.4 |
 
 ## 9. 变更记录
 

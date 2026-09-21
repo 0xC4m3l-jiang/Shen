@@ -145,13 +145,13 @@ modules/console/                  # ③ 管控平台
 | `common/core/internal/director` | ✅ 已建（阶段 2a：阈值→三值 + 灰度，含单测） |
 | `common/core/internal/{responder,isolation,decoy,honeypot}` | ✅ 已建（阶段 2b，含单测；**不在判定调用链上**）。⚠️ **处置内容的边缘通路只有一部分接通**：AI 欺骗内容已接通（`ai-capability` → 策略面 `content_manifest` → 适配器，`ADR-0023`）；诱饵资产仍未接 |
 | `modules/deception/mirror/` 的 L0 配置模板 | ✅ 已建（`iptables-tee` / `nginx-mirror` / `envoy-mirror`） |
-| `modules/deception/proxy/` | ✅ 已建（③前置 + ④边车的同一份实现，39 测试：内嵌 Caddy 转发 + TLS + 策略面消费） |
+| `modules/deception/proxy/` | ✅ 已建（③前置 + ④边车的同一份实现：内嵌 Caddy 转发 + TLS + 策略面消费；用例数用 `go test ./modules/deception/proxy/ -v` 取） |
 | `modules/deception/dns/` | 🟡 [`Corefile.example`](../../modules/deception/dns/config/Corefile.example) 已建（② 纯配置，无源码） |
 | `modules/deception/injection/` | ✅ 已建（阶段 2b，含单测；被适配器引用，**不独立部署** `ST-5`） |
-| `modules/honeypot/protocol/` | ✅ 已建（阶段 3 **框架**：协议注册表 · 运行框架 · 最小适配器 + 7 例单测；**真实协议栈待设计**） |
+| `modules/honeypot/protocol/` | ✅ 已建（阶段 3 **框架**：协议注册表 · 运行框架 · 最小适配器 + 单测；**真实协议栈待设计**） |
 | `modules/deception/netpolicy/` | 🟡 阶段 3：三份声明式产物（微隔离 / 假拓扑 / 运行时检测，复用 Cilium / Tetragon，**无源码**） |
 | `modules/honeypot/shell/` | ⏸ **推迟**（用户裁定：蜜罐只做接入架构，内容与协议栈待专项调研） |
-| `analysis/*` | ✅ 已建（阶段 3，Python：`llm` 契约层 · `intent` · `chain` · `strategy` + 24 例测试；工具链见 `requirements-dev.txt`） |
+| `analysis/*` | ✅ 已建（阶段 3，Python：`llm` 契约层 · `intent` · `chain` · `strategy` + 单测；用例数用 `make pytest` 取；工具链见 `requirements-dev.txt`） |
 | `analysis/aicap/` | ✅ 已建（阶段 3，模块 25：**可开关的 AI 能力服务**——`service.py` 是唯一出口且**内部强制走护栏**，子包 `tasks/`（任务注册表 + `content`）与 `guardrail/`（前置提示词 + 后置独立校验）；阶段 A 产出欺骗内容 + 清单给核心装载。依据 `AR-33` / [ADR-0023](../background/decisions/0023-deception-content-injection.md)） |
 | `modules/console/` | ✅ 已建（阶段 2b：Go 进程 + 静态页，只读观测；语言偏离见 [ADR-0020](../background/decisions/0020-console-minimal-static-ui.md)） |
 | `scripts/*` | 🟡 部分已建：`archcheck/` `gate/` `licensecheck/` `tracecheck/` `check-leak/` ✅ 已实现；`devcheck/`（开发期在线冒烟）+ `dev/smoke.sh`（一键验证）✅ 已实现；`sentinel/` `doctor/` 仍只有说明 |

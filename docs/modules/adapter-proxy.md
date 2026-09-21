@@ -6,7 +6,7 @@
 | 所属层 | `L1` |
 | 实现语言 | `Go`（[ADR-0008](../background/decisions/0008-edge-language-go.md)） |
 | 负责人 | —— |
-| 状态 | ✅ `modules/deception/proxy/` 已实现（**39 测试**，含 `-race`、内嵌 Caddy 端到端与策略面应用语义：后端表 / 白名单 / 响应改写规则）；⏳ 端到端接管仍需真实接入演练 |
+| 状态 | ✅ `modules/deception/proxy/` 已实现（含 `-race`、内嵌 Caddy 端到端与策略面应用语义：后端表 / 白名单 / 响应改写规则）；用例数不写死用 `go test ./modules/deception/proxy/ -v` 取；⏳ 端到端接管仍需真实接入演练 |
 | 底座 | **内嵌 Caddy**（Apache-2.0）承担转发与 TLS 终结 · [ADR-0017](../background/decisions/0017-caddy-l1-base.md) |
 | 最后更新 | 2026-09-19 |
 
