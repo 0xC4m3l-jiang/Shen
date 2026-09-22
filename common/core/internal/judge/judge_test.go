@@ -86,6 +86,23 @@ func TestJudge_MatchesQueryField(t *testing.T) {
 	if got := judgeQuery("file=report.csv"); len(got.Signals) != 0 {
 		t.Fatalf("负样本：不应命中，得到 %+v", got)
 	}
+	// `query_raw` 让「编码本身就是信号」也能写规则（`query` 里已经没有编码了）。
+	enc := New(stubRules{{ID: "encoded-dots", Weight: 0.4, Match: contract.Match{Field: "query_raw", Op: "contains", Value: "%2e%2e"}}})
+	vEnc, err := enc.Judge(context.Background(), contract.JudgeRequest{
+		DecisionID: "d-2",
+		Observed: contract.Observation{
+			Path:     "/download",
+			Query:    "file=../etc/passwd",         // 规范化后：没有编码
+			QueryRaw: "file=%2e%2e%2fetc%2fpasswd", // 原样：编码形态仍在
+		},
+	})
+	if err != nil {
+		t.Fatalf("query_raw 判定失败：%v", err)
+	}
+	if len(vEnc.Signals) != 1 {
+		t.Fatalf("按编码形态的规则应命中 query_raw，得到 %+v", vEnc)
+	}
+
 	// 证据带上命中字段与它的值（观测面据此解释「为什么是 0.7」）。
 	v := judgeQuery("file=../etc/passwd")
 	if len(v.Evidence) != 1 || v.Evidence[0].Kind != "query" || v.Evidence[0].Value != "file=../etc/passwd" {

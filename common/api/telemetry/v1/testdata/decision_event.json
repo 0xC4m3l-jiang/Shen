@@ -4,6 +4,7 @@
   "method": "GET",
   "path": "/.git/config",
   "query": "file=../../etc/passwd",
+  "query_raw": "file=%2e%2e%2f%2e%2e%2fetc%2fpasswd",
   "user_agent": "HeadlessChrome/120",
   "session_id": "9d2a6f0c5b1e4a37",
   "action": "route_origin",

@@ -454,7 +454,7 @@
     {
       "id": "method-put",
       "group": "规则精度",
-      "why": "PUT 未建模：同样破坏性却零信号",
+      "why": "PUT 同样破坏性（推荐基线已建模）：应有 method-destructive-put 信号",
       "method": "PUT",
       "path": "/api/items/1",
       "headers": {
@@ -463,15 +463,42 @@
       },
       "body": "{\"name\":\"x\"}",
       "expect": {
+        "min_score": 0.45,
+        "max_score": 0.55,
+        "signals_all": [
+          "method-destructive-put"
+        ],
         "status_in": [
           200,
           501
+        ]
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
+    },
+    {
+      "id": "method-patch",
+      "group": "破坏性方法",
+      "why": "PATCH 同样破坏性（推荐基线已建模）：应有 method-destructive-patch 信号",
+      "method": "PATCH",
+      "path": "/api/items/1",
+      "headers": {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+      },
+      "body": "{\"name\":\"x\"}",
+      "expect": {
+        "min_score": 0.45,
+        "max_score": 0.55,
+        "signals_all": [
+          "method-destructive-patch"
         ],
-        "gap": {
-          "kind": "未覆盖",
-          "why": "示例规则只登记 DELETE，PUT/PATCH 未建模（演示站对两者都回 501，属业务行为）",
-          "close": "按业务语义补齐方法维度规则或给出推荐基线集"
-        }
+        "status_in": [
+          200,
+          501
+        ]
       },
       "modules": [
         "judge",
@@ -537,6 +564,24 @@
       "modules": [
         "director",
         "adapter-proxy"
+      ]
+    },
+    {
+      "id": "injection-traversal-double-encoded",
+      "group": "规则精度",
+      "why": "二次编码（`%252e`）应被解到不动点后命中（入口统一规范化的关法）",
+      "method": "GET",
+      "path": "/download?file=%252e%252e%252f%252e%252e%252fetc%252fpasswd",
+      "headers": {
+        "User-Agent": "curl/8.4.0"
+      },
+      "expect": {
+        "min_score": 0.65,
+        "max_score": 1.0
+      },
+      "modules": [
+        "judge",
+        "policy"
       ]
     },
     {

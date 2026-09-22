@@ -185,13 +185,20 @@ type Observation struct {
 	Path           string            `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
 	TlsFingerprint string            `protobuf:"bytes,5,opt,name=tls_fingerprint,json=tlsFingerprint,proto3" json:"tls_fingerprint,omitempty"`
 	Headers        map[string]string `protobuf:"bytes,6,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// query 是 URL 查询串（不含前导 `?`），供规则匹配。
+	// query 是查询串的**规范化匹配视图**（不含前导 `?`），供规则匹配。
 	//
-	// 三方约定（proto / 适配器 / 规则引擎必须一致）：**百分号解码一次**
-	// （`%2e`→`.`、`%20`→空格）且 `+`→空格；解码失败时原样传递（从不丢数据）。
-	// 为什么要它：载荷常在查询串里（`?file=../../etc/passwd`），只匹配 path 时看不见。
-	// 为什么只解一次：重复解码会把真实数据改写成另一个值（双侧解码漏洞的根因）。
-	Query         string `protobuf:"bytes,7,opt,name=query,proto3" json:"query,omitempty"`
+	// 三方约定（proto / 适配器 / 规则引擎必须一致）：**反复解码到不动点，上限 3 轮**
+	// （`%252e` → `%2e` → `.`；`+` 与 `%20` → 空格）；出错或不再变化即停。
+	// 为什么要解到不动点：只解一轮时「二次编码」（`%252e%252e`）仍可绕过 —— 那是实测缺口。
+	// 为什么有上限：每轮解码都是对**攻击者可控输入**的线性工作；上限把成本钉死，
+	// 代价是三重及以上编码仍可能绕过（已登记，见 docs/spec/config.md §2.4）。
+	// ⚠️ 它只用于**匹配**：转发给上游的仍是原始请求行，原样字节见 `query_raw`。
+	Query string `protobuf:"bytes,7,opt,name=query,proto3" json:"query,omitempty"`
+	// query_raw 是客户端**原样发来**的查询串（未解码），供审计与「按编码形态匹配」的规则使用。
+	//
+	// 为什么要它：`AR-31` 要求攻击者可控字段原样保留；而且「编码本身就是信号」——
+	// 想匹配 `%2e%2e` / `%00` 这类形态，只能在原样字段上做（规范化后的字段已经没有编码了）。
+	QueryRaw      string `protobuf:"bytes,8,opt,name=query_raw,json=queryRaw,proto3" json:"query_raw,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -275,6 +282,13 @@ func (x *Observation) GetQuery() string {
 	return ""
 }
 
+func (x *Observation) GetQueryRaw() string {
+	if x != nil {
+		return x.QueryRaw
+	}
+	return ""
+}
+
 type JudgeResponse struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Action Action                 `protobuf:"varint,1,opt,name=action,proto3,enum=judge.v1.Action" json:"action,omitempty"`
@@ -345,7 +359,7 @@ const file_judge_v1_judge_proto_rawDesc = "" +
 	"\fJudgeRequest\x12\x1f\n" +
 	"\vdecision_id\x18\x01 \x01(\tR\n" +
 	"decisionId\x121\n" +
-	"\bobserved\x18\x02 \x01(\v2\x15.judge.v1.ObservationR\bobserved\"\xae\x02\n" +
+	"\bobserved\x18\x02 \x01(\v2\x15.judge.v1.ObservationR\bobserved\"\xcb\x02\n" +
 	"\vObservation\x12\x1b\n" +
 	"\tsource_ip\x18\x01 \x01(\tR\bsourceIp\x12\x1d\n" +
 	"\n" +
@@ -354,7 +368,8 @@ const file_judge_v1_judge_proto_rawDesc = "" +
 	"\x04path\x18\x04 \x01(\tR\x04path\x12'\n" +
 	"\x0ftls_fingerprint\x18\x05 \x01(\tR\x0etlsFingerprint\x12<\n" +
 	"\aheaders\x18\x06 \x03(\v2\".judge.v1.Observation.HeadersEntryR\aheaders\x12\x14\n" +
-	"\x05query\x18\a \x01(\tR\x05query\x1a:\n" +
+	"\x05query\x18\a \x01(\tR\x05query\x12\x1b\n" +
+	"\tquery_raw\x18\b \x01(\tR\bqueryRaw\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x83\x01\n" +

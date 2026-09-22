@@ -116,26 +116,36 @@ func (r *Receiver) observationFrom(req *http.Request) *judgev1.Observation {
 		Method:    req.Method,
 		Path:      req.URL.Path,
 		Query:     queryOf(req),
+		QueryRaw:  rawQueryOf(req),
 		Headers:   headers,
 	}
 }
 
-// queryOf 取**解码一次**的查询串（不含前导 `?`），供规则匹配。
+// maxDecodeRounds 是查询串规范化的解码轮数上限（同形态③④：解到不动点，最多 3 轮）。
+const maxDecodeRounds = 3
+
+// queryOf 取查询串的**规范化匹配视图**（不含前导 `?`）：反复解码到不动点，上限 `maxDecodeRounds` 轮。
 //
 // 与形态③/④（`deception/proxy`）的 `queryOf` **同语义、各自实现**：适配器之间必须能独立部署（`INT-5`），
 // 两处刻意不共享代码 —— 改其一时必须同时改另一处。
-// 约定：解码一次（`%2e`→`.`、`%20`/`+`→空格）；只解一次；失败时原样传递（`AR-31`）。
+// 约定：解到不动点（`%252e` → `%2e` → `.`；`+`/`%20` → 空格）· 有上限 · 失败时原样传递（`AR-31`）。
+// 它只用于匹配：原样字节见 `rawQueryOf`。
 func queryOf(req *http.Request) string {
-	raw := req.URL.RawQuery
-	if raw == "" {
-		return ""
+	cur := req.URL.RawQuery
+	// 尝试 maxDecodeRounds **次**（不是「轮数 + 1」）：这样常量就是字面意思 ——
+	// 三层编码（`%25252e`）刚好解满，四层及以上停下来（成本钉死，已登记）。
+	for attempt := 0; attempt < maxDecodeRounds; attempt++ {
+		next, err := url.QueryUnescape(cur)
+		if err != nil || next == cur {
+			break
+		}
+		cur = next
 	}
-	decoded, err := url.QueryUnescape(raw)
-	if err != nil {
-		return raw
-	}
-	return decoded
+	return cur
 }
+
+// rawQueryOf 取**原样**查询串（未解码），供审计与「按编码形态匹配」的规则使用（`AR-31`）。
+func rawQueryOf(req *http.Request) string { return req.URL.RawQuery }
 
 func (r *Receiver) clientIP(req *http.Request) string {
 	if r.TrustXFF {

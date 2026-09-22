@@ -670,7 +670,7 @@ func ruleMatch(m *matchDoc, p string) (contract.Match, error) {
 		return contract.Match{}, missing(p + ".match.field")
 	}
 	if !validField(*m.Field) {
-		return contract.Match{}, fmt.Errorf("policy: %s.match.field=%q 未知（允许：user_agent / path / path_norm / query / method / source_ip / tls_fingerprint）", p, *m.Field)
+		return contract.Match{}, fmt.Errorf("policy: %s.match.field=%q 未知（允许：user_agent / path / path_norm / query / query_raw / method / source_ip / tls_fingerprint）", p, *m.Field)
 	}
 	if m.Op == nil {
 		return contract.Match{}, missing(p + ".match.op")
@@ -815,7 +815,7 @@ func nonNil(v []string) []string {
 
 func validField(s string) bool {
 	switch s {
-	case "user_agent", "path", "path_norm", "query", "method", "source_ip", "tls_fingerprint":
+	case "user_agent", "path", "path_norm", "query", "query_raw", "method", "source_ip", "tls_fingerprint":
 		return true
 	default:
 		return false

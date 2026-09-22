@@ -126,10 +126,21 @@ rules:
   - id: "query-sqli-union"
     weight: 0.75
     match: {field: "query", op: "contains", value: "union select"}
-  # ④ 破坏性方法
+  # ④ 破坏性方法（**推荐基线**：会改动服务端状态的方法都算）
+  #
+  # 为什么把 PUT / PATCH 与 DELETE 同档：三者都会改状态 —— 写操作正是数据损失的入口，
+  # 只登记 DELETE 会让「用 PUT 覆盖」这类动作零信号（实测缺口，2026-09-23 关闭）。
+  # 每个方法一条规则（`equals` 是精确比较）：这样信号名能直接说清命中的是哪个方法，
+  # 也便于按业务语义逐条增删（例如只读服务可以整组删掉）。
   - id: "method-destructive"
     weight: 0.5
     match: {field: "method", op: "equals", value: "DELETE"}
+  - id: "method-destructive-put"
+    weight: 0.5
+    match: {field: "method", op: "equals", value: "PUT"}
+  - id: "method-destructive-patch"
+    weight: 0.5
+    match: {field: "method", op: "equals", value: "PATCH"}
 
 # 白名单（INT-25 预留）—— 本期只解析与校验，不消费。
 # 消费方是 director 的引流判定前置：内部 IP / 健康检查 / 监控探针必须在引流判定前放行。

@@ -23,14 +23,16 @@ type Observation struct {
 	Path           string
 	TLSFingerprint string
 	Headers        map[string]string
-	// Query 是**已解码一次**的 URL 查询串（不含前导 `?`）：`%2e`→`.`、`%20`→空格、`+`→空格。
+	// Query 是查询串的**规范化匹配视图**（不含前导 `?`）：适配器**反复解码到不动点**（上限 3 轮）。
 	//
 	// 为什么要它：载荷常在查询串里（`?file=../../etc/passwd`），只看 Path 时完全不可见。
-	// 为什么解码：不解码的话 `%2e%2e%2f` 与 `union%20select` 同样不可见（编码即绕过）。
-	// 为什么只解一次：重复解码会把真实数据改写成另一个值（双侧解码漏洞的根因）。
-	// 解码由**适配器**做（它已经是 HTTP 客户端，`url.QueryUnescape` 就在手边）；
-	// 解码失败时原样传递，从不丢数据。
+	// 为什么解到不动点：只解一轮时「二次编码」（`%252e%252e`）仍可绕过（实测缺口）。
+	// 为什么有上限：每轮都是对攻击者可控输入的线性工作；上限把成本钉死，
+	// 代价是三重及以上编码仍可能绕过（已登记，见 `docs/spec/config.md` §2.4）。
+	// 它**只用于匹配**：转发给上游的仍是原始请求行。
 	Query string
+	// QueryRaw 是客户端**原样发来**的查询串（未解码），供审计与「按编码形态匹配」的规则使用（`AR-31`）。
+	QueryRaw string
 }
 
 // Field 取用于规则匹配的字段值；未知字段返回空串。
@@ -49,6 +51,8 @@ func (o Observation) Field(name string) string {
 		return NormalizePath(o.Path)
 	case "query":
 		return o.Query
+	case "query_raw":
+		return o.QueryRaw
 	case "method":
 		return o.Method
 	case "source_ip":

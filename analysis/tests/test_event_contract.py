@@ -39,6 +39,7 @@ def test_fixture_exists_and_is_the_go_shape() -> None:
         "method",
         "path",
         "query",
+        "query_raw",
         "user_agent",
         "session_id",
         "action",

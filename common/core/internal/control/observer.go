@@ -37,11 +37,15 @@ type DecisionRecord struct {
 	// 把 Cookie 原值写进去等于把认证材料复制进观测库。空串 = 身份未识别（`NI-1`），不得编造。
 	SessionID string `json:"session_id"`
 
-	// Query 是**已解码一次**的查询串（与判定用的那个字段同值，见 `docs/spec/config.md` §2.4）。
+	// Query 是查询串的**规范化匹配视图**（反复解码到不动点，上限 3 轮 —— 与判定用的同一个值）。
 	//
 	// 为什么要进观测面：规则可以匹配它，运营就得能看见它 —— 否则「这条为什么得 0.7 分」无从解释。
-	// 与 `path` 同一个口径：它是**匹配视图**（解码一次），原样字节仍在适配器侧的日志/流量副本里。
 	Query string `json:"query"`
+	// QueryRaw 是客户端**原样发来**的查询串（未解码）：审计与「按编码形态匹配」都用它。
+	//
+	// 有它才能回答「我们匹配到的是编码后的形态还是解码后的」——只留一个字段时，
+	// 事后无法还原「攻击者到底写了什么」。口径见 `docs/spec/config.md` §2.4。
+	QueryRaw string `json:"query_raw"`
 
 	Action   string `json:"action"`   // 三值（放行 / 改道 / 拦截）
 	Severity string `json:"severity"` // 旁路字段

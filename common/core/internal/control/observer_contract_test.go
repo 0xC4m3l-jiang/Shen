@@ -28,6 +28,7 @@ func TestDecisionRecordWireContract(t *testing.T) {
 		Method:     "GET",
 		Path:       "/.git/config",
 		Query:      "file=../../etc/passwd",
+		QueryRaw:   "file=%2e%2e%2f%2e%2e%2fetc%2fpasswd",
 		UserAgent:  "HeadlessChrome/120",
 		SessionID:  "9d2a6f0c5b1e4a37",
 		Action:     "route_origin",

@@ -39,19 +39,21 @@ func newReceiver(j *fakeJudge, t *fakeTelemetry) *Receiver {
 	return &Receiver{Judge: j, Report: t, Now: func() time.Time { return fixed }, TrustXFF: true}
 }
 
-// TestQueryOfDecodesOnce 断言形态①的观测也带**解码一次**的查询串。
+// TestQueryOfReachesFixedPoint 断言形态①的观测也带**解码一次**的查询串。
 //
 // 与形态③④（`deception/proxy`）的 `queryOf` 是**两份独立实现**（适配器必须能各自部署，INT-5）——
 // 所以两边各有一例同样的用例：改一处而漏另一处时，只能靠各自那份用例抓住。
-func TestQueryOfDecodesOnce(t *testing.T) {
+func TestQueryOfReachesFixedPoint(t *testing.T) {
 	cases := []struct{ raw, want string }{
 		{"file=../../etc/passwd", "file=../../etc/passwd"},
 		{"file=%2e%2e%2f%2e%2e%2fetc%2fpasswd", "file=../../etc/passwd"},
 		{"q=union+select", "q=union select"},
 		{"q=union%20select", "q=union select"},
 		{"", ""},
-		{"file=%252e%252e%252f", "file=%2e%2e%2f"}, // 只解一层：重复解码会改写真实数据
-		{"q=100%", "q=100%"},                       // 非法转义：原样传递，不丢载荷
+		{"file=%252e%252e%252f", "file=../"}, // 解到不动点：二次编码是实测绕过手段
+		{"file=%25252e", "file=."},           // 三层编码也解掉（上限内）
+		{"file=%2525252e", "file=%2e"},       // 四层：解满上限即停（成本钉死）
+		{"q=100%", "q=100%"},                 // 非法转义：原样传递，不丢载荷
 	}
 	for _, c := range cases {
 		target := "/download"
@@ -77,7 +79,10 @@ func TestReceiver_ObservationCarriesQuery(t *testing.T) {
 		t.Errorf("path 必须不含查询串，得到 %q", obs.GetPath())
 	}
 	if obs.GetQuery() != "q=union select" {
-		t.Errorf("query 必须是解码一次后的形态，得到 %q", obs.GetQuery())
+		t.Errorf("query 必须是规范化后的形态，得到 %q", obs.GetQuery())
+	}
+	if obs.GetQueryRaw() != "q=union%20select" {
+		t.Errorf("query_raw 必须是原样字节（审计用），得到 %q", obs.GetQueryRaw())
 	}
 }
 

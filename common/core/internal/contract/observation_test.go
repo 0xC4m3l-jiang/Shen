@@ -38,4 +38,12 @@ func TestFieldPathNormIsDerivedNotStored(t *testing.T) {
 	if o.Field("不存在的字段") != "" {
 		t.Fatal("未知字段必须返回空串")
 	}
+	// query 与 query_raw 是两个字段：一个是规范化匹配视图，一个是原样审计值（AR-31）。
+	q := Observation{Query: "file=../etc/passwd", QueryRaw: "file=%2e%2e%2fetc%2fpasswd"}
+	if got := q.Field("query"); got != "file=../etc/passwd" {
+		t.Fatalf("query 应返回规范化视图，得到 %q", got)
+	}
+	if got := q.Field("query_raw"); got != "file=%2e%2e%2fetc%2fpasswd" {
+		t.Fatalf("query_raw 应返回原样值，得到 %q", got)
+	}
 }

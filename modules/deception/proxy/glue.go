@@ -38,26 +38,40 @@ func actionOf(resp *judgev1.JudgeResponse) judgev1.Action {
 	}
 }
 
-// queryOf 取**解码一次**的查询串（不含前导 `?`），供规则匹配。
+// maxDecodeRounds 是查询串规范化的**解码轮数上限**（含第一轮）。
+//
+// 为什么是 3：一轮治不了「二次编码」（`%252e` → `%2e`，攻击者本意是 `.`），
+// 实测里二次编码就是绕过手段之一；而每多一轮都是对**攻击者可控输入**的线性工作，
+// 所以把成本钉死在这里：解到不动点或解满 3 轮即停。代价（三重及以上编码仍可能绕过）已登记。
+const maxDecodeRounds = 3
+
+// queryOf 取查询串的**规范化匹配视图**（不含前导 `?`）：反复解码到不动点，上限 `maxDecodeRounds` 轮。
 //
 // 三条约定（与 proto / 规则引擎三方一致，见 `docs/spec/config.md` §2.4）：
-//   - 解码一次：`%2e`→`.`、`%20`→空格、`+`→空格 —— 否则编码形态（`%2e%2e%2f`、`union%20select`）不可见；
-//   - **只**解一次：重复解码会把真实数据改写成另一个值（双侧解码漏洞的根因）；
-//   - 解码失败时原样传递：宁可少匹配，也不把载荷弄丢（`AR-31`）。
+//   - 解到不动点：`%252e` → `%2e` → `.`；`+` 与 `%20` → 空格 —— 否则编码形态不可见；
+//   - **有上限**：把「对攻击者可控输入」的工作量钉死（代价：三重编码仍可能绕过）；
+//   - 出错即停、原样传递：宁可少匹配，也不把载荷弄丢（`AR-31`）。
+//
+// 它**只用于匹配**：转发给上游的仍是原始请求行（原样字节见 `rawQueryOf`）。
 //
 // 形态①的接收端（`deception/mirror`）有一份**同样语义**的实现。两处刻意不共享代码：
 // 适配器之间必须能各自独立部署（`INT-5`）—— 改其一时必须同时改另一处。
 func queryOf(r *http.Request) string {
-	raw := r.URL.RawQuery
-	if raw == "" {
-		return ""
+	cur := r.URL.RawQuery
+	// 尝试 maxDecodeRounds **次**（不是「轮数 + 1」）：这样常量就是字面意思 ——
+	// 三层编码（`%25252e`）刚好解满，四层及以上停下来（成本钉死，已登记）。
+	for attempt := 0; attempt < maxDecodeRounds; attempt++ {
+		next, err := url.QueryUnescape(cur)
+		if err != nil || next == cur {
+			break
+		}
+		cur = next
 	}
-	decoded, err := url.QueryUnescape(raw)
-	if err != nil {
-		return raw
-	}
-	return decoded
+	return cur
 }
+
+// rawQueryOf 取**原样**查询串（未解码），供审计与「按编码形态匹配」的规则使用（`AR-31`）。
+func rawQueryOf(r *http.Request) string { return r.URL.RawQuery }
 
 // ── 观测构造 ─────────────────────────────────────────────────────────────────
 
@@ -83,6 +97,7 @@ func observationFrom(r *http.Request, trustXFF bool) *judgev1.Observation {
 		Method:    r.Method,
 		Path:      r.URL.Path,
 		Query:     queryOf(r),
+		QueryRaw:  rawQueryOf(r),
 		Headers:   headers,
 	}
 }

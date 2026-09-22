@@ -121,6 +121,16 @@ func TestLoadAcceptsQueryField(t *testing.T) {
 	if !found {
 		t.Fatalf("query 字段的规则应被装载，得到 %+v", rules)
 	}
+
+	// query_raw 同样合法（它承载「原样字节」，用于审计与按编码形态匹配）。
+	l2 := mustLoad(t, mutate(t, validYAML, `field: "path"`, `field: "query_raw"`))
+	rules2, err := l2.Rules(context.Background())
+	if err != nil {
+		t.Fatalf("取规则失败：%v", err)
+	}
+	if len(rules2) == 0 {
+		t.Fatal("query_raw 的规则应被装载")
+	}
 }
 
 func TestLoadValidConfig(t *testing.T) {
