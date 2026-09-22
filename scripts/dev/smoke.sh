@@ -38,6 +38,13 @@ pick_port() {
 	return 1
 }
 
+# cleanup 收尾：停核心、删临时目录。
+#
+# 为什么要 `+ INT TERM PIPE` 三件（2026-09-22 实测踩过）：
+# 只挂 EXIT 时，脚本若被信号终止（Ctrl-C、被 SIGPIPE 打断 —— 例如
+# `make dev | head` 把下游关掉），EXIT 陷阱不执行，核心就成了孤儿进程
+# 一直占着 19500-19550 的端口；攒够 51 个之后 `make dev` 直接报
+# 「找不到空闲端口」。PIPE 尤其容易被忽略，因为「管道下游提前退出」看起来不像错误。
 cleanup() {
 	if [ -n "$CORE_PID" ] && kill -0 "$CORE_PID" 2>/dev/null; then
 		kill "$CORE_PID" 2>/dev/null || true
@@ -45,7 +52,18 @@ cleanup() {
 	fi
 	rm -rf "$TMP"
 }
+
+# 收到信号时先收尾再退出（幂等：cleanup 会被 EXIT 陷阱再跑一次，无害）。
+# 为什么不只挂 EXIT：EXIT 陷阱在**被信号杀死**时不执行 —— 于是核心会变孤儿（见上）。
+on_signal() {
+	local code=$1
+	cleanup
+	exit "$code"
+}
 trap cleanup EXIT
+trap 'on_signal 130' INT
+trap 'on_signal 143' TERM
+trap 'on_signal 141' PIPE
 
 fail() {
 	echo
@@ -117,7 +135,11 @@ grep "weight" "$BAD_LOG" | head -1
 
 echo
 echo "== 3/6 起核心（影子模式）：$ADDR =="
-SHEN_CONFIG="$CFG" SHEN_LISTEN="$ADDR" go run ./common/core/cmd/core >"$LOG" 2>&1 &
+# 先编到临时目录再直接运行，**不要**用 `go run`：
+# `go run` 是包装器 —— `$!` 拿到的是包装器的 PID，它把真正的 core 作为子进程启动，
+# 于是 `kill $CORE_PID` 只杀掉包装器，core 变成孤儿继续占端口（2026-09-22 实测泄漏 51 个）。
+go build -o "$TMP/core" ./common/core/cmd/core || fail "核心编译失败"
+SHEN_CONFIG="$CFG" SHEN_LISTEN="$ADDR" "$TMP/core" >"$LOG" 2>&1 &
 CORE_PID=$!
 for _ in $(seq 1 60); do
 	if grep -q "核心已启动" "$LOG"; then
