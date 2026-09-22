@@ -1,1 +1,0 @@
-[{"decision_id":"d118ea296e02b856b4616febc82b797d","source_ip":"127.0.0.1","method":"GET","path":"/api/users","user_agent":"HeadlessChrome/120","action":"route_mirage","severity":"none","backend":"mirage","score":0.9,"signals":["ua-headless"],"at":"2026-09-22T00:05:39.973811+08:00"}]

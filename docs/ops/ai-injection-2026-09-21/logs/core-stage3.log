@@ -1,6 +1,0 @@
-2026/09/22 00:05:36 策略已装载 policy_id=ai-check version=3 checksum=1beacccd474d6cf73d2b9201252d1dea67c5116fdefafc8b318055511f01f50f 规则=1 条 灰度=100%
-2026/09/22 00:05:36 诱饵面：0 个资产启用（observe-only，MD-25）
-2026/09/22 00:05:36 幻境后端池：1 个登记 / 1 个可用（不实现具体蜜罐，ADR-0011）
-2026/09/22 00:05:36 核心已启动（接管模式（产出真实三值决策））：127.0.0.1:57921
-time=2026-09-22T00:05:39.973+08:00 level=INFO msg=decision decision_id=d118ea296e02b856b4616febc82b797d action=route_mirage severity=none backend=mirage score=0.9 signals=[ua-headless] method=GET path=/api/users source_ip=127.0.0.1 user_agent=HeadlessChrome/120 at=2026-09-22T00:05:39.973+08:00
-2026/09/22 00:05:39 收到 terminated，正在退出

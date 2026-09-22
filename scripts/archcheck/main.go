@@ -32,6 +32,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"shen/scripts/internal/docs"
 	"sort"
 	"strings"
 
@@ -82,17 +83,25 @@ func main() {
 		fatal("找不到仓库根（go list -m 失败）：%v", err)
 	}
 
-	tops, err := parseTopLevelDirs(filepath.Join(root, "docs/design/structure.md"))
-	if err != nil {
-		fatal("解析 structure.md §1.1 的顶层目录失败：%v", err)
-	}
-	children, err := parseContainerChildren(filepath.Join(root, "docs/design/structure.md"))
-	if err != nil {
-		fatal("解析 structure.md §1.1 的容器子目录失败：%v", err)
-	}
-	mods, err := modules.Parse(filepath.Join(root, "docs/design/modules.md"))
-	if err != nil {
-		fatal("解析 modules.md §1.1 的模块清单失败：%v", err)
+	// 设计文档不入库（见 .gitignore）：在的时候全跑；不在的时候**只跳过文档派生的那几项**，
+	// 其余检查（跨平面 import · store 唯一出口 · CGO · 语言层数 · 决策闭集 · 热路径纯度 · L4 写侧）照跑。
+	docsOK := docs.Present(root)
+	var tops []string
+	var children map[string][]string
+	var mods []modules.Module
+	if docsOK {
+		var err error
+		if tops, err = parseTopLevelDirs(filepath.Join(root, "docs/design/structure.md")); err != nil {
+			fatal("解析 structure.md §1.1 的顶层目录失败：%v", err)
+		}
+		if children, err = parseContainerChildren(filepath.Join(root, "docs/design/structure.md")); err != nil {
+			fatal("解析 structure.md §1.1 的容器子目录失败：%v", err)
+		}
+		if mods, err = modules.Parse(filepath.Join(root, "docs/design/modules.md")); err != nil {
+			fatal("解析 modules.md §1.1 的模块清单失败：%v", err)
+		}
+	} else {
+		fmt.Println(docs.SkipNote)
 	}
 	pkgs, err := loadPackages()
 	if err != nil {
@@ -118,12 +127,16 @@ func main() {
 	}
 
 	var findings []finding
-	findings = append(findings, checkTopLevel(root, tops)...)
-	findings = append(findings, checkContainerChildren(root, children)...)
+	if docsOK {
+		findings = append(findings, checkTopLevel(root, tops)...)
+		findings = append(findings, checkContainerChildren(root, children)...)
+	}
 	findings = append(findings, checkCrossPlane(pkgs)...)
 	findings = append(findings, checkInternalRule(pkgs)...)
 	findings = append(findings, checkStoreIsSoleIO(pkgs)...)
-	findings = append(findings, checkModulesAgainstList(root, pkgs, mods)...)
+	if docsOK {
+		findings = append(findings, checkModulesAgainstList(root, pkgs, mods)...)
+	}
 	findings = append(findings, checkNoCGO(pkgs, root)...)
 	findings = append(findings, checkLanguages(root)...)
 	findings = append(findings, checkGuardrailIsSoleExit(root)...)
@@ -1229,6 +1242,10 @@ func checkDecisionClosedSet(root string) []finding {
 	}
 
 	// ③ 文档侧：三值必须都在 design/terminology.md 里（术语表是三值的权威出处）
+	// 文档侧交叉核对：文档不在本仓库时跳过这一段（代码侧的闭集检查仍照跑）
+	if !docs.Present(root) {
+		return out
+	}
 	doc, derr := os.ReadFile(filepath.Join(root, "docs/design/terminology.md"))
 	if derr != nil {
 		return append(out, finding{ID: "MD-12", Human: "读 terminology.md 失败", Where: derr.Error()})

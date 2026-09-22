@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"shen/scripts/internal/docs"
 	"sort"
 	"strings"
 )
@@ -68,6 +69,11 @@ func main() {
 	root, err := repoRoot()
 	if err != nil {
 		fatal("找不到仓库根（go list -m 失败）：%v", err)
+	}
+
+	if !docs.Present(root) {
+		fmt.Println(docs.SkipNote)
+		return
 	}
 
 	prefixes, err := parsePrefixes(filepath.Join(root, "docs/design/README.md"))

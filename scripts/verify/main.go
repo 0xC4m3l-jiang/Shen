@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"shen/scripts/internal/docs"
 	"sort"
 	"strconv"
 	"strings"
@@ -99,6 +100,11 @@ func main() {
 	only := flag.String("only", "", "只核这些模块（逗号分隔）")
 	list := flag.Bool("list", false, "只列出模块与解析出的证据，不做判定")
 	flag.Parse()
+
+	if !docs.Present(root) {
+		fmt.Println(docs.SkipNote)
+		return
+	}
 
 	mods, err := modules.Parse(filepath.Join(root, "docs/design/modules.md"))
 	fatalOn(err, "解析 modules.md §1.1 失败")
@@ -224,6 +230,9 @@ func inspect(
 				e.Problems = append(e.Problems, fmt.Sprintf("测试目标要执行的程序不存在：%s（先跑 make pyenv）", bin))
 				continue
 			}
+			// 可执行程序已由上面的白名单（allowedBinaries）与存在性检查钉死，
+			// 文档解析结果只会成为**参数**，且不经过 shell ⇒ 不存在命令注入面。
+			// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command
 			cmd := exec.Command(bin, t.Args[1:]...)
 			cmd.Dir = filepath.Join(root, t.Dir)
 			out, err := cmd.CombinedOutput()

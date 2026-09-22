@@ -32,6 +32,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"shen/scripts/internal/docs"
 	"sort"
 	"strconv"
 	"strings"
@@ -103,6 +104,13 @@ const filterMarker = "check-leak:filter"
 func main() {
 	root := flag.String("root", ".", "仓库根目录")
 	flag.Parse()
+
+	// 设计文档不入库（见 .gitignore）：响应面模块清单在 docs/design/modules.md 里，
+	// 没有它就无从知道该扫哪些目录 ⇒ 跳过并打印一行说明（不静默、也不算通过）。
+	if !docs.Present(*root) {
+		fmt.Println(docs.SkipNote)
+		return
+	}
 
 	findings, err := run(*root)
 	if err != nil {
