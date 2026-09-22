@@ -86,6 +86,20 @@ EVIDENCE_CACHE_CAP = 4096
 
 DEFAULT_LIMIT = 200
 
+MAX_SESSIONS_PER_RUN = 8
+"""一轮最多分析多少个会话（近线预算：每个会话都跑三步，模型路径下就是 N 次调用）。
+
+为什么要有上限：一轮的分析量必须可预测。超出上限的会话**不静默丢弃** ——
+计数进 `AnalysisRun.truncated_sessions` 并写进日志，下一轮（事件仍在窗口内）再分析。
+"""
+
+UNKNOWN_SESSION = ""
+"""身份未识别的会话键。
+
+为什么要显式写出：旧版事件（v1 夹具）没有 `session_id`。把它们的键当成 `""` 单独一组，
+**禁止**把它们拱进某个已知会话 —— 「同一会话」是分析结论的前提，猜错了就是编造证据（`AR-12`）。
+"""
+
 
 @dataclass
 class EvidenceCache:
@@ -110,6 +124,34 @@ class EvidenceCache:
 
 
 @dataclass
+class SessionAnalysis:
+    """**一个会话**的三步结果。
+
+    为什么按会话存而不是合成一份：意图、攻击链与策略都是**会话级**结论 ——
+    把多个会话的观测拼在一起产出的结论，其证据引用会跨会话（`AR-12` 要求引用真实存在，
+    但「真实存在」不等于「属于同一个主体」）。改造前 `run_once` 正是这么做的：
+    它取 `admitted[0].session_id` 当整批的会话，其余会话的观测混进同一份结论。
+    """
+
+    session_id: str
+    observations: list[Observation] = field(default_factory=list)
+    intent: Envelope | None = None
+    chain: Chain | None = None
+    strategy: Envelope | None = None
+    rotation: dict[str, object] | None = None
+    intent_generator: str = RULES_GENERATOR
+    chain_generator: str = RULES_GENERATOR
+    strategy_generator: str = RULES_GENERATOR
+    model_rejected: dict[str, str] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def unknown_identity(self) -> bool:
+        """身份未识别（事件没带 `session_id`）—— 结论可以产，但必须能被看出来。"""
+        return self.session_id == UNKNOWN_SESSION
+
+
+@dataclass
 class AnalysisRun:
     """一轮分析的结果（供日志、测试与人工核对）。"""
 
@@ -118,6 +160,9 @@ class AnalysisRun:
     suppressed: int = 0
     reported: int = 0
     duplicated: int = 0
+    sessions: list[SessionAnalysis] = field(default_factory=list)
+    truncated_sessions: int = 0
+    """因超出 `MAX_SESSIONS_PER_RUN` 而**本轮未分析**的会话数（不是错误，但必须可见）。"""
     conclusions: list[dict[str, object]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: Envelope | None = None
@@ -131,6 +176,8 @@ class AnalysisRun:
     """每一步实际是谁产的（`RULES_GENERATOR` / `MODEL_GENERATOR`）。
 
     默认值是规则版：不传 `client` 时整轮与接模型之前**逐字一致**（`make dev` 的回归基线）。
+
+    多会话时这三个字段是**第一个会话**的值（兼容字段）；要逐会话看请读 `sessions`。
     """
 
     model_rejected: dict[str, str] = field(default_factory=dict)
@@ -149,7 +196,9 @@ class AnalysisRun:
     def summary(self) -> str:
         return (
             f"取事件 {self.fetched} 条 · 去重后 {self.admitted} 条（抑制 {self.suppressed}）· "
-            f"结论 {len(self.conclusions)} 条（新 {self.reported} / 重复 {self.duplicated}）"
+            f"会话 {len(self.sessions)} 个"
+            + (f"（另有 {self.truncated_sessions} 个未分析）" if self.truncated_sessions else "")
+            + f" · 结论 {len(self.conclusions)} 条（新 {self.reported} / 重复 {self.duplicated}）"
             + (f" · 模型回落 {self.rejected} 步" if self.rejected else "")
             + (f" · 错误 {self.errors}" if self.errors else "")
         )
@@ -200,15 +249,111 @@ def run_once(
     if not admitted:
         return run  # 无新态势：不猜、不产出结论（AR-15）
 
+    # ── 按会话分组（FIX-5/FIX-6）────────────────────────────────────────────
+    # 结论是**会话级**的：意图、攻击链与策略描述的都是「一个主体在做什么」。
+    # 改造前这里取 `admitted[0].session_id` 当整批的会话，其余会话的观测混进同一份结论 ——
+    # 跨会话串链，引用看似真实、语义却是错的。现在每个会话各产一份。
+    groups, truncated = _group_by_session(admitted, MAX_SESSIONS_PER_RUN)
+    run.truncated_sessions = truncated
+
+    for index, group in enumerate(groups):
+        session = _analyze_session(
+            group,
+            evidence=evidence,
+            decoys=_decoys(fetched),
+            client=client,
+        )
+        run.sessions.append(session)
+        run.errors.extend(session.errors)
+        run.model_rejected.update(session.model_rejected)
+        if index == 0:
+            # 兼容字段：既有读侧（日志 / 测试 / 控制台脚本）看第一组。
+            run.intent, run.chain, run.strategy = session.intent, session.chain, session.strategy
+            run.rotation = session.rotation
+            run.intent_generator = session.intent_generator
+            run.chain_generator = session.chain_generator
+            run.strategy_generator = session.strategy_generator
+
+        for kind, envelope, generator in (
+            (INTENT_KIND, session.intent, session.intent_generator),
+            (STRATEGY_KIND, session.strategy, session.strategy_generator),
+        ):
+            if envelope is None:
+                continue
+            conclusion = _conclusion(
+                kind,
+                envelope,
+                group,
+                generator=generator,
+                model_rejected=session.model_rejected.get(kind),
+            )
+            run.conclusions.append(conclusion)
+            event = WireEvent(
+                event_id=str(conclusion["event_id"]),
+                event_type=CONCLUSION_EVENT_TYPE,
+                session_id=session.session_id,
+                payload=json.dumps(conclusion, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+                created_at=now or _now_iso(),
+            )
+            try:
+                accepted, duplicated = port.report(event)
+            except TelemetryUnavailable as exc:
+                run.errors.append(f"结论上报失败：{exc}")
+                continue
+            run.reported += accepted
+            run.duplicated += duplicated
+    return run
+
+
+def _group_by_session(
+    admitted: Sequence[Observation], max_sessions: int
+) -> tuple[list[list[Observation]], int]:
+    """把去重后的观测按 `session_id` 分组（保持首次出现顺序），并限制组数。
+
+    返回 `(组列表, 被截断的会话数)`。
+
+    两条约定：
+
+    - **保持首次出现顺序**（事件是 newest-first）⇒ 最近活跃的会话先被分析；
+    - 构造顺序（`dict` 保留插入序）而不是排序：排序会让「哪一组先分析」变成一个额外决定。
+
+    被截断的会话**必须**能被调用方看见（返回值不是 None，也不静默丢弃）：
+    它们下一轮仍在事件窗口里，会重新进入分组。
+    """
+    buckets: dict[str, list[Observation]] = {}
+    for obs in admitted:
+        buckets.setdefault(obs.session_id, []).append(obs)
+    groups = list(buckets.values())
+    if max_sessions <= 0 or len(groups) <= max_sessions:
+        return groups, 0
+    return groups[:max_sessions], len(groups) - max_sessions
+
+
+def _analyze_session(
+    observations: Sequence[Observation],
+    *,
+    evidence: EvidenceIndex,
+    decoys: Sequence[str],
+    client: AnalysisClient | None,
+) -> SessionAnalysis:
+    """跑完**一个会话**的三步：意图 → 攻击链 → 策略。
+
+    三步的顺序与回落语义与改造前逐字一致（模型优先、失败回落、各自标注产出者）——
+    变的只是「一次只处理一个会话」，因此 `AR-12` 的证据引用不再跨会话。
+    """
+    session = SessionAnalysis(
+        session_id=observations[0].session_id, observations=list(observations)
+    )
+    admitted = session.observations
+    observations_payload = _observations_payload(admitted)
+
     # ① 意图：模型优先，失败/被拒则回落确定性规则。两条路**各自标注**产出者 ——
     #    禁止用规则输出冒充模型输出，反之亦然（AR-15）。
     #    模型给的 `evidence_ids` **也要过 AR-12**：结论里有两处证据引用（顶层的
     #    「本轮参与分析的事件」与 `data` 里「模型引用的证据」），后者是模型自由填的，
     #    不校验就等于让结论携带**编造的证据 ID**（审计/控制台会当成真的）。
-    observations_payload = _observations_payload(admitted)
-    session_id = admitted[0].session_id
     data, reason = _model_candidate(
-        INTENT_KIND, observations_payload, client=client, session_id=session_id
+        INTENT_KIND, observations_payload, client=client, session_id=session.session_id
     )
     if data is not None:
         try:
@@ -216,14 +361,14 @@ def run_once(
         except Exception as exc:
             data = None
             reason = f"证据引用校验失败：{type(exc).__name__}: {exc}"
-    run.intent = accept(data) if data is not None else recognize(admitted)
-    run.intent_generator = MODEL_GENERATOR if data is not None else RULES_GENERATOR
+    session.intent = accept(data) if data is not None else recognize(admitted)
+    session.intent_generator = MODEL_GENERATOR if data is not None else RULES_GENERATOR
     if reason is not None:
-        run.model_rejected[INTENT_KIND] = reason
+        session.model_rejected[INTENT_KIND] = reason
 
     # ② 攻击链：模型优先；模型给的证据引用**仍要过 AR-12**（与确定性版同语义）。
     data, chain_reason = _model_candidate(
-        CHAIN_KIND, observations_payload, client=client, session_id=session_id
+        CHAIN_KIND, observations_payload, client=client, session_id=session.session_id
     )
     chain_from_model: Chain | None = None
     if data is not None:
@@ -237,75 +382,50 @@ def run_once(
             chain_from_model = None
             chain_reason = f"链不可用：{type(exc).__name__}: {exc}"
     if chain_from_model is not None:
-        run.chain = chain_from_model
-        run.chain_generator = MODEL_GENERATOR
+        session.chain = chain_from_model
+        session.chain_generator = MODEL_GENERATOR
     else:
         try:
             # AR-12：链里引用的证据 ID **必须**真实存在于遥测（缓存即已取到的证据集合）
-            run.chain = reconstruct(admitted, evidence=evidence)
+            session.chain = reconstruct(admitted, evidence=evidence)
         except Exception as exc:
-            run.errors.append(f"攻击链作废：{exc}")
-            run.chain = None
-        run.chain_generator = RULES_GENERATOR
+            session.errors.append(f"攻击链作废：{exc}")
+            session.chain = None
+        session.chain_generator = RULES_GENERATOR
     if chain_reason is not None:
-        run.model_rejected[CHAIN_KIND] = chain_reason
+        session.model_rejected[CHAIN_KIND] = chain_reason
 
     # ③ 策略：模型优先，失败/被拒则回落确定性版。
     data, reason = _model_candidate(
         STRATEGY_KIND,
-        _strategy_payload(run, admitted=admitted, decoys=_decoys(fetched)),
+        _strategy_payload(session, admitted=admitted, decoys=decoys),
         client=client,
-        session_id=session_id,
+        session_id=session.session_id,
     )
-    run.strategy = (
+    session.strategy = (
         accept(data)
         if data is not None
         else generate(
             StrategyInput(
-                intent_category=_category_of(run.intent),
-                chain_stages=[stage.name for stage in (run.chain.stages if run.chain else ())],
-                broken_signals=[sig.kind for sig in (run.chain.broken if run.chain else ())],
-                available_decoys=_decoys(fetched),
+                intent_category=_category_of(session.intent),
+                chain_stages=[
+                    stage.name for stage in (session.chain.stages if session.chain else ())
+                ],
+                broken_signals=[
+                    sig.kind for sig in (session.chain.broken if session.chain else ())
+                ],
+                available_decoys=decoys,
             )
         )
     )
-    run.strategy_generator = MODEL_GENERATOR if data is not None else RULES_GENERATOR
+    session.strategy_generator = MODEL_GENERATOR if data is not None else RULES_GENERATOR
     if reason is not None:
-        run.model_rejected[STRATEGY_KIND] = reason
+        session.model_rejected[STRATEGY_KIND] = reason
 
-    run.rotation = decide_rotation(
-        [sig.kind for sig in (run.chain.broken if run.chain else ())]
+    session.rotation = decide_rotation(
+        [sig.kind for sig in (session.chain.broken if session.chain else ())]
     ).to_wire()
-
-    for kind, envelope, generator in (
-        (INTENT_KIND, run.intent, run.intent_generator),
-        (STRATEGY_KIND, run.strategy, run.strategy_generator),
-    ):
-        if envelope is None:
-            continue
-        conclusion = _conclusion(
-            kind,
-            envelope,
-            admitted,
-            generator=generator,
-            model_rejected=run.model_rejected.get(kind),
-        )
-        run.conclusions.append(conclusion)
-        event = WireEvent(
-            event_id=str(conclusion["event_id"]),
-            event_type=CONCLUSION_EVENT_TYPE,
-            session_id=session_id,
-            payload=json.dumps(conclusion, ensure_ascii=False, sort_keys=True).encode("utf-8"),
-            created_at=now or _now_iso(),
-        )
-        try:
-            accepted, duplicated = port.report(event)
-        except TelemetryUnavailable as exc:
-            run.errors.append(f"结论上报失败：{exc}")
-            continue
-        run.reported += accepted
-        run.duplicated += duplicated
-    return run
+    return session
 
 
 def _model_candidate(
@@ -351,13 +471,13 @@ def _observations_payload(admitted: Sequence[Observation]) -> dict[str, Any]:
 
 
 def _strategy_payload(
-    run: AnalysisRun, *, admitted: Sequence[Observation], decoys: Sequence[str]
+    session: SessionAnalysis, *, admitted: Sequence[Observation], decoys: Sequence[str]
 ) -> dict[str, Any]:
-    """策略步的输入：意图类别 + 链的阶段 / 识破信号 + 可用诱饵（都来自本轮真实结果）。"""
+    """策略步的输入：意图类别 + 链的阶段 / 识破信号 + 可用诱饵（都来自**本会话**的真实结果）。"""
     return {
-        "intent": _category_of(run.intent),
-        "stages": [stage.name for stage in (run.chain.stages if run.chain else ())],
-        "broken_signals": [sig.kind for sig in (run.chain.broken if run.chain else ())],
+        "intent": _category_of(session.intent),
+        "stages": [stage.name for stage in (session.chain.stages if session.chain else ())],
+        "broken_signals": [sig.kind for sig in (session.chain.broken if session.chain else ())],
         "available_decoys": list(decoys),
         "observations": [obs.to_untrusted() for obs in admitted],
     }

@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -118,6 +119,9 @@ func run() error {
 
 	// CookieName 是业务自身的 session cookie 名（会话身份三级优先级的第 ① 级）。
 	sess := session.New("sid")
+	// 会话面具的密钥（观测面用；不设也能跑 —— 默认密钥只用于脱敏，不是秘密）。
+	// 为什么要可配：换密钥即切断观测库里的历史会话关联（轮换受控）。
+	sessionMaskKey := os.Getenv("SHEN_SESSION_MASK_KEY")
 	// 观测面推送（ADR-0027）：事件**落库之后**旁路广播给订阅者（控制台的实时流）。
 	// 没有订阅者时它几乎零成本（Hub.Publish 只取一次读锁），也不会阻塞上报路径。
 	eventHub := telemetry.NewHub()
@@ -172,12 +176,13 @@ func run() error {
 	breaker := control.NewBreaker(control.BreakerConfig{})
 	// 观测面（写侧 + 读侧）：控制台要能回答「这个请求为什么被判成这样、然后去了哪」。
 	// 写侧把每次判定同时落成**事件**（供 UI 直接读）与**判定记录**（数据模型要求，structure.md §3）。
-	observer := decisionRecorder{events: collector, decisions: stores.Decision, logger: newDecisionLogger()}
+	observer := &decisionRecorder{events: collector, decisions: stores.Decision, logger: newDecisionLogger()}
 	judgev1.RegisterDeceptionJudgeServer(srv,
 		control.NewJudgeService(decider, sess,
 			control.WithBreaker(breaker),
 			control.WithIsolation(surf.isolate),
-			control.WithDecisionRecorder(observer)))
+			control.WithDecisionRecorder(observer),
+			control.WithSessionMasker(session.NewMasker(sessionMaskKey))))
 
 	// AI 内容装载：**只装一次**，让「策略面投影的内容」与「控制台看到的内容」必然是同一份。
 	// 装两次就有机会不一致 —— 而控制台那一眼正是用来判「当下是不是真的在注入」的。
@@ -331,6 +336,8 @@ func assertConsistency(ctx context.Context, r responder.Responder) error {
 type decisionRecorder struct {
 	events    telemetry.Telemetry
 	decisions store.DecisionStore
+	// seq 让同一 decision_id 下的多次判定各自成一条事件（见 Record 的注释）。
+	seq atomic.Uint64
 	// logger 是**逐判定**的结构化日志出口（运维面）。
 	// 与响应面的区别：日志是内部的，可以带分值/信号；响应禁止回显（ST-7）。
 	logger *slog.Logger
@@ -349,13 +356,22 @@ func newDecisionLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stdout, opts))
 }
 
-func (r decisionRecorder) Record(ctx context.Context, rec control.DecisionRecord) error {
+func (r *decisionRecorder) Record(ctx context.Context, rec control.DecisionRecord) error {
 	payload, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
+	// 事件 id **逐判定唯一**（`decision:<decision_id>:<序>`），而不是等于 decision_id：
+	//
+	//   - `decision_id` 按（来源标识, 会话, 路径, 时间窗）派生（`ST-10`），**不含 UA / 方法 / 查询串**；
+	//   - 适配器的本地缓存键已覆盖这些输入（见 `modules/deception/proxy/cache.go` 的 cacheKey），
+	//     所以同窗口内「不同 UA」会真的判两次 —— 两次都是事实。
+	//
+	// 若事件 id 仍等于 decision_id，第二次会被幂等键（`AR-11`）折叠掉：路由对了、证据少一条。
+	// 与适配器 `request_judged` 的做法一致（`docs/spec/events.md` §2.2）。
+	seq := r.seq.Add(1)
 	if _, err := r.events.Report(ctx, contract.Event{
-		EventID:   "decision:" + rec.DecisionID, // 幂等键：同一 decision_id 不重复记（AR-11）
+		EventID:   fmt.Sprintf("decision:%s:%d", rec.DecisionID, seq),
 		Type:      "decision",
 		ActorID:   rec.SourceIP,
 		Payload:   payload,
@@ -378,7 +394,7 @@ func (r decisionRecorder) Record(ctx context.Context, rec control.DecisionRecord
 // logDecision 打一条逐判定日志 —— 本地排查"这个请求为什么被判成这样、然后去了哪"的第一入口。
 //
 // 只记观测面已有的事实，不推断、不加工（与 docs/spec/logs.md 的字段表一致）。
-func (r decisionRecorder) logDecision(rec control.DecisionRecord) {
+func (r *decisionRecorder) logDecision(rec control.DecisionRecord) {
 	if r.logger == nil {
 		return
 	}

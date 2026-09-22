@@ -108,8 +108,11 @@ def send(
     method = scenario["method"].upper()
     headers = dict(scenario.get("headers") or {})
     if session_cookie:
-        # 判定键是 (来源, 会话, 方法, 路径)（ST-10）—— 换查询串**不**改变键，
-        # 只有换会话才能让每个场景拿到各自的判定（实测过：不换会话会吃到上一条的分）。
+        # `decision_id` 由 (来源, 会话, 路径, 时间窗) 派生（ST-10，未变）；而**本地判定缓存键**
+        # 2026-09-22 起还包括方法 / 查询串 / Host / UA 与策略版本
+        # （见 modules/deception/proxy/cache.go）。所以下面两个作用各归其位：
+        # 查询串 nonce 让每次请求**重新判定**（不吃上一条的判定）；
+        # 会话 cookie 让每次请求拿到**不同的 decision_id**（判定身份不同，图上看得出是两次）。
         existing = headers.get("Cookie")
         headers["Cookie"] = f"{existing}; {session_cookie}" if existing else session_cookie
     body = scenario.get("body")
@@ -560,14 +563,19 @@ def render(
 
 
 def make_nonce(attempt: int) -> str:
-    """每次请求的唯一值：查询串（拟真）用。**它不参与判定键**，所以不能靠它拿新判定。"""
+    """每次请求的唯一值：查询串（拟真）用。
+
+    它**参与本地判定缓存键**（2026-09-22 起）：带 nonce 的两次请求会各自重新判定，
+    但 `decision_id` 不受它影响（那按 ST-10 派生）—— 想复现"同输入命中缓存"用 `--no-nonce`。
+    """
     return f"{secrets.token_hex(4)}{attempt:02d}"
 
 
 def make_session(cookie_name: str, attempt: int, *, shared: bool) -> str:
     """会话 cookie。
 
-    判定键是 (来源, 会话, 方法, 路径)（ST-10）—— 换会话才改变键，否则第二次请求会复用第一次的判定。
+    `decision_id` 按 (来源, 会话, 路径, 时间窗) 派生（ST-10）—— 换会话才换判定身份；
+    要"同身份再判一次"靠 nonce（它进本地缓存键），要"命中缓存"就用 --no-nonce。
     `shared=True` 时同一场景内**复用**同一会话（用于验证 ST-10 的复用行为）。
     """
     suffix = "shared" if shared else f"{attempt:02d}"

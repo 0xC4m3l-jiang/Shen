@@ -54,14 +54,77 @@ def test_worker_produces_and_reports_conclusions() -> None:
     )
     run = run_once(port, now="2026-09-19T10:00:30+08:00")
     assert run.fetched == 2 and run.admitted == 2
+    # 两个会话 ⇒ 各自一份意图 + 策略（每会话一份结论，不跨会话合并）。
+    assert [s.session_id for s in run.sessions] == ["s-1", "s-2"]
     kinds = [c["kind"] for c in run.conclusions]
-    assert kinds == ["intent", "strategy"], "应产出意图与策略两类结论"
-    assert run.reported == 2 and run.duplicated == 0
+    assert kinds == ["intent", "strategy", "intent", "strategy"], "应逐会话产出意图与策略结论"
+    assert run.reported == 4 and run.duplicated == 0
     reported_types = {event.event_type for event in port.reported}
     assert reported_types == {CONCLUSION_EVENT_TYPE}, "结论必须作为 analysis 事件上报"
     intent = run.conclusions[0]
     assert intent["accepted"] is True
-    assert intent["evidence_ids"] == ["e-1", "e-2"], "结论必须带可复核的证据引用（AR-12）"
+    # 关键回归：s-1 的结论**只能**引用 s-1 的证据（改造前这里会带上 e-2 —— 跨会话串链）。
+    assert intent["evidence_ids"] == ["e-1"], "结论只引用本会话的证据（AR-12 + 会话分组）"
+    assert run.conclusions[2]["evidence_ids"] == ["e-2"], "另一个会话的结论引用它自己的证据"
+    # 结论事件的外层 session_id 也要跟着分组，否则控制台/读侧仍看不出归属。
+    assert [event.session_id for event in port.reported] == ["s-1", "s-1", "s-2", "s-2"]
+
+
+def test_worker_groups_by_session_when_same_path_repeats() -> None:
+    """同一路径、不同会话 ⇒ **不得**拼成一条结论（FIX-5 的回归）。"""
+    port = InMemoryTelemetry(
+        [
+            decision("e-1", "/.git/config", session="s-1"),
+            decision("e-2", "/.git/config", session="s-2", at="2026-09-19T10:00:01+08:00"),
+        ]
+    )
+    run = run_once(port, now="2026-09-19T10:00:30+08:00")
+    assert run.admitted == 2, "不同会话的同一路径不是同一态势"
+    assert len(run.sessions) == 2
+    for session in run.sessions:
+        assert {obs.session_id for obs in session.observations} == {session.session_id}
+    assert [c["evidence_ids"] for c in run.conclusions] == [["e-1"], ["e-1"], ["e-2"], ["e-2"]]
+
+
+def test_worker_unknown_identity_is_its_own_group() -> None:
+    """没有 session_id 的事件单独成组，**不得**被拱进某个已知会话。"""
+    legacy = WireEvent(
+        event_id="e-old",
+        event_type="decision",
+        payload=json.dumps(
+            {
+                "decision_id": "e-old",
+                "at": "2026-09-19T10:00:02+08:00",
+                "source_ip": "203.0.113.9",
+                "method": "GET",
+                "path": "/.env",
+                "user_agent": "curl/8",
+                "action": "route_origin",
+                "severity": "none",
+            }
+        ).encode("utf-8"),
+        created_at="2026-09-19T10:00:02+08:00",
+    )
+    port = InMemoryTelemetry([decision("e-1", "/.git/config", session="s-1"), legacy])
+    run = run_once(port, now="2026-09-19T10:00:30+08:00")
+    assert [s.session_id for s in run.sessions] == ["s-1", ""]
+    assert run.sessions[1].unknown_identity is True
+    assert run.conclusions[2]["evidence_ids"] == ["e-old"], "未知身份不得混入已知会话的结论"
+
+
+def test_worker_truncates_sessions_visibly() -> None:
+    """会话数超过上限时**不静默丢弃**：计数可见，且只分析前 N 个最近活跃的会话。"""
+    from analysis.worker import MAX_SESSIONS_PER_RUN
+
+    events = [
+        decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:00:0{n}+08:00")
+        for n in range(MAX_SESSIONS_PER_RUN + 3)
+    ]
+    port = InMemoryTelemetry(events)
+    run = run_once(port, now="2026-09-19T10:00:30+08:00")
+    assert len(run.sessions) == MAX_SESSIONS_PER_RUN
+    assert run.truncated_sessions == 3, "被截断的会话数必须可见（不是静默丢弃）"
+    assert run.admitted == len(events), "去重计数仍覆盖全部事件"
 
 
 def test_ar14_worker_dedupes_same_situation_before_analysis() -> None:
@@ -78,10 +141,10 @@ def test_worker_is_idempotent_on_rerun() -> None:
     events = [decision("e-1", "/.git/config"), decision("e-2", "/etc/passwd", session="s-2")]
     port = InMemoryTelemetry(events)
     first = run_once(port, now="2026-09-19T10:00:30+08:00")
-    assert first.reported == 2
+    assert first.reported == 4, "两个会话各产两份结论"
     cache = EvidenceCache()
     second = run_once(port, now="2026-09-19T10:00:30+08:00", cache=cache)
-    assert second.reported == 0 and second.duplicated == 2, "同窗口重跑不产生重复结论（AR-11）"
+    assert second.reported == 0 and second.duplicated == 4, "同窗口重跑不产生重复结论（AR-11）"
 
 
 def test_worker_without_events_concludes_nothing() -> None:

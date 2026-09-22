@@ -136,37 +136,81 @@ func (s *IsolationMemory) Put(_ context.Context, key contract.SessionKey, hit co
 
 // ── DecisionStore ───────────────────────────────────────
 
+// decisionEntry 给判定缓存加过期时刻（与 Session / Content / Isolation 三个存储同一形状）。
+type decisionEntry struct {
+	decision  contract.Decision
+	expiresAt time.Time
+	// archivedAt 是**本存储**记录该条的时刻（不是驱动层的时间）：
+	// `contract.Decision` 本身不带时间戳（时间戳只存在观测面的事件载荷里），
+	// 而 `DecisionQuery.Since` 要有东西可比 —— 就用写入时刻，并在文档里写清口径。
+	archivedAt time.Time
+}
+
 // DecisionMemory 是 DecisionStore 的内存实现。
+//
+// 两类数据各有一处归属，避免「缓存」与「归档」共用一张无界 map：
+//   - m 是**判定缓存**（按 decision_id 去重，有 TTL 与容量上限）；
+//   - recent 是**最近判定记录**（观测面读侧，newest first，有容量上限）。
 type DecisionMemory struct {
-	mu sync.RWMutex
-	m  map[string]contract.Decision
-	// recent 是最近归档的判定（newest first），有上限 —— 供观测面读侧使用。
-	recent []contract.Decision
+	mu     sync.RWMutex
+	now    func() time.Time
+	m      map[string]decisionEntry
+	recent []decisionEntry
 }
 
-// NewDecisionMemory 构造内存实现。
-func NewDecisionMemory() *DecisionMemory {
-	return &DecisionMemory{m: map[string]contract.Decision{}}
+// NewDecisionMemory 构造内存实现；now 为 nil 时使用 time.Now。
+//
+// 时钟由外部注入，使 TTL 行为可测、可回放（MD-6：判定不得依赖系统时钟）。
+func NewDecisionMemory(now func() time.Time) *DecisionMemory {
+	if now == nil {
+		now = time.Now
+	}
+	return &DecisionMemory{now: now, m: map[string]decisionEntry{}}
 }
 
-// GetCached 取判定缓存。
+// GetCached 取判定缓存；不存在或已过期时返回 ok=false。
 func (s *DecisionMemory) GetCached(_ context.Context, decisionID string) (contract.Decision, bool, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	d, ok := s.m[decisionID]
-	return d, ok, nil
-}
-
-// PutCached 写判定缓存。
-func (s *DecisionMemory) PutCached(_ context.Context, d contract.Decision, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[d.DecisionID] = d
+	e, ok := s.m[decisionID]
+	if !ok {
+		return contract.Decision{}, false, nil
+	}
+	if !e.expiresAt.IsZero() && !s.now().Before(e.expiresAt) {
+		delete(s.m, decisionID)
+		return contract.Decision{}, false, nil
+	}
+	return e.decision, true, nil
+}
+
+// PutCached 写判定缓存；ttl <= 0 时用 DefaultDecisionCacheTTL。
+func (s *DecisionMemory) PutCached(_ context.Context, d contract.Decision, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.putLocked(d, ttl)
 	return nil
 }
 
-// Archive 归档判定（生产实现写入 ClickHouse）。
+// putLocked 写缓存条目。调用方必须持锁。
+//
+// 满则清理已过期条目；清完仍满就整体清空 —— 与适配器侧判定缓存同一策略（MD-10 容量上限），
+// 缓存本就可丢失，清空不会改变判定语义。
+func (s *DecisionMemory) putLocked(d contract.Decision, ttl time.Duration) {
+	sweepExpiredIfFull(s.m, func(e decisionEntry) bool {
+		return !e.expiresAt.IsZero() && !s.now().Before(e.expiresAt)
+	})
+	if len(s.m) >= maxMemEntries {
+		s.m = map[string]decisionEntry{}
+	}
+	if ttl <= 0 {
+		ttl = DefaultDecisionCacheTTL
+	}
+	s.m[d.DecisionID] = decisionEntry{decision: d, expiresAt: s.now().Add(ttl)}
+}
+
 // List 返回最近的判定记录（newest first）。
+//
+// `q.Since` 按**本存储的写入时刻**过滤（见 decisionEntry.archivedAt）：判定载荷本身无时间戳。
 func (s *DecisionMemory) List(_ context.Context, q DecisionQuery) ([]contract.Decision, error) {
 	limit := q.Limit
 	if limit <= 0 {
@@ -175,8 +219,11 @@ func (s *DecisionMemory) List(_ context.Context, q DecisionQuery) ([]contract.De
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]contract.Decision, 0, limit)
-	for _, d := range s.recent {
-		out = append(out, d)
+	for _, e := range s.recent {
+		if !q.Since.IsZero() && e.archivedAt.Before(q.Since) {
+			continue
+		}
+		out = append(out, e.decision)
 		if len(out) >= limit {
 			break
 		}
@@ -184,8 +231,19 @@ func (s *DecisionMemory) List(_ context.Context, q DecisionQuery) ([]contract.De
 	return out, nil
 }
 
-func (s *DecisionMemory) Archive(ctx context.Context, d contract.Decision) error {
-	return s.PutCached(ctx, d, 0)
+// Archive 归档判定：写入最近记录（生产实现写入 ClickHouse）并更新判定缓存。
+//
+// 两条写入在**同一个锁**内完成：读侧看到的是「要么两条都有、要么都没有」，不会出现半条。
+func (s *DecisionMemory) Archive(_ context.Context, d contract.Decision) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.putLocked(d, DefaultDecisionCacheTTL)
+	// newest first：头部插入，超上限就截断尾部（观测缓冲不得无界增长）。
+	s.recent = append([]decisionEntry{{decision: d, archivedAt: s.now()}}, s.recent...)
+	if len(s.recent) > DefaultDecisionBuffer {
+		s.recent = s.recent[:DefaultDecisionBuffer]
+	}
+	return nil
 }
 
 // ── EventStore ──────────────────────────────────────────
@@ -195,26 +253,40 @@ func (s *DecisionMemory) Archive(ctx context.Context, d contract.Decision) error
 // 它同时保留**最近 DefaultEventBuffer 条事件本体**，供观测面读侧（控制台看告警与流量）使用。
 // 内存实现不追求完整历史 —— 那是真实存储（ClickHouse）的事；这里只要「够看最近的」。
 type EventMemory struct {
-	mu sync.RWMutex
-	m  map[string]struct{}
+	mu  sync.RWMutex
+	now func() time.Time
+	// m 是幂等键 → **去重窗口到期时刻**（`AR-11`）：窗口内重复上报折叠，窗口外按新事件收。
+	m map[string]time.Time
 	// recent 是最近写入的事件（newest first）。有上限：观测缓冲不得无界增长。
 	recent []contract.Event
 }
 
-// NewEventMemory 构造内存实现。
-func NewEventMemory() *EventMemory { return &EventMemory{m: map[string]struct{}{}} }
+// NewEventMemory 构造内存实现；now 为 nil 时使用 time.Now。
+func NewEventMemory(now func() time.Time) *EventMemory {
+	if now == nil {
+		now = time.Now
+	}
+	return &EventMemory{now: now, m: map[string]time.Time{}}
+}
 
-// Write 幂等写入：同 EventID 已存在时返回 false。
+// Write 幂等写入：同一 EventID 在去重窗口内已存在时返回 false。
 func (s *EventMemory) Write(_ context.Context, ev contract.Event) (bool, error) {
 	if ev.EventID == "" {
 		return false, ErrEmptyEventID
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, dup := s.m[ev.EventID]; dup {
+	now := s.now()
+	if exp, dup := s.m[ev.EventID]; dup && now.Before(exp) {
 		return false, nil
 	}
-	s.m[ev.EventID] = struct{}{}
+	// 去重键不可无界增长：满则先清过期；清完仍满就整体清空。
+	// 清空只影响去重窗口的内存记账（可能重新接受一条旧事件），不丢任何事件本体。
+	sweepExpiredIfFull(s.m, func(exp time.Time) bool { return !now.Before(exp) })
+	if len(s.m) >= maxMemEntries {
+		s.m = map[string]time.Time{}
+	}
+	s.m[ev.EventID] = now.Add(DefaultEventDedupWindow)
 	// newest first：头部插入，超上限就截断尾部。
 	s.recent = append([]contract.Event{ev}, s.recent...)
 	if len(s.recent) > DefaultEventBuffer {
@@ -439,8 +511,8 @@ func NewMemStores(now func() time.Time) *MemStores {
 	return &MemStores{
 		Session:   NewSessionMemory(now),
 		Isolation: NewIsolationMemory(now),
-		Decision:  NewDecisionMemory(),
-		Event:     NewEventMemory(),
+		Decision:  NewDecisionMemory(now),
+		Event:     NewEventMemory(now),
 		Policy:    NewPolicyMemory(),
 		Decoy:     NewDecoyMemory(),
 		Content:   NewContentMemory(now),

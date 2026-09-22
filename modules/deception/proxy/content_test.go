@@ -253,7 +253,7 @@ func runTransport(t *testing.T, h *Handler, page string) (string, string, string
 	outcome := &injectOutcome{}
 	req = req.WithContext(withInjectOutcome(req.Context(), outcome))
 
-	tr := &injectingTransport{handler: h, base: stubTransport{resp: htmlResponse(page)}}
+	tr := &injectingTransport{src: h, base: stubTransport{resp: htmlResponse(page)}}
 	resp, err := tr.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("transport 不应失败：%v", err)
@@ -305,7 +305,7 @@ func TestTransportReportsNoContent(t *testing.T) {
 	req := httptest.NewRequest("GET", "http://shop.example.com/别的路径", nil)
 	outcome := &injectOutcome{}
 	req = req.WithContext(withInjectOutcome(req.Context(), outcome))
-	tr := &injectingTransport{handler: h, base: stubTransport{resp: htmlResponse("<html><body>x</body></html>")}}
+	tr := &injectingTransport{src: h, base: stubTransport{resp: htmlResponse("<html><body>x</body></html>")}}
 	if _, err := tr.RoundTrip(req); err != nil {
 		t.Fatalf("transport 不应失败：%v", err)
 	}
@@ -318,7 +318,7 @@ func TestTransportReportsNoContent(t *testing.T) {
 	req2 := httptest.NewRequest("GET", "http://shop.example.com"+testResource, nil)
 	outcome2 := &injectOutcome{}
 	req2 = req2.WithContext(withInjectOutcome(req2.Context(), outcome2))
-	tr2 := &injectingTransport{handler: h2, base: stubTransport{resp: &http.Response{
+	tr2 := &injectingTransport{src: h2, base: stubTransport{resp: &http.Response{
 		StatusCode:    http.StatusOK,
 		Header:        http.Header{"Content-Type": {"application/json"}},
 		Body:          io.NopCloser(strings.NewReader("{}")),

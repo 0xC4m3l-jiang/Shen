@@ -29,6 +29,14 @@ type DecisionRecord struct {
 	Path       string `json:"path"`
 	UserAgent  string `json:"user_agent"`
 
+	// SessionID 是会话身份的**面具**（HMAC 截断，`session.Masker`）—— 不是原始 Cookie 值。
+	//
+	// 为什么要有它：L4 的结论必须能按会话分组（`AR-25`：会话是一等字段）。
+	// 没有它，一个批次里的多个会话会被拼成一条结论（已踩过：跨会话串链）。
+	// 为什么是面具而不是原值：观测面是跨进程、可长期保存的数据，
+	// 把 Cookie 原值写进去等于把认证材料复制进观测库。空串 = 身份未识别（`NI-1`），不得编造。
+	SessionID string `json:"session_id"`
+
 	Action   string `json:"action"`   // 三值（放行 / 改道 / 拦截）
 	Severity string `json:"severity"` // 旁路字段
 	Backend  string `json:"backend"`  // 仅改道时非空
@@ -37,6 +45,13 @@ type DecisionRecord struct {
 	Signals []string `json:"signals"` // 命中信号 ID（观测面可见）
 
 	At time.Time `json:"at"` // 由调用方注入（MD-6）
+}
+
+// SessionMasker 是**会话面具**的消费方接口：把会话身份值换成不透明标识。
+//
+// 接口由消费方（control）定义，实现由 `session.Masker` 提供 —— 两者不互相 import 具体类型。
+type SessionMasker interface {
+	Mask(id string) string
 }
 
 // DecisionRecorder 是**写侧**依赖：每完成一次判定就记一笔。

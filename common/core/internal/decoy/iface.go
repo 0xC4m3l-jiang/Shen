@@ -43,8 +43,15 @@ type Surface interface {
 	// 确定性（同会话恒同值）—— 这是多态与 AR-30 共存的关键（ADR-0016）。
 	Variant(ctx context.Context, sessionID string) (uint8, error)
 
+	// Intents 返回该资产的**投放意图**（数据：媒介 / 形态 / 目标 / 值 / 说明）。
+	//
+	// 与 `Placements` 的分工（D05）：意图是**领域输出**（格式无关、可断言、可按媒介分流）；
+	// 片段字节是媒介适配器的事（`decoy/render.go` 的模板表），领域层不认识 Nginx / SQL / HTML。
+	Intents(ctx context.Context, assetID string) ([]PlacementIntent, error)
+
 	// Placements 返回该资产的**投放片段**（可直接粘贴到 JS / nginx / SQL）。
 	//
 	// 「投放才是最后一公里」：没有可直接使用的片段，运营不会用，诱饵面就停在演示状态。
+	// 实现上它是 `Intents` + 模板渲染的组合，不是另一份独立逻辑。
 	Placements(ctx context.Context, assetID string) ([]string, error)
 }

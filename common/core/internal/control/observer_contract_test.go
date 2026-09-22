@@ -28,6 +28,7 @@ func TestDecisionRecordWireContract(t *testing.T) {
 		Method:     "GET",
 		Path:       "/.git/config",
 		UserAgent:  "HeadlessChrome/120",
+		SessionID:  "9d2a6f0c5b1e4a37",
 		Action:     "route_origin",
 		Severity:   "none",
 		Score:      0.9,

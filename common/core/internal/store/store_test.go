@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 
 // TestEventStore_Idempotent：同 event_id 不产生重复记录。
 func TestEventStore_Idempotent(t *testing.T) {
-	s := NewEventMemory()
+	s := NewEventMemory(nil)
 	ctx := context.Background()
 
 	first, err := s.Write(ctx, contract.Event{EventID: "e-1"})
@@ -25,14 +26,14 @@ func TestEventStore_Idempotent(t *testing.T) {
 
 // TestEventStore_RejectsEmptyID 断言无幂等键的事件被拒 —— 宁可报错也不写脏数据。
 func TestEventStore_RejectsEmptyID(t *testing.T) {
-	if _, err := NewEventMemory().Write(context.Background(), contract.Event{}); err != ErrEmptyEventID {
+	if _, err := NewEventMemory(nil).Write(context.Background(), contract.Event{}); err != ErrEmptyEventID {
 		t.Fatalf("期望 ErrEmptyEventID，得到 %v", err)
 	}
 }
 
 // TestEventStore_WriteBatchCountsOnlyNew 断言批量写入只计新增。
 func TestEventStore_WriteBatchCountsOnlyNew(t *testing.T) {
-	s := NewEventMemory()
+	s := NewEventMemory(nil)
 	ctx := context.Background()
 	if _, err := s.Write(ctx, contract.Event{EventID: "e-1"}); err != nil {
 		t.Fatal(err)
@@ -115,7 +116,7 @@ func TestPolicy_CurrentBeforePublish(t *testing.T) {
 
 // TestDecisionStore_CacheRoundTrip 断言判定缓存可读写。
 func TestDecisionStore_CacheRoundTrip(t *testing.T) {
-	s := NewDecisionMemory()
+	s := NewDecisionMemory(nil)
 	ctx := context.Background()
 	d := contract.Decision{DecisionID: "d-1", Action: contract.ActionMirage, Backend: "lou-1"}
 
@@ -128,6 +129,96 @@ func TestDecisionStore_CacheRoundTrip(t *testing.T) {
 	got, ok, err := s.GetCached(ctx, "d-1")
 	if err != nil || !ok || got.Backend != "lou-1" {
 		t.Fatalf("缓存往返失败: %+v / %v / %v", got, ok, err)
+	}
+}
+
+// TestDecisionStore_CacheExpires 断言判定缓存**真的**会过期（FIX-4：缓存必须有 TTL）。
+//
+// 时钟注入使「到期」可复现：原实现忽略 PutCached 的 ttl 参数，缓存永不过期。
+func TestDecisionStore_CacheExpires(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := NewDecisionMemory(func() time.Time { return now })
+	ctx := context.Background()
+	d := contract.Decision{DecisionID: "d-1"}
+
+	if err := s.PutCached(ctx, d, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(9 * time.Second)
+	if _, ok, _ := s.GetCached(ctx, "d-1"); !ok {
+		t.Fatal("到期前应命中")
+	}
+	now = now.Add(time.Second) // now == expiresAt ⇒ 失效（与 store 其余 TTL 存储同口径）
+	if _, ok, _ := s.GetCached(ctx, "d-1"); ok {
+		t.Fatal("到期后不应命中")
+	}
+}
+
+// TestDecisionStore_ListNewestFirstAndSince 断言归档读侧的形状与时序过滤。
+func TestDecisionStore_ListNewestFirstAndSince(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := NewDecisionMemory(func() time.Time { return now })
+	ctx := context.Background()
+
+	if err := s.Archive(ctx, contract.Decision{DecisionID: "d-old"}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := s.Archive(ctx, contract.Decision{DecisionID: "d-new"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.List(ctx, DecisionQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].DecisionID != "d-new" || got[1].DecisionID != "d-old" {
+		t.Fatalf("期望 newest first（d-new, d-old），得到 %+v", got)
+	}
+
+	since, err := s.List(ctx, DecisionQuery{Since: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(since) != 1 || since[0].DecisionID != "d-new" {
+		t.Fatalf("Since 过滤期望只剩 d-new，得到 %+v", since)
+	}
+}
+
+// TestDecisionStore_ListBounded 断言观测缓冲有上限（无界增长 = 长跑泄漏）。
+func TestDecisionStore_ListBounded(t *testing.T) {
+	s := NewDecisionMemory(nil)
+	ctx := context.Background()
+	for i := 0; i < DefaultDecisionBuffer+10; i++ {
+		if err := s.Archive(ctx, contract.Decision{DecisionID: string(rune('a'+i%26)) + strconv.Itoa(i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.List(ctx, DecisionQuery{Limit: DefaultDecisionBuffer + 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != DefaultDecisionBuffer {
+		t.Fatalf("期望保留 %d 条，得到 %d", DefaultDecisionBuffer, len(got))
+	}
+}
+
+// TestEventStore_DedupWindow 断言去重只在窗口内成立，且去重键不会无界增长（FIX-4）。
+func TestEventStore_DedupWindow(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := NewEventMemory(func() time.Time { return now })
+	ctx := context.Background()
+	ev := contract.Event{EventID: "e-1"}
+
+	if ok, err := s.Write(ctx, ev); err != nil || !ok {
+		t.Fatalf("首写期望 true，得到 %v / %v", ok, err)
+	}
+	if ok, _ := s.Write(ctx, ev); ok {
+		t.Fatal("窗口内重复上报应被折叠")
+	}
+	now = now.Add(DefaultEventDedupWindow)
+	if ok, err := s.Write(ctx, ev); err != nil || !ok {
+		t.Fatalf("窗口外应按新事件收下（去重键已过期），得到 %v / %v", ok, err)
 	}
 }
 

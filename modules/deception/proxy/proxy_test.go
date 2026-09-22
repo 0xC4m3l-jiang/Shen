@@ -533,7 +533,7 @@ func htmlResp(body string) *http.Response {
 // Handler 只用来提供「当前注入器」——transport 现在按请求读它，
 // 这样策略面下发的规则可以热变更（见 handler.go 的 currentInjector）。
 func injectingTransportFor(base http.RoundTripper, inj Injector) *injectingTransport {
-	return &injectingTransport{handler: &Handler{injector: inj}, base: base}
+	return &injectingTransport{src: &Handler{injector: inj}, base: base}
 }
 
 func TestInjectingTransportInjectsHTML(t *testing.T) {

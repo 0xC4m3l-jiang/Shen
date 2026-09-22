@@ -14,10 +14,15 @@
 // 只做四件事（AR-6）：拦截请求 · 查本地判定缓存 · 按结果执行 · 异步上报遥测。
 // 不做判定、不做 LLM 推理、不维护会话状态、不写核心状态（AR-7）。
 //
-// 实现按职责拆成三个文件：
+// 实现按**职责**拆文件（每个文件只回答一件事，谁改什么一眼可见）：
 //
-//   - iface.go   —— 对外契约：JudgeClient / TelemetryClient / Injector 接口 + transport-agnostic 的 Config
-//   - glue.go    —— 判定胶水（transport-agnostic）：decisionCache / decisionID / whitelist / clientIP / actionOf / observationFrom / injectable
-//   - handler.go —— Caddy 中间件 Handler（caddyhttp.MiddlewareHandler）+ injectingTransport + trackingWriter
-//   - embed.go   —— 程序化 Caddy 配置（BuildConfig）+ TLS（off|manual|acme）+ 模块注册
+//   - iface.go    —— 对外契约：JudgeClient / TelemetryClient / Injector 接口 + transport-agnostic 的 Config
+//   - handler.go  —— 请求处理：Caddy 中间件 `Handler`（判定 → 调度 → 上报）与装配/清理
+//   - backend.go  —— 转发后端构造：buildBackend / upstreamAddr（唯一碰 Caddy transport 细节的地方）
+//   - transform.go —— 响应改写与响应卫生：injectingTransport / headerSanitizer / trackingWriter
+//   - cache.go    —— 本地判定缓存：cacheKey（覆盖全部判定输入）与容量/TTL 策略
+//   - glue.go     —— 判定胶水（纯函数）：decisionID / whitelist / clientIP / actionOf / observationFrom
+//   - content.go  —— AI 欺骗内容的消费侧：清单索引 / 会话钉定 / 命中与改写
+//   - policy.go   —— 策略面客户端：Pull/Ack/校验和/热应用
+//   - embed.go    —— 程序化 Caddy 配置（BuildConfig）+ TLS（off|manual|acme）+ 模块注册
 package proxy

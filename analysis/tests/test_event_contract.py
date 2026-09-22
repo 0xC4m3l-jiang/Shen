@@ -39,6 +39,7 @@ def test_fixture_exists_and_is_the_go_shape() -> None:
         "method",
         "path",
         "user_agent",
+        "session_id",
         "action",
         "severity",
         "backend",
@@ -52,6 +53,7 @@ def test_observation_parses_real_payload() -> None:
     obs = parse_all([load_fixture()])[0]
     assert obs.event_id == "d-9f3c1a2b", "decision_id 必须映射为证据 ID"
     assert obs.source == "203.0.113.9"
+    assert obs.session_id == "9d2a6f0c5b1e4a37", "session_id 必须进观测模型（L4 靠它按会话分组）"
     assert obs.method == "GET"
     assert obs.path == "/.git/config"
     assert obs.user_agent == "HeadlessChrome/120"

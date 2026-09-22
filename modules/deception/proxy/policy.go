@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -94,6 +95,22 @@ type remoteState struct {
 
 // remotePolicy 返回当前生效的远端策略；未应用过时为 nil。
 func (h *Handler) remotePolicy() *remoteState { return h.remote.Load() }
+
+// policyRevision 是策略版本的稳定标识，供**本地判定缓存键**使用（FIX-2）。
+//
+// 为何要它：策略换代后旧动作可能已不成立（改道后端表、白名单、注入规则都变了），
+// 缓存必须随之失效；否则新策略下发后，同键请求会继续沿用旧动作直到 TTL 到期。
+// 优先用 checksum（内容决定标识）；无 checksum 时退到版本号；未接过策略面则空串。
+func (h *Handler) policyRevision() string {
+	st := h.remotePolicy()
+	if st == nil {
+		return ""
+	}
+	if st.checksum != "" {
+		return st.checksum
+	}
+	return "v" + strconv.FormatUint(st.version, 10)
+}
 
 // applyEdgePolicy 应用一份策略载荷。
 //

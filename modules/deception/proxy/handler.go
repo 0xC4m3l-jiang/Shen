@@ -1,18 +1,12 @@
 package proxy
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +14,6 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
-	"github.com/caddyserver/caddy/v2/modules/caddyhttp/reverseproxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
@@ -31,9 +24,6 @@ import (
 	telemetryv1 "shen/common/api/telemetry/v1"
 	"shen/modules/deception/injection"
 )
-
-// 上游 Transport 的连接层超时。没有超时的 Transport 会让挂死的上游一直占住连接与 goroutine。
-const dialTimeout = 5 * time.Second
 
 // Handler 是接入形态③（反向代理前置）与④（Sidecar）的 Caddy 中间件。
 //
@@ -329,6 +319,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// decision_id 在**最前面**就派生好：白名单命中也要上报逐判定事件（图上要能看见这条分支），
 	// 而事件 id 就是 decision_id（幂等键，AR-11）。
 	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
+	// 本地缓存的键**不是** decision_id：判定还看 method / Host / 查询串 / UA 与策略版本
+	// （ST-10 只约束 decision_id 的派生，与本地缓存键分开 —— 见 cache.go 的 cacheKey）。
+	key := cacheKey(id, r, h.policyRevision())
 
 	// 注入结果的槽挂在请求上下文上：改写发生在 transport 里（改道侧），
 	// 而上报发生在这里 —— 中间隔着 Caddy 的转发链，上下文是唯一不被它包一层的传递面。
@@ -345,7 +338,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	}
 
 	// ② 本地判定缓存（AR-6 第 2 件事）：命中则不调核心，按缓存结果处置。
-	if act, backend, ok := h.cache.get(id); ok {
+	if act, backend, ok := h.cache.get(key); ok {
 		executed, derr := h.dispatch(sw, r, next, act, backend)
 		// 落点记 `cache`（“未重新判定”）；图按 action/backend 归到意图分支上。
 		h.reportRoute(r, id, act, routeInfo{executed: executedCache, backend: backend, dispatched: executed}, sw, started)
@@ -354,7 +347,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 
 	// ③ 调核心判定。任何失败都已折叠成「放行」（NI-3 / NI-4 / NI-5）。
 	act, backend, err := h.decide(r, id)
-	h.cache.put(id, act, backend)
+	h.cache.put(key, act, backend)
 
 	// ④ 按结果路由 → 再异步上报（AR-6 第 3 / 4 件事）。
 	if err != nil {
@@ -667,291 +660,4 @@ func injectRules(snippets []string) []injection.Rule {
 		}
 	}
 	return out
-}
-
-// ── 后端 reverse_proxy 构造 ─────────────────────────────────────────────────
-
-// buildBackend 构造一个指向 target 的 Caddy reverse_proxy handler。
-//
-// isMirage 决定失败处理方式：引流后端失败可以安全回落到业务（NI-1），
-// 业务本身失败则如实报错 —— **不得**用蜜罐内容顶替业务失败（INT-8）。
-// 引流侧另加响应头超时（蜜罐挂死不能拖住客户端），并挂注入 transport。
-func (h *Handler) buildBackend(ctx caddy.Context, target string, isMirage bool, mirageTimeout time.Duration) (*reverseproxy.Handler, error) {
-	dial, tlsUpstream, err := upstreamAddr(target)
-	if err != nil {
-		return nil, err
-	}
-
-	tr := &reverseproxy.HTTPTransport{
-		DialTimeout: caddy.Duration(dialTimeout),
-	}
-	if tlsUpstream {
-		// 上游是 https：启用到上游的 TLS（校验策略由 TLS 配置决定）。
-		tr.TLS = new(reverseproxy.TLSConfig)
-	}
-
-	// 手工构造的 transport 需要自行 Provision（才会构建内部 http.Transport）。
-	if err := tr.Provision(ctx); err != nil {
-		return nil, err
-	}
-
-	var rt http.RoundTripper = tr
-	if isMirage {
-		// 引流侧加响应头超时：蜜罐挂死不能拖住客户端（NI-1）。
-		// 超时后 reverse_proxy 返回错误 → forwardMirage 回落真实业务。
-		to := mirageTimeout
-		if to <= 0 {
-			to = mirageDefaultTimeout
-		}
-		tr.ResponseHeaderTimeout = caddy.Duration(to)
-
-		// 注入 transport **无条件**挂在改道侧：
-		//   · 静态规则（本地 env / 策略面 `inject_rules`）与
-		//   · AI 欺骗内容（策略面 `content_manifest`，`ADR-0023`）
-		// 都经它执行；它同时负责上报注入结果（off / disabled / no_content / applied）。
-		// 两种规则都没有时它仍会被调用，但会立即原样返回（不读 body、不改写）。
-		rt = &injectingTransport{handler: h, base: tr}
-	}
-
-	rp := &reverseproxy.Handler{
-		Upstreams: reverseproxy.UpstreamPool{{Dial: dial}},
-		Transport: rt,
-	}
-	if err := rp.Provision(ctx); err != nil {
-		return nil, err
-	}
-	return rp, nil
-}
-
-// upstreamAddr 解析 scheme://host:port 形式的地址，返回 Caddy reverse_proxy 的
-// Dial 地址（host:port，无 scheme）与是否需要到上游的 TLS。
-func upstreamAddr(raw string) (dial string, tlsUpstream bool, err error) {
-	if strings.TrimSpace(raw) == "" {
-		return "", false, fmt.Errorf("地址为空")
-	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", false, err
-	}
-	if u.Scheme == "" || u.Host == "" {
-		return "", false, fmt.Errorf("地址必须带 scheme 与 host：%s", raw)
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http":
-		return u.Host, false, nil
-	case "https":
-		return u.Host, true, nil
-	default:
-		return "", false, fmt.Errorf("不支持的 scheme：%s", raw)
-	}
-}
-
-// ── 注入 transport ──────────────────────────────────────────────────────────
-
-// injectingTransport 包一层 RoundTripper，在**引流后端**的 HTML 响应上注入诱饵与 AI 欺骗内容。
-//
-// INT-8：只改引流侧 —— 本 transport 只挂在 mirage 的 reverse_proxy 上，业务侧不经过它。
-// 任何异常（非 HTML、读失败、超限）都**原样透传**：改写不是业务链路上的失败点。
-//
-// 两条注入源（各自独立，可同时存在）：
-//
-//	① **静态规则**（本地 env / 策略面 `inject_rules`）—— 由 `currentInjector()` 给；
-//	② **AI 欺骗内容**（策略面 `content_manifest`）—— 需开关成立 + 命中资源 + 校验和相符。
-//
-// 无论哪种，最终都走 `deception/injection` 的同一份改写语义（`ST-5`）。
-type injectingTransport struct {
-	// handler 而非注入器本身：注入规则可经**策略面**在运行期变（`applyEdgePolicy`），
-	// 而 transport 是建后端的时刻就挂上的 —— 持注入器会把规则钉死在当时那一份。
-	handler *Handler
-	base    http.RoundTripper
-}
-
-func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
-	if err != nil {
-		return resp, err
-	}
-	if resp == nil {
-		return resp, nil
-	}
-
-	// 注入结果的槽（没有槽时静默丢弃 —— 比如单测里直接调 transport）。
-	outcome, _ := req.Context().Value(injectOutcomeKey{}).(*injectOutcome)
-
-	// 每请求取一次当前状态：本地 env 或策略面下发的（后者可热变更）。
-	inj := t.handler.currentInjector()
-	contentReady, idx := t.handler.contentInjectionReady()
-	if !contentReady && outcome != nil {
-		// 到了改道侧但内容注入被关 ⇒ 如实上报「开关关闭」（不是"没内容"）。
-		outcome.set(InjectDisabled, "")
-	}
-	if inj == nil && !contentReady {
-		// 什么都不用做：不读 body、不改写、不谎报。
-		return resp, nil
-	}
-
-	ct, ok := injectable(resp)
-	if !ok {
-		if contentReady && outcome != nil {
-			// 开关开着但响应不可改写（非 HTML / 已压缩 / 超限）⇒ 没有可用内容。
-			outcome.set(InjectNoContent, "")
-		}
-		return resp, nil
-	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxInjectBytes+1))
-	if err != nil {
-		// 读失败：把错误抛给 reverse_proxy（此时尚未向客户端写出任何字节，
-		// forwardMirage 可安全回落业务）。
-		_ = resp.Body.Close()
-		return nil, err
-	}
-	if len(body) > maxInjectBytes {
-		// 太大：把已读部分接回去，原样透传（不关闭原流，保持后续可读）。
-		resp.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), resp.Body))
-		return resp, nil
-	}
-	_ = resp.Body.Close()
-
-	out := body
-	if inj != nil {
-		if next, changed := inj.Inject(ct, out); changed {
-			out = next
-		}
-	}
-	if contentReady {
-		next, contentID, changed := t.handler.injectContent(req, idx, ct, out)
-		if changed {
-			out = next
-			if outcome != nil {
-				outcome.set(InjectApplied, contentID)
-			}
-		} else if outcome != nil {
-			outcome.set(InjectNoContent, "")
-		}
-	}
-
-	resp.Body = io.NopCloser(bytes.NewReader(out))
-	resp.ContentLength = int64(len(out))
-	resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
-	resp.Header.Del("Content-Encoding") // 已解出明文并改写，去掉压缩标记
-	return resp, nil
-}
-
-// ── trackingWriter ──────────────────────────────────────────────────────────
-
-// caddyDefaultServerHeader 是 Caddy 在服务器层给我们加上的 `Server` 值。
-//
-// 它必须被清掉：规则要求 `Server` 头**与上游一致或直接透传**（`OH-2` 适用位置表）。
-// 上游自己带了 `Server`（例如 nginx）时我们**原样保留** —— 那才是「与上游一致」。
-const caddyDefaultServerHeader = "Caddy"
-
-// headerSanitizer 在响应写出前清掉会暴露我们代理栈的头。
-//
-// 它只做两件最小的事，避免误伤业务响应（`INT-8`：业务侧响应不得改写）：
-//  1. 删 `Via` —— 那是**我们这一跳**的产物，任何情况下都不该让对手看到；
-//  2. 只在 `Server` 恰好等于 Caddy 默认值时删它 —— 上游的值一律保留。
-type headerSanitizer struct {
-	http.ResponseWriter
-	done bool
-	// status / wrote 是**响应观测**：逐判定事件要报「返回给客户端的状态码与字节数」。
-	// 放在这里是因为它已经包住了整个请求的 ResponseWriter，不需要再加一层包装。
-	status int
-	wrote  int
-}
-
-func (s *headerSanitizer) WriteHeader(code int) {
-	s.status = code
-	s.sanitize()
-	s.ResponseWriter.WriteHeader(code)
-}
-
-func (s *headerSanitizer) Write(b []byte) (int, error) {
-	n, err := func() (int, error) {
-		s.sanitize()
-		return s.ResponseWriter.Write(b)
-	}()
-	s.wrote += n
-	return n, err
-}
-
-// statusCode 返回实际状态码；从未显式写过头就是 200（net/http 的默认行为）。
-func (s *headerSanitizer) statusCode() int {
-	if s.status == 0 {
-		return http.StatusOK
-	}
-	return s.status
-}
-
-// bytesWritten 返回实际写出的响应体字节数。
-func (s *headerSanitizer) bytesWritten() int { return s.wrote }
-
-func (s *headerSanitizer) sanitize() {
-	if s.done {
-		return
-	}
-	s.done = true
-	h := s.ResponseWriter.Header()
-	h.Del("Via")
-	if strings.EqualFold(strings.TrimSpace(h.Get("Server")), caddyDefaultServerHeader) {
-		h.Del("Server")
-	}
-}
-
-// Unwrap 让 Caddy 仍能找到被包住的 ResponseWriter（保留其可选接口）。
-func (s *headerSanitizer) Unwrap() http.ResponseWriter { return s.ResponseWriter }
-
-// Flush 透传：流式响应（SSE / 分块）不能被这层包装破坏。
-func (s *headerSanitizer) Flush() {
-	if f, ok := s.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-// Hijack 透传：协议升级（WebSocket / 101）必须仍然可用。
-func (s *headerSanitizer) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	hj, ok := s.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, fmt.Errorf("proxy: 底层 ResponseWriter 不支持 Hijack")
-	}
-	return hj.Hijack()
-}
-
-// trackingWriter 记录「是否已经向客户端写出过字节」。
-//
-// 这个信息决定了引流后端失败时能不能安全回落业务：
-// 没写过 → 可以重放到业务；写过 → 只能如实报错，否则会输出半截响应。
-type trackingWriter struct {
-	http.ResponseWriter
-	wrote bool
-}
-
-func (t *trackingWriter) WriteHeader(code int) {
-	t.wrote = true
-	t.ResponseWriter.WriteHeader(code)
-}
-
-func (t *trackingWriter) Write(b []byte) (int, error) {
-	t.wrote = true
-	return t.ResponseWriter.Write(b)
-}
-
-// Unwrap 让 Caddy 能找到被包住的 ResponseWriter（保留其可选接口）。
-func (t *trackingWriter) Unwrap() http.ResponseWriter { return t.ResponseWriter }
-
-// Flush 透传，避免破坏流式响应（SSE / 分块传输）。
-func (t *trackingWriter) Flush() {
-	if f, ok := t.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-// Hijack 透传，使协议升级（WebSocket / 101 Switching Protocols）在引流路径上仍可用。
-func (t *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	hj, ok := t.ResponseWriter.(http.Hijacker)
-	if !ok {
-		return nil, nil, fmt.Errorf("proxy: 底层 ResponseWriter 不支持 Hijack")
-	}
-	t.wrote = true
-	return hj.Hijack()
 }

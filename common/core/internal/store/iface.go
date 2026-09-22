@@ -61,6 +61,20 @@ const (
 	DefaultListLimit = 200
 	// DefaultEventBuffer 是内存实现保留的最近事件条数。
 	DefaultEventBuffer = 4096
+	// DefaultDecisionBuffer 是内存实现保留的最近判定记录条数（观测面读侧）。
+	DefaultDecisionBuffer = 4096
+)
+
+// 内存实现的保留期默认值。
+//
+// 生产实现（ClickHouse / Redis）自带保留期与容量策略；内存实现只用于开发与单测，
+// 但**也必须**有上限与过期 —— 否则「只写不读」的键会无限增长（长跑即泄漏）。
+const (
+	// DefaultDecisionCacheTTL 是判定缓存的默认存活期（`PutCached` 传 ttl<=0 时）。
+	DefaultDecisionCacheTTL = 5 * time.Minute
+	// DefaultEventDedupWindow 是事件幂等键的去重窗口（`AR-11`）。
+	// 窗口内重复上报不产生新记录；窗口外按新事件处理 —— 与 Redis 去重键的 TTL 同语义。
+	DefaultEventDedupWindow = time.Hour
 )
 
 // EventStore 承载遥测事件（生产实现：ClickHouse，只增不改）。

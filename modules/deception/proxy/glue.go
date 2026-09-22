@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	judgev1 "shen/common/api/judge/v1"
@@ -16,16 +15,6 @@ import (
 // targetOrigin 是「业务真实地址」在本模块内部的键。
 // 用一个不可能与引流后端名冲突的值，避免核心给的后端名恰好叫 origin。
 const targetOrigin = "\x00origin"
-
-// defaultCacheMaxEntries 是本地判定缓存的默认容量上限（MD-10：缓存必须有容量上限）。
-const defaultCacheMaxEntries = 65536
-
-// reportTimeout 是单次遥测上报的超时。上报是异步的，但仍需要上限，
-// 否则上游卡住会让上报 worker 永远挂着、缓冲被填满。
-const reportTimeout = 3 * time.Second
-
-// 引流后端响应头超时的默认值。业务侧**不设**此超时（慢接口是业务自己的行为）。
-const mirageDefaultTimeout = 10 * time.Second
 
 // maxInjectBytes 是注入缓冲上限：只改写小页面，大响应（下载 / 流式）原样透传。
 const maxInjectBytes = 1 << 20 // 1 MiB
@@ -146,72 +135,4 @@ func decisionID(r *http.Request, trustXFF bool, window time.Duration, now time.T
 	}, "\x00")
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:16])
-}
-
-// ── 响应注入判据 ────────────────────────────────────────────────────────────
-
-// injectable 报告该响应能否注入，并返回它的内容类型。
-//
-// 三条「不注入」的理由集中在这里：非 HTML、带压缩编码（注入会直接损坏编码）、
-// 超过缓冲上限（大响应 / 下载应当流式透传）。
-func injectable(resp *http.Response) (contentType string, ok bool) {
-	ct := resp.Header.Get("Content-Type")
-	if !strings.Contains(strings.ToLower(ct), "text/html") {
-		return "", false
-	}
-	if enc := resp.Header.Get("Content-Encoding"); enc != "" && !strings.EqualFold(enc, "identity") {
-		return "", false
-	}
-	if resp.ContentLength > maxInjectBytes {
-		return "", false
-	}
-	return ct, true
-}
-
-// ── 判定缓存 ─────────────────────────────────────────────────────────────────
-
-// decisionCache 是按 decision_id 记忆判定的进程内缓存。
-//
-// 它是**可丢失**的：未命中就调核心，语义上等价。有 TTL 失效规则与容量上限（MD-10）；
-// 满则整体清空，不做逐条 LRU —— 一是最小实现，二是清空能抗「大量不同路径填满缓存」的对抗性填满。
-type decisionCache struct {
-	mu  sync.Mutex
-	m   map[string]cacheEntry
-	ttl time.Duration
-	cap int
-	now func() time.Time
-}
-
-type cacheEntry struct {
-	action  judgev1.Action
-	backend string
-	expires time.Time
-}
-
-func newDecisionCache(ttl time.Duration, cap int, now func() time.Time) *decisionCache {
-	return &decisionCache{m: map[string]cacheEntry{}, ttl: ttl, cap: cap, now: now}
-}
-
-func (c *decisionCache) get(id string) (judgev1.Action, string, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.m[id]
-	if !ok {
-		return judgev1.Action_ACTION_ORIGIN, "", false
-	}
-	if c.now().After(e.expires) {
-		delete(c.m, id)
-		return judgev1.Action_ACTION_ORIGIN, "", false
-	}
-	return e.action, e.backend, true
-}
-
-func (c *decisionCache) put(id string, act judgev1.Action, backend string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.m) >= c.cap {
-		// 满则清空（MD-10 容量上限）。缓存本就可丢失，清空恢复正常请求的缓存能力。
-		c.m = map[string]cacheEntry{}
-	}
-	c.m[id] = cacheEntry{action: act, backend: backend, expires: c.now().Add(c.ttl)}
 }

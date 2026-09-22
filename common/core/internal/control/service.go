@@ -19,6 +19,7 @@ type JudgeService struct {
 	breaker   *Breaker         // 可空；为空时不熔断
 	isolation IsolationChecker // 可空；为空时不查隔离
 	recorder  DecisionRecorder // 可空；为空时不记录（观测面写侧）
+	masker    SessionMasker    // 可空；为空时用 session 默认面具器（**始终脱敏**）
 	now       func() time.Time // 可注入时钟（MD-6：时间由调用方注入，便于测试与回放）
 }
 
@@ -54,6 +55,18 @@ func WithClock(now func() time.Time) JudgeOption {
 	return func(s *JudgeService) { s.now = now }
 }
 
+// WithSessionMasker 换掉默认的会话面具器（默认 `session.NewMasker("")`）。
+//
+// 生产部署应传入自己的密钥（`SHEN_SESSION_MASK_KEY`）；不传也不会泄露原值 ——
+// 默认实现同样脱敏，只是面具用公开的默认密钥。
+func WithSessionMasker(m SessionMasker) JudgeOption {
+	return func(s *JudgeService) {
+		if m != nil {
+			s.masker = m
+		}
+	}
+}
+
 // NewJudgeService 构造服务端。decider 与 sess 任一为 nil 时 panic。
 //
 // 会话身份由核心自己提取，不信任调用方传来的值。
@@ -64,7 +77,7 @@ func NewJudgeService(d Decider, sess session.Session, opts ...JudgeOption) *Judg
 	if sess == nil {
 		panic("control: session.Session 不能为 nil")
 	}
-	s := &JudgeService{decider: d, session: sess, now: time.Now}
+	s := &JudgeService{decider: d, session: sess, masker: session.NewMasker(""), now: time.Now}
 	for _, o := range opts {
 		o(s)
 	}
@@ -129,6 +142,7 @@ func (s *JudgeService) record(ctx context.Context, req contract.JudgeRequest, d 
 		Method:     req.Observed.Method,
 		Path:       req.Observed.Path,
 		UserAgent:  req.Observed.UserAgent,
+		SessionID:  s.mask(req.Session.ID),
 		Action:     d.Action.String(),
 		Severity:   d.Severity.String(),
 		Backend:    d.Backend,
@@ -139,6 +153,14 @@ func (s *JudgeService) record(ctx context.Context, req contract.JudgeRequest, d 
 	if err := s.recorder.Record(ctx, rec); err != nil {
 		log.Printf("control: 判定记录失败（不影响响应）：%v", err)
 	}
+}
+
+// mask 把会话身份值换成面具。masker 为空时**不落原值**（宁可留空，也不把身份泄进观测面）。
+func (s *JudgeService) mask(id string) string {
+	if s.masker == nil {
+		return ""
+	}
+	return s.masker.Mask(id)
 }
 
 // passthroughResponse 是熔断期间的纯放行响应。

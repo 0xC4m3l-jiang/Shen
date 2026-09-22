@@ -175,7 +175,7 @@ func TestApplyEdgePolicyInjectSemantics(t *testing.T) {
 func TestRemoteInjectRuleRewritesDivertedResponse(t *testing.T) {
 	ctx := context.Background()
 	h := &Handler{injector: &stubInjector{marker: "<!--LOCAL-->"}}
-	tr := &injectingTransport{handler: h, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	tr := &injectingTransport{src: h, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return htmlResp("<html><body>hi</body></html>"), nil
 	})}
 	get := func() string {

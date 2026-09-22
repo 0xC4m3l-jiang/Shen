@@ -13,7 +13,7 @@
     "executed": "适配器实际走了哪（origin/cache/failopen/origin_fallback/mirage/block/whitelist）；可写一个值或一个集合。需要接管形态",
     "inject": "AI 内容注入的结果（applied/disabled/no_content/off）；需要接管形态 + 打开 AI"
   },
-  "_session": "session: unique（默认，每次新会话）| shared（同场景内复用会话）—— 判定键是 (来源, 会话, 方法, 路径)",
+  "_session": "session: unique（默认，每次新会话）| shared（同场景内复用会话）—— decision_id 按 (来源, 会话, 路径, 时间窗) 派生（ST-10）；本地判定缓存键另含方法/查询串/Host/UA/策略版本",
   "_note": "期望值按 deploy/config/config.example.yaml 的 16 条示例规则写；改规则请同步本文件。",
   "scenarios": [
     {
