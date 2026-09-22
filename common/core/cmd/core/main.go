@@ -374,6 +374,7 @@ func (r *decisionRecorder) Record(ctx context.Context, rec control.DecisionRecor
 		EventID:   fmt.Sprintf("decision:%s:%d", rec.DecisionID, seq),
 		Type:      "decision",
 		ActorID:   rec.SourceIP,
+		SessionID: rec.SessionID, // 信封上的一等字段（AR-25）：控制台按它显示/分组会话；值已是面具
 		Payload:   payload,
 		CreatedAt: rec.At,
 	}); err != nil {

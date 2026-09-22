@@ -65,6 +65,7 @@ func TestDecisionRecorderKeepsEveryJudgement(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		if err := rec.Record(ctx, control.DecisionRecord{
 			DecisionID: "d-1", Method: "GET", Path: "/admin", UserAgent: "sqlmap/1.7",
+			SessionID: "masked-s-1",
 		}); err != nil {
 			t.Fatalf("第 %d 次记录失败：%v", i+1, err)
 		}
@@ -73,6 +74,13 @@ func TestDecisionRecorderKeepsEveryJudgement(t *testing.T) {
 	ids := sink.ids()
 	if len(ids) != 2 {
 		t.Fatalf("同一 decision_id 的两次判定应各成一条事件，得到 %v", ids)
+	}
+	// 信封上的 session_id（一等字段，AR-25）：控制台按它显示/分组会话。
+	// 只写在载荷里时控制台那一列是空的（实测于 docker 全栈：envelope 空、payload 有值）。
+	for _, ev := range sink.events {
+		if ev.SessionID != "masked-s-1" {
+			t.Errorf("信封 session_id 应取自判定记录的面具值，得到 %q", ev.SessionID)
+		}
 	}
 	if ids[0] == ids[1] {
 		t.Fatalf("事件 id 必须逐判定唯一，两次都是 %q", ids[0])
