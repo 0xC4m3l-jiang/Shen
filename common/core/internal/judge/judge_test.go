@@ -93,6 +93,54 @@ func TestJudge_MatchesQueryField(t *testing.T) {
 	}
 }
 
+// TestJudge_PathPrefixIsSegmentBoundary 断言 `path_prefix` 只命中**路径段边界**：
+//
+//	/.git        命中 /.git 与 /.git/config
+//	/.git        不命中 /.gitignore（合法静态文件的误伤就是这里）
+//	/admin       不命中 /administrator
+//
+// 而已有的 `prefix`（纯字符串前缀）行为**不变** —— 新增算符而不是改语义，既有部署不受影响。
+func TestJudge_PathPrefixIsSegmentBoundary(t *testing.T) {
+	newEngine := func(op string) *Engine {
+		return New(stubRules{{ID: "r", Weight: 0.3, Match: contract.Match{Field: "path_norm", Op: op, Value: "/.git"}}})
+	}
+	judgePath := func(e *Engine, p string) contract.Verdict {
+		t.Helper()
+		v, err := e.Judge(context.Background(), contract.JudgeRequest{
+			DecisionID: "d-1",
+			Observed:   contract.Observation{Path: p},
+		})
+		if err != nil {
+			t.Fatalf("判定失败：%v", err)
+		}
+		return v
+	}
+
+	seg := newEngine("path_prefix")
+	for _, hit := range []string{"/.git", "/.git/config"} {
+		if v := judgePath(seg, hit); len(v.Signals) != 1 {
+			t.Errorf("path_prefix 应命中 %q，得到 %+v", hit, v)
+		}
+	}
+	for _, miss := range []string{"/.gitignore", "/.gitlab/ci.yml"} {
+		if v := judgePath(seg, miss); len(v.Signals) != 0 {
+			t.Errorf("path_prefix 不应命中 %q，得到 %+v", miss, v)
+		}
+	}
+
+	// 对照：`prefix` 保持纯字符串前缀语义（`/.gitignore` 依旧命中 —— 既有行为不动）。
+	plain := newEngine("prefix")
+	if v := judgePath(plain, "/.gitignore"); len(v.Signals) != 1 {
+		t.Errorf("prefix 必须保持「纯字符串前缀」语义（不改既有匹配面），得到 %+v", v)
+	}
+
+	// 空值不命中（空前缀等于「什么都命中」，那不是规则）。
+	empty := New(stubRules{{ID: "r", Weight: 0.3, Match: contract.Match{Field: "path_norm", Op: "path_prefix", Value: ""}}})
+	if v := judgePath(empty, "/anything"); len(v.Signals) != 0 {
+		t.Errorf("空路径前缀必须不命中，得到 %+v", v)
+	}
+}
+
 // TestJudge_ScoreCappedAtOne 断言风险分被截顶在 1。
 func TestJudge_ScoreCappedAtOne(t *testing.T) {
 	e := New(stubRules{

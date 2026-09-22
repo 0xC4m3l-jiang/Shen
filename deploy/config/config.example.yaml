@@ -71,27 +71,34 @@ rules:
     weight: 0.2
     match: {field: "user_agent", op: "contains", value: "python-requests"}
   # ② 敏感文件与端点（路径）
+  #
+  # 这里用 `path_norm` + `path_prefix`，而不是 `path` + `prefix` —— 两者各治一类问题：
+  #   · `path_norm`：归一化后的路径（去 `..`、合并 `//`、去尾斜杠）⇒ `/static/../.git/config`
+  #     不会因为多一层无害前缀就躲开规则；`path`（原样）留给「攻击意图」（见 ③ 的 `../`）。
+  #   · `path_prefix`：**路径段边界**前缀 ⇒ `/.git` 命中 `/.git/config`，
+  #     但不再误伤合法的 `/.gitignore`。
+  #   ⚠️ `prefix`（纯字符串前缀）仍然保留可用 —— 它只是不区分路径段，写规则时要自己确认边界。
   - id: "path-probe"
     weight: 0.3
-    match: {field: "path", op: "prefix", value: "/.git"}
+    match: {field: "path_norm", op: "path_prefix", value: "/.git"}
   - id: "path-env"
     weight: 0.5
-    match: {field: "path", op: "prefix", value: "/.env"}
+    match: {field: "path_norm", op: "path_prefix", value: "/.env"}
   - id: "path-svn"
     weight: 0.4
-    match: {field: "path", op: "prefix", value: "/.svn"}
+    match: {field: "path_norm", op: "path_prefix", value: "/.svn"}
   - id: "path-aws-credentials"
     weight: 0.6
-    match: {field: "path", op: "contains", value: "/.aws/credentials"}
+    match: {field: "path_norm", op: "contains", value: "/.aws/credentials"}
   - id: "path-admin"
     weight: 0.3
-    match: {field: "path", op: "prefix", value: "/admin"}
+    match: {field: "path_norm", op: "path_prefix", value: "/admin"}
   - id: "path-actuator"
     weight: 0.4
-    match: {field: "path", op: "prefix", value: "/actuator"}
+    match: {field: "path_norm", op: "path_prefix", value: "/actuator"}
   - id: "path-wp-login"
     weight: 0.5
-    match: {field: "path", op: "prefix", value: "/wp-login.php"}
+    match: {field: "path_norm", op: "path_prefix", value: "/wp-login.php"}
   # ③ 注入与穿越形态
   #
   # `path` 与 `query` 是两个**独立**的可匹配字段：HTTP 语义上路径与查询串本来就分开
@@ -102,9 +109,11 @@ rules:
   #   **百分号解码一次**（`%2e`→`.`、`%20`→空格）且 `+`→空格；失败时原样传递。
   #   于是 `file=../../etc/passwd` 与它的百分号编码形态
   #   （`file=%2e%2e%2f...`）同一条规则都能命中 —— 这正是「编码即绕过」的关法。
-  #   ⚠️ **仍不覆盖**：路径侧的归一化（`/static/../.git/config` 不查归一化就匹配不到）
-  #   与多次编码（双层 `%252e`）—— 那属另一轮取舍（需评估代价与幂等）。
-  #   现状见 docs/spec/config.md §2.4，以及运行手册里的「规则精度」一节。
+  #   ⚠️ **仍不覆盖**：多次编码（双层 `%252e`）—— 重复解码会把真实数据改写成另一个值。
+  #   路径侧的两类问题已在 ② 组解决：目标资源用 `path_norm`（归一化），
+  #   而这里的 `path-traversal` 故意留在**原样** `path` 上：它举证的是「攻击意图」（`../`），
+  #   归一化会把 `../` 解掉，用 `path_norm` 反而看不见这个意图。
+  #   口径与边界见 docs/spec/config.md §2.4。
   - id: "path-traversal"
     weight: 0.7
     match: {field: "path", op: "contains", value: "../"}

@@ -670,13 +670,13 @@ func ruleMatch(m *matchDoc, p string) (contract.Match, error) {
 		return contract.Match{}, missing(p + ".match.field")
 	}
 	if !validField(*m.Field) {
-		return contract.Match{}, fmt.Errorf("policy: %s.match.field=%q 未知（允许：user_agent / path / query / method / source_ip / tls_fingerprint）", p, *m.Field)
+		return contract.Match{}, fmt.Errorf("policy: %s.match.field=%q 未知（允许：user_agent / path / path_norm / query / method / source_ip / tls_fingerprint）", p, *m.Field)
 	}
 	if m.Op == nil {
 		return contract.Match{}, missing(p + ".match.op")
 	}
 	if !validOp(*m.Op) {
-		return contract.Match{}, fmt.Errorf("policy: %s.match.op=%q 未知（允许：equals / prefix / contains）", p, *m.Op)
+		return contract.Match{}, fmt.Errorf("policy: %s.match.op=%q 未知（允许：equals / prefix / path_prefix / contains）", p, *m.Op)
 	}
 	if m.Value == nil {
 		return contract.Match{}, missing(p + ".match.value")
@@ -815,7 +815,7 @@ func nonNil(v []string) []string {
 
 func validField(s string) bool {
 	switch s {
-	case "user_agent", "path", "query", "method", "source_ip", "tls_fingerprint":
+	case "user_agent", "path", "path_norm", "query", "method", "source_ip", "tls_fingerprint":
 		return true
 	default:
 		return false
@@ -824,7 +824,7 @@ func validField(s string) bool {
 
 func validOp(s string) bool {
 	switch s {
-	case "equals", "prefix", "contains":
+	case "equals", "prefix", "path_prefix", "contains":
 		return true
 	default:
 		return false

@@ -105,18 +105,14 @@
     {
       "id": "probe-gitignore",
       "group": "规则精度",
-      "why": "合法静态文件 `/.gitignore` 被前缀规则 `/.git` 误伤",
+      "why": "合法静态文件 `/.gitignore` 不应被源码目录规则命中（路径段边界生效）",
       "method": "GET",
       "path": "/.gitignore",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "gap": {
-          "kind": "精度",
-          "why": "前缀匹配只看字符串开头，`/.gitignore` 被当成源码目录探测",
-          "close": "改为路径段边界匹配（或 equals 具体文件），并在配置规范里写明前缀语义"
-        }
+        "max_score": 0.0
       },
       "modules": [
         "judge",
@@ -126,18 +122,15 @@
     {
       "id": "probe-git-prefixed",
       "group": "规则精度",
-      "why": "前缀绕过：`/static/../.git/config` 不以 `/.git` 开头",
+      "why": "加一层无害前缀（`/static/../.git/config`）不应绕过路径规则：目标资源按归一化路径匹配",
       "method": "GET",
       "path": "/static/../.git/config",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "gap": {
-          "kind": "精度",
-          "why": "未归一化就匹配，加一层无害前缀即可绕过",
-          "close": "对 path 归一化（去 `..`、合并重复斜杠）后再匹配；需评估代价"
-        }
+        "min_score": 0.9,
+        "max_score": 1.0
       },
       "modules": [
         "judge",

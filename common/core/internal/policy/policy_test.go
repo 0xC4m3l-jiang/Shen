@@ -81,6 +81,30 @@ func mustLoad(t *testing.T, s string) *Loader {
 // 为什么要有它：字段白名单是「新增可匹配字段」的唯一闸门（`validField`）——
 // 只测「未知字段被拒」时，把 `query` 漏掉的回归不会被抓住（它会以「未知字段」的名义被拒，
 // 而负样本本来期望的就是拒绝）。依据见 docs/spec/config.md §2.4。
+// TestLoadAcceptsPathNormAndPathPrefix 断言新增字段/算符都在白名单里（正样本）。
+//
+// 负样本（未知字段/算符被拒）在同表的 TestLoadRejectsInvalidConfig 里 —— 两侧都要有：
+// 只测一侧时，「漏加白名单」会表现为「新增字段被当未知拒绝」，而负样本恰好期望拒绝。
+func TestLoadAcceptsPathNormAndPathPrefix(t *testing.T) {
+	yaml := mutate(t, validYAML, `field: "path"`, `field: "path_norm"`)
+	yaml = mutate(t, yaml, `op: "prefix"`, `op: "path_prefix"`)
+
+	l := mustLoad(t, yaml)
+	rules, err := l.Rules(context.Background())
+	if err != nil {
+		t.Fatalf("取规则失败：%v", err)
+	}
+	found := false
+	for _, r := range rules {
+		if r.Match.Field == "path_norm" && r.Match.Op == "path_prefix" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("path_norm + path_prefix 的规则应被装载，得到 %+v", rules)
+	}
+}
+
 func TestLoadAcceptsQueryField(t *testing.T) {
 	l := mustLoad(t, mutate(t, validYAML, `field: "path"`, `field: "query"`))
 

@@ -51,6 +51,13 @@ func (e *Engine) Judge(ctx context.Context, req contract.JudgeRequest) (contract
 }
 
 // match 是声明式求值；规则本身是数据，故此处只有少数几个比较算符。
+//
+// `path_prefix` 与 `prefix` 的差别只在**路径段边界**：
+//
+//	`prefix`      纯字符串前缀 —— `/.git` 会命中 `/.gitignore`（误伤合法静态文件）
+//	`path_prefix` 段边界前缀 —— `/.git` 命中 `/.git` 与 `/.git/config`，不命中 `/.gitignore`
+//
+// 两者都保留：前者是既有的匹配面（改了就是行为变更），后者是“按路径段”的正确写法。
 func match(o contract.Observation, m contract.Match) bool {
 	got := o.Field(m.Field)
 	switch m.Op {
@@ -58,11 +65,28 @@ func match(o contract.Observation, m contract.Match) bool {
 		return got == m.Value
 	case "prefix":
 		return strings.HasPrefix(got, m.Value)
+	case "path_prefix":
+		return pathSegmentPrefix(got, m.Value)
 	case "contains":
 		return strings.Contains(got, m.Value)
 	default:
 		return false
 	}
+}
+
+// pathSegmentPrefix 判断 got 是否位于路径段 m 之下：`got == m` 或 `got` 以 `m + "/"` 开头。
+//
+// 尾斜杠要归一：`/admin/` 与 `/admin` 是同一段（否则“带尾斜杠的配置值”会静默永不命中）。
+// 值为空时一律不命中 —— 空路径前缀等于“什么都命中”，那不是规则，是漏洞。
+func pathSegmentPrefix(got, m string) bool {
+	if m == "" {
+		return false
+	}
+	seg := strings.TrimSuffix(m, "/")
+	if seg == "" { // 值就是 "/"：只命中根
+		return got == "/" || got == ""
+	}
+	return got == seg || strings.HasPrefix(got, seg+"/")
 }
 
 var _ Judge = (*Engine)(nil)
