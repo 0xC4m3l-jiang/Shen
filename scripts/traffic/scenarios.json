@@ -364,18 +364,15 @@
     {
       "id": "injection-traversal-plain",
       "group": "规则精度",
-      "why": "验证查询串不可见这一缺口（载荷在 query，不在 path）",
+      "why": "查询串里的路径穿越（`?file=../../etc/passwd`）应被 query 字段的规则命中",
       "method": "GET",
       "path": "/download?file=../../etc/passwd",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "gap": {
-          "kind": "未覆盖",
-          "why": "载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的穿越/SQLi 完全不可见",
-          "close": "给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）"
-        }
+        "min_score": 0.65,
+        "max_score": 1.0
       },
       "modules": [
         "judge",
@@ -385,18 +382,15 @@
     {
       "id": "injection-traversal-encoded",
       "group": "规则精度",
-      "why": "URL 编码穿越（`%2e%2e%2f`）绕过字符串匹配",
+      "why": "百分号编码穿越应被命中（`query` 解码一次后同一规则生效）",
       "method": "GET",
       "path": "/download?file=%2e%2e%2f%2e%2e%2fetc%2fpasswd",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "gap": {
-          "kind": "精度",
-          "why": "规则匹配原始路径字符串，编码后不命中",
-          "close": "匹配前解码/归一化 query（注意解码代价与幂等）"
-        }
+        "min_score": 0.65,
+        "max_score": 1.0
       },
       "modules": [
         "judge",
@@ -406,18 +400,15 @@
     {
       "id": "injection-sqli-union",
       "group": "规则精度",
-      "why": "验证查询串不可见这一缺口（载荷在 query，不在 path）",
+      "why": "查询串里的 union select（`?q=union+select`）应被命中（`+` 解码成空格）",
       "method": "GET",
       "path": "/search?q=union+select",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "gap": {
-          "kind": "未覆盖",
-          "why": "载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的注入完全不可见",
-          "close": "给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）"
-        }
+        "min_score": 0.75,
+        "max_score": 1.0
       },
       "modules": [
         "judge",
@@ -427,18 +418,15 @@
     {
       "id": "injection-sqli-encoded",
       "group": "规则精度",
-      "why": "`union%20select`（百分号编码空格）绕过",
+      "why": "编码空格（`%20`）的 union select 应被命中（解码一次后同一规则生效）",
       "method": "GET",
       "path": "/search?q=union%20select",
       "headers": {
         "User-Agent": "curl/8.4.0"
       },
       "expect": {
-        "gap": {
-          "kind": "精度",
-          "why": "同上：编码形式不被字符串规则命中",
-          "close": "同 encoded-traversal"
-        }
+        "min_score": 0.75,
+        "max_score": 1.0
       },
       "modules": [
         "judge",

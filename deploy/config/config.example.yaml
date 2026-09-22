@@ -92,14 +92,31 @@ rules:
   - id: "path-wp-login"
     weight: 0.5
     match: {field: "path", op: "prefix", value: "/wp-login.php"}
-  # ③ 注入与穿越形态（注意：按**原始路径字符串**匹配 —— 编码或改写即可绕过，
-  #    真实部署应先归一化/解码再匹配，见 docs/spec/config.md §2.4 与运行手册的"规则精度"一节）
+  # ③ 注入与穿越形态
+  #
+  # `path` 与 `query` 是两个**独立**的可匹配字段：HTTP 语义上路径与查询串本来就分开
+  # （`/download?file=...` 与 `/download` 是不同的事实），合并成一个字段会让
+  # 「路径穿越」与「参数注入」无法分开建模、也让证据里说不清命中的是哪个部分。
+  #
+  # `query` 的口径（与 proto / 适配器三方约定，见 docs/spec/config.md §2.4）：
+  #   **百分号解码一次**（`%2e`→`.`、`%20`→空格）且 `+`→空格；失败时原样传递。
+  #   于是 `file=../../etc/passwd` 与它的百分号编码形态
+  #   （`file=%2e%2e%2f...`）同一条规则都能命中 —— 这正是「编码即绕过」的关法。
+  #   ⚠️ **仍不覆盖**：路径侧的归一化（`/static/../.git/config` 不查归一化就匹配不到）
+  #   与多次编码（双层 `%252e`）—— 那属另一轮取舍（需评估代价与幂等）。
+  #   现状见 docs/spec/config.md §2.4，以及运行手册里的「规则精度」一节。
   - id: "path-traversal"
     weight: 0.7
     match: {field: "path", op: "contains", value: "../"}
   - id: "path-sqli-union"
     weight: 0.8
     match: {field: "path", op: "contains", value: "union+select"}
+  - id: "query-traversal"
+    weight: 0.7
+    match: {field: "query", op: "contains", value: "../"}
+  - id: "query-sqli-union"
+    weight: 0.75
+    match: {field: "query", op: "contains", value: "union select"}
   # ④ 破坏性方法
   - id: "method-destructive"
     weight: 0.5

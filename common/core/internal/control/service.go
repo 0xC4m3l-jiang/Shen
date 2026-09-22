@@ -141,6 +141,7 @@ func (s *JudgeService) record(ctx context.Context, req contract.JudgeRequest, d 
 		SourceIP:   sourceIP,
 		Method:     req.Observed.Method,
 		Path:       req.Observed.Path,
+		Query:      req.Observed.Query,
 		UserAgent:  req.Observed.UserAgent,
 		SessionID:  s.mask(req.Session.ID),
 		Action:     d.Action.String(),
@@ -195,6 +196,7 @@ func fromProto(in *judgev1.JudgeRequest) contract.JudgeRequest {
 	req.Observed.UserAgent = obs.GetUserAgent()
 	req.Observed.Method = obs.GetMethod()
 	req.Observed.Path = obs.GetPath()
+	req.Observed.Query = obs.GetQuery()
 	req.Observed.TLSFingerprint = obs.GetTlsFingerprint()
 	req.Observed.Headers = obs.GetHeaders()
 	return req

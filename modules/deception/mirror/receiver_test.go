@@ -39,6 +39,48 @@ func newReceiver(j *fakeJudge, t *fakeTelemetry) *Receiver {
 	return &Receiver{Judge: j, Report: t, Now: func() time.Time { return fixed }, TrustXFF: true}
 }
 
+// TestQueryOfDecodesOnce 断言形态①的观测也带**解码一次**的查询串。
+//
+// 与形态③④（`deception/proxy`）的 `queryOf` 是**两份独立实现**（适配器必须能各自部署，INT-5）——
+// 所以两边各有一例同样的用例：改一处而漏另一处时，只能靠各自那份用例抓住。
+func TestQueryOfDecodesOnce(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{"file=../../etc/passwd", "file=../../etc/passwd"},
+		{"file=%2e%2e%2f%2e%2e%2fetc%2fpasswd", "file=../../etc/passwd"},
+		{"q=union+select", "q=union select"},
+		{"q=union%20select", "q=union select"},
+		{"", ""},
+		{"file=%252e%252e%252f", "file=%2e%2e%2f"}, // 只解一层：重复解码会改写真实数据
+		{"q=100%", "q=100%"},                       // 非法转义：原样传递，不丢载荷
+	}
+	for _, c := range cases {
+		target := "/download"
+		if c.raw != "" {
+			target += "?" + c.raw
+		}
+		if got := queryOf(httptest.NewRequest(http.MethodGet, target, nil)); got != c.want {
+			t.Errorf("queryOf(%q) = %q，期望 %q", c.raw, got, c.want)
+		}
+	}
+}
+
+// 观测里 query 与 path 各归其位（path 不含查询串）。
+func TestReceiver_ObservationCarriesQuery(t *testing.T) {
+	j, tm := &fakeJudge{}, &fakeTelemetry{}
+	r := newReceiver(j, tm)
+
+	req := httptest.NewRequest(http.MethodGet, "/search?q=union%20select", nil)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	obs := j.got[0].GetObserved()
+	if obs.GetPath() != "/search" {
+		t.Errorf("path 必须不含查询串，得到 %q", obs.GetPath())
+	}
+	if obs.GetQuery() != "q=union select" {
+		t.Errorf("query 必须是解码一次后的形态，得到 %q", obs.GetQuery())
+	}
+}
+
 func TestReceiver_ForwardsObservationToCore(t *testing.T) {
 	j, tm := &fakeJudge{}, &fakeTelemetry{}
 	r := newReceiver(j, tm)

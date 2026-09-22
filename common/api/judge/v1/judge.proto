@@ -21,9 +21,17 @@ message Observation {
   string source_ip = 1;
   string user_agent = 2;
   string method = 3;
+  // path **不含**查询串（与 HTTP 语义一致）。
   string path = 4;
   string tls_fingerprint = 5;
   map<string, string> headers = 6;
+  // query 是 URL 查询串（不含前导 `?`），供规则匹配。
+  //
+  // 三方约定（proto / 适配器 / 规则引擎必须一致）：**百分号解码一次**
+  // （`%2e`→`.`、`%20`→空格）且 `+`→空格；解码失败时原样传递（从不丢数据）。
+  // 为什么要它：载荷常在查询串里（`?file=../../etc/passwd`），只匹配 path 时看不见。
+  // 为什么只解一次：重复解码会把真实数据改写成另一个值（双侧解码漏洞的根因）。
+  string query = 7;
 }
 
 message JudgeResponse {

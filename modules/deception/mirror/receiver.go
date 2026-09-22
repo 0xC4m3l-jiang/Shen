@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -114,8 +115,26 @@ func (r *Receiver) observationFrom(req *http.Request) *judgev1.Observation {
 		UserAgent: req.Header.Get("User-Agent"),
 		Method:    req.Method,
 		Path:      req.URL.Path,
+		Query:     queryOf(req),
 		Headers:   headers,
 	}
+}
+
+// queryOf 取**解码一次**的查询串（不含前导 `?`），供规则匹配。
+//
+// 与形态③/④（`deception/proxy`）的 `queryOf` **同语义、各自实现**：适配器之间必须能独立部署（`INT-5`），
+// 两处刻意不共享代码 —— 改其一时必须同时改另一处。
+// 约定：解码一次（`%2e`→`.`、`%20`/`+`→空格）；只解一次；失败时原样传递（`AR-31`）。
+func queryOf(req *http.Request) string {
+	raw := req.URL.RawQuery
+	if raw == "" {
+		return ""
+	}
+	decoded, err := url.QueryUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return decoded
 }
 
 func (r *Receiver) clientIP(req *http.Request) string {

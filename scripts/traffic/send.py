@@ -28,6 +28,7 @@ import pathlib
 import secrets
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -266,6 +267,7 @@ def judge(
     *,
     previous_decision: str | None,
     stack_form: str = "unknown",
+    form_signal_absent: bool = False,
 ) -> dict[str, Any]:
     """把一条场景的实测结果与期望比对，返回结果字典。
 
@@ -278,11 +280,17 @@ def judge(
     # 于是观察行里残留一条失败 ⇒ 整次运行退出码 1。
     needs_takeover = str(scenario.get("stack") or "") == "takeover"
     form_observe = needs_takeover and stack_form == "shadow"
-    observe_only = bool(expect.get("observe_only")) or form_observe
+    form_unknown = needs_takeover and form_signal_absent
+    observe_only = bool(expect.get("observe_only")) or form_observe or form_unknown
     if form_observe:
         scenario["_observe_note"] = (
             "影子栈（/api/topology 的 shadow=true）⇒ 只算不处置，本场景只能观察；"
             "要跑接管形态请加 deploy/docker/compose.verify-mirage.yaml"
+        )
+    if form_unknown:
+        scenario["_observe_note"] = (
+            "证据不足：控制台还没有任何流量，而形态信号（graph 自己算的 shadow）**按流量推断** ⇒ "
+            "此刻无法区分「影子栈」与「接管栈」。先跑一次 scripts/shen.sh smoke（或重跑本项）再看。"
         )
     gap = expect.get("gap")
     result: dict[str, Any] = {
@@ -562,6 +570,38 @@ def render(
                 print(f"  ✗ {issue}")
 
 
+def warm_up(entry: str, timeout: float, *, attempts: int = 12, pause: float = 0.5) -> bool:
+    """等到入口**真的在服务**为止（有界重试）；就绪返回 True。
+
+    为什么不是「打一次就完事」：整栈刚重建时业务容器比核心晚就绪，头几条请求会拿到 502 ——
+    那是**通道时序**，不是被测行为（实测：`restart` 后直接 `traffic`，前两条场景因 502 假红）。
+    它同时解决 K-24：适配器冷连接 + 还没 Pull 到策略的窗口里第一条请求会 failopen。
+
+    为什么不无限等：等不到就如实说「栈还没起来」（退出码 1 的那种红要能被人看懂），
+    而不是把超时伪装成业务故障。
+    """
+    host, port, _ = parse_http_url(entry)
+    url = f"http://{host}:{port}/healthz"
+    last: str = "（无响应）"
+    for _ in range(max(1, attempts)):
+        try:
+            # scheme 与主机名已由 parse_http_url 显式校验（只允许 http/https），
+            # 与 fetch_json 同一做法：
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
+            with urllib.request.urlopen(url, timeout=timeout) as response:
+                if response.status < 500:
+                    time.sleep(1.0)  # 给异步上报与控制台读侧一拍时间（形态信号要靠它）
+                    return True
+                last = f"HTTP {response.status}"
+        except urllib.error.HTTPError as exc:
+            last = f"HTTP {exc.code}"
+        except OSError as exc:
+            last = str(exc)
+        time.sleep(pause)
+    print(f"（热身放弃：{last}）", file=sys.stderr)
+    return False
+
+
 def make_nonce(attempt: int) -> str:
     """每次请求的唯一值：查询串（拟真）用。
 
@@ -647,6 +687,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{exc}\n先跑 scripts/shen.sh status 看看服务起来没", file=sys.stderr)
         return 1
 
+    warm_ready = warm_up(args.entry, args.timeout)
+    if not warm_ready:
+        # 不静默：热身失败本身不判失败，但要让人看见（否则第一条场景的红会让人查错方向）
+        print(
+            "（热身未就绪：入口仍返回 5xx/连不上 —— 后续场景的红可能是「栈还没起来」，"
+            "先跑 scripts/shen.sh status 确认）",
+            file=sys.stderr,
+        )
+
+    # 形态信号必须在热身**之后**读：控制台的 `shadow` 是**按流量推断**的
+    # （`Graph.Shadow` = 已有逐请求图的 OR）—— 刚重启、一条流量都没有时它是 false，
+    # 于是"影子栈"会被当成"接管栈"，两条接管场景假红（实测：restart 后直接 verify，EXIT=1）。
+    # 热身请求正好提供第一条流量；随后再取一次流量集，用来判断这个信号到底有没有依据。
+    try:
+        flows_after_warmup = fetch_flows(args.console)
+    except (ConsoleError, ValueError) as exc:
+        print(f"{exc}\n先跑 scripts/shen.sh status 看看服务起来没", file=sys.stderr)
+        return 1
+
     # AI 层开没开，由**核心自己的快照**说了算（不猜）。
     # 为什么需要它：声明 `stack: takeover-ai` 的场景在「接管但 AI 关」的栈里，
     # 落点是对的（mirage）而注入结果是 `disabled` —— 那是**形态没打开**，不是被测行为不达标。
@@ -661,6 +720,18 @@ def main(argv: list[str] | None = None) -> int:
     except (ConsoleError, AttributeError):
         stack_form = "unknown"
 
+    # 信号**有没有依据**：`shadow=false` 既可能是「接管栈」，也可能是「还没有任何流量」。
+    # 后者不是证据 —— 需要接管形态的场景此时要记「证据不足」，而不是拿一个空信号去判失败。
+    form_signal_absent = (not flows_after_warmup) and stack_form != "unknown"
+    if form_signal_absent:
+        # 一句话说清：为什么这里没有结论，以及怎么让它有结论。
+        print(
+            "（控制台还没有任何流量 ⇒ 形态信号（按流量推断的 shadow）尚无依据；"
+            "需要接管形态的场景本次记为「证据不足」；"
+            "先跑一次 scripts/shen.sh smoke 即可让本项有结论）",
+            file=sys.stderr,
+        )
+
     ai_state = "unknown"  # on / off / unknown（三态：读不到 ≠ 关着）
     try:
         snapshot = fetch_json("/api/config", args.console) or {}
@@ -674,18 +745,6 @@ def main(argv: list[str] | None = None) -> int:
     # 热身（K-24）：第一条请求常落在「冷连接 + 适配器还没 Pull 到策略」的窗口里，
     # 结果是 failopen（放行到业务、没有判定记录）—— 那是**通道时序**，不是被测行为。
     # 不热身的话，只跑单条场景时第一条几乎必然假红（实测：takeover-mirage-routed 超时）。
-    warm_host, warm_port, _ = parse_http_url(args.entry)
-    warm_url = f"http://{warm_host}:{warm_port}/healthz"
-    try:
-        # scheme 与主机名已由 parse_http_url 显式校验（只允许 http/https），与 fetch_json 同一做法：
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
-        with urllib.request.urlopen(warm_url, timeout=args.timeout) as response:
-            response.read()
-        time.sleep(1.0)
-    except OSError as exc:
-        # 不静默：热身失败本身不判失败，但要让人看见（否则第一条场景的红会让人查错方向）
-        print(f"（热身请求失败，不影响判定：{exc}）", file=sys.stderr)
-
     for scenario in scenarios:
         expect = scenario.get("expect") or {}
         if str(scenario.get("stack") or "") == "takeover-ai":
@@ -752,6 +811,7 @@ def main(argv: list[str] | None = None) -> int:
                 flow,
                 previous_decision=previous_decision,
                 stack_form=stack_form,
+                form_signal_absent=form_signal_absent,
             )
             row["attempt"] = attempt + 1
             if flow is not None:

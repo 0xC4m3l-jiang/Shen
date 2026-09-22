@@ -3,6 +3,7 @@
   "source_ip": "203.0.113.9",
   "method": "GET",
   "path": "/.git/config",
+  "query": "file=../../etc/passwd",
   "user_agent": "HeadlessChrome/120",
   "session_id": "9d2a6f0c5b1e4a37",
   "action": "route_origin",

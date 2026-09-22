@@ -76,6 +76,29 @@ func mustLoad(t *testing.T, s string) *Loader {
 	return l
 }
 
+// TestLoadAcceptsQueryField 断言 `query` 是合法规则字段（正样本）。
+//
+// 为什么要有它：字段白名单是「新增可匹配字段」的唯一闸门（`validField`）——
+// 只测「未知字段被拒」时，把 `query` 漏掉的回归不会被抓住（它会以「未知字段」的名义被拒，
+// 而负样本本来期望的就是拒绝）。依据见 docs/spec/config.md §2.4。
+func TestLoadAcceptsQueryField(t *testing.T) {
+	l := mustLoad(t, mutate(t, validYAML, `field: "path"`, `field: "query"`))
+
+	rules, err := l.Rules(context.Background())
+	if err != nil {
+		t.Fatalf("取规则失败：%v", err)
+	}
+	found := false
+	for _, r := range rules {
+		if r.Match.Field == "query" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("query 字段的规则应被装载，得到 %+v", rules)
+	}
+}
+
 func TestLoadValidConfig(t *testing.T) {
 	l := mustLoad(t, validYAML)
 	snap, err := l.Snapshot(context.Background())

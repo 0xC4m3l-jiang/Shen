@@ -27,6 +27,7 @@ func TestDecisionRecordWireContract(t *testing.T) {
 		SourceIP:   "203.0.113.9",
 		Method:     "GET",
 		Path:       "/.git/config",
+		Query:      "file=../../etc/passwd",
 		UserAgent:  "HeadlessChrome/120",
 		SessionID:  "9d2a6f0c5b1e4a37",
 		Action:     "route_origin",

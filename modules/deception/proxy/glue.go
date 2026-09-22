@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,27 @@ func actionOf(resp *judgev1.JudgeResponse) judgev1.Action {
 	}
 }
 
+// queryOf 取**解码一次**的查询串（不含前导 `?`），供规则匹配。
+//
+// 三条约定（与 proto / 规则引擎三方一致，见 `docs/spec/config.md` §2.4）：
+//   - 解码一次：`%2e`→`.`、`%20`→空格、`+`→空格 —— 否则编码形态（`%2e%2e%2f`、`union%20select`）不可见；
+//   - **只**解一次：重复解码会把真实数据改写成另一个值（双侧解码漏洞的根因）；
+//   - 解码失败时原样传递：宁可少匹配，也不把载荷弄丢（`AR-31`）。
+//
+// 形态①的接收端（`deception/mirror`）有一份**同样语义**的实现。两处刻意不共享代码：
+// 适配器之间必须能各自独立部署（`INT-5`）—— 改其一时必须同时改另一处。
+func queryOf(r *http.Request) string {
+	raw := r.URL.RawQuery
+	if raw == "" {
+		return ""
+	}
+	decoded, err := url.QueryUnescape(raw)
+	if err != nil {
+		return raw
+	}
+	return decoded
+}
+
 // ── 观测构造 ─────────────────────────────────────────────────────────────────
 
 // observationFrom 把 HTTP 请求转成观测。
@@ -60,6 +82,7 @@ func observationFrom(r *http.Request, trustXFF bool) *judgev1.Observation {
 		UserAgent: r.Header.Get("User-Agent"),
 		Method:    r.Method,
 		Path:      r.URL.Path,
+		Query:     queryOf(r),
 		Headers:   headers,
 	}
 }

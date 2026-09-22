@@ -38,6 +38,7 @@ def test_fixture_exists_and_is_the_go_shape() -> None:
         "source_ip",
         "method",
         "path",
+        "query",
         "user_agent",
         "session_id",
         "action",
