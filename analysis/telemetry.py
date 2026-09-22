@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 CONCLUSION_EVENT_TYPE = "analysis"
@@ -137,6 +138,19 @@ def _to_proto(event: WireEvent) -> Any:
     return item
 
 
+def _parse_stamp(stamp: str) -> datetime:
+    """解析 RFC3339 时间戳（不同偏移量也能正确比较）。
+
+    为什么不能用字符串比较：`2026-09-19T10:00:00+08:00` 与 `2026-09-19T03:00:00+00:00`
+    是同一时刻，但字符串比大小会得出错误结论。
+    """
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 class InMemoryTelemetry:
     """测试与离线替身：同一套语义，无网络（`MD-22`）。"""
 
@@ -147,10 +161,23 @@ class InMemoryTelemetry:
     def list_events(
         self, *, limit: int = 200, since: str | None = None, event_type: str = ""
     ) -> Sequence[WireEvent]:
+        """与真服务端**同序**：`newest first` + `limit` + `since`（含）过滤。
+
+        保真度很重要（实测踩过同类问题）：最早这一版返回的是 `oldest first` 且字符串比时间戳 ——
+        与核心（`store` 的 newest-first + 解析后比较）不一致，于是「按会话分组后的顺序」
+        在测试与生产里是**两回事**，而测试还以为自己验过了（方案 T23 要求覆盖 newest-first/乱序）。
+        """
         picked = [e for e in self._events if not event_type or e.event_type == event_type]
         if since:
-            picked = [e for e in picked if e.created_at >= since]
-        return picked[-limit:]
+            cutoff = _parse_stamp(since)
+            picked = [e for e in picked if _parse_stamp(e.created_at) >= cutoff]
+        # newest first：按时间倒序；**同一时间戳按写入序倒排**（后写入的在前）。
+        # 为什么要有后半句：核心的读侧是「写入时插到头部」（`store` 的 recent 是 prepend），
+        # 所以同等时间戳下最新的那条确实在前 —— 只按时间做稳定排序会得到相反的顺序，
+        # 于是「先分析哪个会话」在测试与生产里就不一样了（方案 T23 明确要求覆盖相同时间戳）。
+        indexed = list(enumerate(picked))
+        indexed.sort(key=lambda pair: (_parse_stamp(pair[1].created_at), pair[0]), reverse=True)
+        return [event for _, event in indexed[:limit]]
 
     def report(self, event: WireEvent) -> tuple[int, int]:
         if any(existing.event_id == event.event_id for existing in self._events):

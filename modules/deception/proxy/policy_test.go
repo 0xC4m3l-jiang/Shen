@@ -241,6 +241,84 @@ func TestApplyEdgePolicyOverlaysBackends(t *testing.T) {
 	}
 }
 
+// TestRemoteRevocationBeatsLocalFallback 断言**撤销优先于本地兜底**（方案 §9.2 / D06）：
+// 远端把某个名字声明为 `enabled: false` 时，本地 env 里的**同名**后端不得把它复活。
+//
+// 为什么这条重要：撤销若只是「从远端表里消失」，本地兜底会悄悄把流量继续送过去 ——
+// 禁用指令失效，而且没有任何可见信号（P0 边界风险）。
+func TestRemoteRevocationBeatsLocalFallback(t *testing.T) {
+	h := remoteTestHandler(t, Config{Mirage: map[string]string{
+		"hp":         "http://127.0.0.1:1",
+		"local-only": "http://127.0.0.1:2",
+	}})
+
+	_, raw := policyFixture(t, 8, []policyBackend{
+		{Name: "hp", Address: "http://127.0.0.1:3333", Enabled: false}, // 撤销
+	}, nil)
+	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+		t.Fatalf("应用策略应当成功：%v", err)
+	}
+
+	if _, ok := h.mirageHandler("hp"); ok {
+		t.Error("被远端撤销的名字**禁止**回落到本地同名项（撤销优先于本地兜底）")
+	}
+	if _, ok := h.mirageHandler("local-only"); !ok {
+		t.Error("远端没谈及的名字仍应走本地兜底（ADR-0018 的既定语义）")
+	}
+}
+
+// TestRevokedBackendFallsBackToOriginByRouting 是上一条的**路由层**证据：
+// 决策仍是 route_mirage/hp，但因为 hp 已被撤销，实际落点必须是业务（`origin_fallback`），
+// 而不是偷偷用了本地 env 的同名项。
+func TestRevokedBackendFallsBackToOriginByRouting(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_MIRAGE, Backend: "hp"}}
+	report := &stubReporter{}
+	h := newTestHandler(t, Config{
+		Upstream: "http://127.0.0.1:9",
+		Mirage:   map[string]string{"hp": "http://127.0.0.1:9"},
+	}, judge, report)
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+
+	_, raw := policyFixture(t, 9, []policyBackend{
+		{Name: "hp", Address: "http://127.0.0.1:3333", Enabled: false},
+	}, nil)
+	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+		t.Fatalf("应用策略应当成功：%v", err)
+	}
+
+	w := do(h, http.MethodGet, "http://svc.example/.git/config", "", nil)
+	if got := w.Header().Get("X-Backend"); got != "origin" {
+		t.Fatalf("被撤销的后端不得被本地项复活：期望落到 origin，实际 %q", got)
+	}
+	// 落点必须是 origin_fallback（“决策要改道，但后端不可用”），不是 mirage。
+	if got := executedOf(t, report); got != executedFallback {
+		t.Fatalf("落点应为 %q，实际 %q", executedFallback, got)
+	}
+}
+
+// executedOf 从上报的事件里取最后一条的 `executed` 取值（等异步上报，最多 2 秒）。
+func executedOf(t *testing.T, r *stubReporter) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		r.mu.Lock()
+		if n := len(r.events); n > 0 {
+			raw := append([]byte(nil), r.events[n-1].GetPayload()...)
+			r.mu.Unlock()
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatalf("事件载荷不是合法 JSON：%v", err)
+			}
+			got, _ := payload["executed"].(string)
+			return got
+		}
+		r.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("2 秒内没有收到上报事件（异步上报未发生）")
+	return ""
+}
+
 // TestApplyEdgePolicyRejectsBadInput：schema 读不懂 / JSON 非法 → 整份拒绝；
 // 坏地址 → 只丢那一条（整表作废会让所有改道一起失效）。
 func TestApplyEdgePolicyRejectsBadInput(t *testing.T) {

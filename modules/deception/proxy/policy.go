@@ -81,6 +81,12 @@ type remoteState struct {
 	version  uint64
 	checksum string
 	backends map[string]caddyhttp.MiddlewareHandler // 逻辑名 -> 已构造好的改道后端
+	// declared 是**远端声明过的全部后端名**（含 `enabled: false` 的）。
+	//
+	// 为什么必须单独记：载荷里的 `enabled: false` 表示「核心已撤销这个后端」，
+	// 而本地 env 表里可能有同名项 —— 撤销必须**优先于**本地兜底（方案 §9.2），
+	// 否则「禁用」只是「从远端表里悄悄消失」，流量照样落到那个后端上（D06 的 P0 边界风险）。
+	declared map[string]struct{}
 	cidrs    []netip.Prefix
 	// injectRulesProvided 为真 = 策略面**显式**下发了 `inject_rules` 段（可能是空数组）。
 	// 它决定「未下发」与「下发空」的区别（见 applyEdgePolicy）。
@@ -133,9 +139,16 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 	}
 
 	backends := map[string]caddyhttp.MiddlewareHandler{}
+	declared := make(map[string]struct{}, len(doc.Backends))
 	var dropped []string
+	var revokedLocal []string
 	for _, b := range doc.Backends {
+		declared[b.Name] = struct{}{}
 		if !b.Enabled {
+			// 撤销：远端声明了这个名字但明确禁用。记下来，路由时**不再**回落本地同名项。
+			if _, inLocal := h.mirage[b.Name]; inLocal {
+				revokedLocal = append(revokedLocal, b.Name)
+			}
 			continue
 		}
 		if _, _, err := upstreamAddr(b.Address); err != nil {
@@ -184,6 +197,7 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 		version:             doc.Version,
 		checksum:            "",
 		backends:            backends,
+		declared:            declared,
 		cidrs:               cidrs,
 		injectRulesProvided: doc.InjectRules != nil,
 		injector:            inj,
@@ -193,6 +207,11 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 	if len(dropped) > 0 {
 		log.Printf("proxy: 策略 v%d 中有 %d 个后端地址不可用，已跳过：%s",
 			doc.Version, len(dropped), strings.Join(dropped, ", "))
+	}
+	if len(revokedLocal) > 0 {
+		// 撤销要**看得见**：否则运维会以为「本地还配着，应该还能用」（实测过这种误判）。
+		log.Printf("proxy: 策略 v%d 撤销了后端 %s —— 本地同名项不再兜底（撤销优先于本地兜底）",
+			doc.Version, strings.Join(revokedLocal, ", "))
 	}
 	_ = ctx
 	return nil

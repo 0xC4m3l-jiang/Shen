@@ -14,7 +14,7 @@ from analysis.telemetry import (
     TelemetryUnavailable,
     WireEvent,
 )
-from analysis.worker import EvidenceCache, run_once
+from analysis.worker import Checkpoint, EvidenceCache, run_once
 
 
 def decision(
@@ -55,7 +55,8 @@ def test_worker_produces_and_reports_conclusions() -> None:
     run = run_once(port, now="2026-09-19T10:00:30+08:00")
     assert run.fetched == 2 and run.admitted == 2
     # 两个会话 ⇒ 各自一份意图 + 策略（每会话一份结论，不跨会话合并）。
-    assert [s.session_id for s in run.sessions] == ["s-1", "s-2"]
+    # 顺序 = **newest first**（与核心 `ListEvents` 同序）：最近活跃的会话先被分析。
+    assert [s.session_id for s in run.sessions] == ["s-2", "s-1"]
     kinds = [c["kind"] for c in run.conclusions]
     assert kinds == ["intent", "strategy", "intent", "strategy"], "应逐会话产出意图与策略结论"
     assert run.reported == 4 and run.duplicated == 0
@@ -63,11 +64,12 @@ def test_worker_produces_and_reports_conclusions() -> None:
     assert reported_types == {CONCLUSION_EVENT_TYPE}, "结论必须作为 analysis 事件上报"
     intent = run.conclusions[0]
     assert intent["accepted"] is True
-    # 关键回归：s-1 的结论**只能**引用 s-1 的证据（改造前这里会带上 e-2 —— 跨会话串链）。
-    assert intent["evidence_ids"] == ["e-1"], "结论只引用本会话的证据（AR-12 + 会话分组）"
-    assert run.conclusions[2]["evidence_ids"] == ["e-2"], "另一个会话的结论引用它自己的证据"
+    # 关键回归：每个会话的结论**只能**引用本会话的证据（改造前会带上对方的 —— 跨会话串链）。
+    assert [c["evidence_ids"] for c in run.conclusions] == [["e-2"], ["e-2"], ["e-1"], ["e-1"]], (
+        "结论只引用本会话的证据（AR-12 + 会话分组）"
+    )
     # 结论事件的外层 session_id 也要跟着分组，否则控制台/读侧仍看不出归属。
-    assert [event.session_id for event in port.reported] == ["s-1", "s-1", "s-2", "s-2"]
+    assert [event.session_id for event in port.reported] == ["s-2", "s-2", "s-1", "s-1"]
 
 
 def test_worker_groups_by_session_when_same_path_repeats() -> None:
@@ -83,7 +85,8 @@ def test_worker_groups_by_session_when_same_path_repeats() -> None:
     assert len(run.sessions) == 2
     for session in run.sessions:
         assert {obs.session_id for obs in session.observations} == {session.session_id}
-    assert [c["evidence_ids"] for c in run.conclusions] == [["e-1"], ["e-1"], ["e-2"], ["e-2"]]
+    # newest first ⇒ 先分析 s-2、再 s-1；每个会话的结论只引用自己的证据。
+    assert [c["evidence_ids"] for c in run.conclusions] == [["e-2"], ["e-2"], ["e-1"], ["e-1"]]
 
 
 def test_worker_unknown_identity_is_its_own_group() -> None:
@@ -107,9 +110,103 @@ def test_worker_unknown_identity_is_its_own_group() -> None:
     )
     port = InMemoryTelemetry([decision("e-1", "/.git/config", session="s-1"), legacy])
     run = run_once(port, now="2026-09-19T10:00:30+08:00")
-    assert [s.session_id for s in run.sessions] == ["s-1", ""]
-    assert run.sessions[1].unknown_identity is True
-    assert run.conclusions[2]["evidence_ids"] == ["e-old"], "未知身份不得混入已知会话的结论"
+    # newest first ⇒ 未知身份那条（10:00:02）比已知会话（10:00:00）新，因此是第一组。
+    assert [s.session_id for s in run.sessions] == ["", "s-1"]
+    assert run.sessions[0].unknown_identity is True
+    assert run.conclusions[0]["evidence_ids"] == ["e-old"], "未知身份不得混入已知会话的结论"
+
+
+class RecordingTelemetry(InMemoryTelemetry):
+    """记录每次 `list_events` 的 `since`，用来证明「不再每轮重读整个窗口」。"""
+
+    def __init__(self, events: list[WireEvent] | None = None) -> None:
+        super().__init__(events or [])
+        self.list_calls: list[str | None] = []
+
+    def list_events(self, *, limit: int = 200, since: str | None = None, event_type: str = ""):
+        self.list_calls.append(since)
+        return super().list_events(limit=limit, since=since, event_type=event_type)
+
+
+def test_telemetry_double_reads_newest_first() -> None:
+    """替身与真服务端**同序**：newest first；同一时间戳按写入序倒排（方案 T23 要求覆盖）。
+
+    为什么单独立一例：这个顺序决定「先分析哪个会话」，早期替身返回 oldest-first，
+    于是「测试通过」与「生产行为」是两回事。
+    """
+    port = InMemoryTelemetry(
+        [
+            decision("e-old", "/a", session="s-1", at="2026-09-19T10:00:00+08:00"),
+            decision("e-new", "/a", session="s-2", at="2026-09-19T10:00:00+08:00"),  # 同时间戳
+            decision("e-later", "/a", session="s-3", at="2026-09-19T10:00:05+08:00"),
+        ]
+    )
+    got = [e.event_id for e in port.list_events(limit=10)]
+    assert got == ["e-later", "e-new", "e-old"], f"必须 newest first（同时间戳后写入者在前）：{got}"
+
+
+def test_worker_checkpoint_stops_rereading_the_whole_window() -> None:
+    """游标（`FIX-6`）：第二轮只取游标之后的事件，不再重读最近 N 条。
+
+    断言两件可观测的事：`since` 真的传下去了；**判定事件**的重取量从「整个窗口」降到
+    「回看重叠内的一条」。重取到的那条由幂等吞掉（`reported` 不增、`duplicated` 增加）
+    —— 是「重算但不重复写」，不是静默丢弃。
+
+    注意：worker 自己上报的结论事件也在同一个窗口里（`event_type` 过滤掉），
+    所以「取到的条数」不等于「判定事件数」；游标也**只按判定事件**推进（否则会被自己的写入时间推过头）。
+    """
+    events = [
+        decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
+        for n in range(10)
+    ]
+    port = RecordingTelemetry(events)
+    checkpoint = Checkpoint()
+
+    first = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:10:00+08:00")
+    assert first.fetched == 10, "首轮（无游标）看整个窗口的判定事件"
+    assert first.cursor == "", "首轮没有游标"
+    assert checkpoint.since == "2026-09-19T10:08:59+08:00", "游标 = 最新判定 - 回看重叠（1s）"
+
+    second = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:10:30+08:00")
+    assert port.list_calls[1] is not None, "第二轮必须把游标作为 since 传给遥测面"
+    assert second.fetched <= 1, f"第二轮只该重取回看重叠内的那条判定，实际 {second.fetched}"
+    replayed = [
+        e for e in port.list_events(limit=200, since=checkpoint.since) if e.event_type == "decision"
+    ]
+    ids = [e.event_id for e in replayed]
+    assert len(replayed) == 1, f"游标之后只剩回看重叠内的那条判定，实际 {ids}"
+    assert second.reported == 0, "重取到的那条由幂等吞掉：不得重复写入结论（AR-11）"
+    assert second.duplicated > 0, "重复的结论事件应计为 duplicated（可见，不是静默丢弃）"
+
+
+def test_worker_checkpoint_does_not_advance_on_failure() -> None:
+    """游标**只在一轮没有致命错误之后**推进：跳过失败的一轮就再也追不回来了。"""
+
+    class FailingPort(InMemoryTelemetry):
+        def list_events(self, *, limit: int = 200, since: str | None = None, event_type: str = ""):
+            # 参数与端口协议一致（调用方全部按关键字传），这里引用一下再抛错。
+            raise TelemetryUnavailable(f"模拟不可达（{limit}/{since}/{event_type}）")
+
+    checkpoint = Checkpoint(since="2026-09-19T09:00:00+08:00")
+    run = run_once(FailingPort(), checkpoint=checkpoint)
+    assert run.errors, "遥测不可达必须如实记录"
+    assert checkpoint.since == "2026-09-19T09:00:00+08:00", "失败的一轮不得推进游标"
+
+
+def test_worker_reports_window_gap() -> None:
+    """取满 limit 条且最早一条仍晚于游标 ⇒ 中间有事件没取到，必须可见（丢事件不得静默）。"""
+    events = [
+        decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
+        for n in range(5)
+    ]
+    port = RecordingTelemetry(events)
+    # 游标故意设得很早（模拟「worker 停了很久」）：本轮取满 limit 条，仍看不到游标与它们之间的那段。
+    checkpoint = Checkpoint(since="2020-01-01T00:00:00+08:00")
+    run = run_once(port, limit=2, checkpoint=checkpoint, now="2026-09-19T10:10:00+08:00")
+
+    assert run.fetched == 2, "取满 limit"
+    assert run.window_gap, "应报告窗口缺口（游标之后的事件多于本轮能取的条数）"
+    assert "2020-01-01" in run.window_gap and "limit" in run.window_gap
 
 
 def test_worker_truncates_sessions_visibly() -> None:

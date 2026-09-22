@@ -410,7 +410,16 @@ func (h *Handler) mirageHandler(name string) (caddyhttp.MiddlewareHandler, bool)
 		if rp, ok := st.backends[name]; ok {
 			return rp, true
 		}
+		// 远端**声明过**这个名字但没给出可用后端（`enabled: false` 或地址坏）⇒ 视为**已撤销**：
+		// 此时**不得**回落到本地同名项（方案 §9.2「撤销优先于本地兜底」）。
+		// 否则「核心禁用了某个后端」会变成「本地 env 里还有，于是照旧改道过去」——
+		// 禁用指令失效，且没有任何可见信号（D06 的 P0 边界风险）。
+		if _, declared := st.declared[name]; declared {
+			return nil, false
+		}
 	}
+	// 远端没声明过的名字仍走本地配置兜底：这是 ADR-0018 的既定语义
+	// （远端覆盖本地；本地只在策略面没谈及该名字时兜底）。
 	rp, ok := h.mirage[name]
 	return rp, ok
 }

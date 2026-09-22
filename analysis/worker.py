@@ -41,7 +41,7 @@ import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .aicap import service as aicap_service
@@ -86,6 +86,16 @@ EVIDENCE_CACHE_CAP = 4096
 
 DEFAULT_LIMIT = 200
 
+CURSOR_OVERLAP_S = 1.0
+"""增量游标的**回看重叠**（秒）。
+
+为什么要有它：遥测面的游标契约只有 `since`（时间戳），**没有复合位置**
+（`created_at` + `event_id`）。只按「最新一条的时间戳」推进时，与它**同一时间戳**、
+稍后才写入的事件会被漏掉；回看 1 秒把它们兜回来，重复的部分由既有的幂等机制吞掉
+（`AR-11` 事件 ID 去重 + `AR-14` 态势去重）。
+代价是每轮少量重算 —— 这是当前服务端契约下的取舍（缺「复合位置」已登记为缺口）。
+"""
+
 MAX_SESSIONS_PER_RUN = 8
 """一轮最多分析多少个会话（近线预算：每个会话都跑三步，模型路径下就是 N 次调用）。
 
@@ -121,6 +131,40 @@ class EvidenceCache:
 
     def __len__(self) -> int:
         return len(self._seen)
+
+
+@dataclass
+class Checkpoint:
+    """L4 的**增量游标**：记住「已经分析到哪里」，下一轮只取之后的事件。
+
+    为什么需要它（`FIX-6` 的后半）：只按 `limit` 取最近 N 条时，**每一轮都在重算最近的窗口** ——
+    结论不重复（`AR-11` 幂等）但白算，窗口一大就白算得更多。
+
+    位置 = `created_at - CURSOR_OVERLAP_S`（回看重叠，见该常量）。**推进只在一轮真正成功之后**：
+    游标跳过了失败的那一轮，就再也追不回来了（宁可重算，不可漏算）。
+    """
+
+    since: str = ""
+    """下一轮的 `since`（RFC3339）。空串 = 还没有游标（从窗口起点取）。"""
+
+    rounds: int = 0
+    """已成功推进的轮数（观测用；不参与逻辑）。"""
+
+    def advance(self, newest_created_at: str) -> None:
+        """把游标推到最新事件的**回看重叠**处。"""
+        if not newest_created_at:
+            return
+        self.since = _shift_iso(newest_created_at, -CURSOR_OVERLAP_S)
+        self.rounds += 1
+
+
+def _shift_iso(stamp: str, delta_s: float) -> str:
+    """把 RFC3339 时间戳平移若干秒（保持原偏移量）；解析不了就原样返回（宁可重算）。"""
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return stamp
+    return (parsed + timedelta(seconds=delta_s)).isoformat()
 
 
 @dataclass
@@ -163,6 +207,14 @@ class AnalysisRun:
     sessions: list[SessionAnalysis] = field(default_factory=list)
     truncated_sessions: int = 0
     """因超出 `MAX_SESSIONS_PER_RUN` 而**本轮未分析**的会话数（不是错误，但必须可见）。"""
+    window_gap: str = ""
+    """窗口缺口提示：非空表示「游标之后的事件多于本轮能取的条数」⇒ 中间有一段没被取到。
+
+    为什么要显式写出来：丢事件会让效果口径（进入率等）**偏低**而看不出来 ——
+    与「过载丢包不可隐藏成低攻击率」同一条纪律。
+    """
+    cursor: str = ""
+    """本轮实际使用的 `since`（空串 = 没有游标）。留档用：能回答「这一轮看了哪一段」。"""
     conclusions: list[dict[str, object]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: Envelope | None = None
@@ -199,6 +251,8 @@ class AnalysisRun:
             f"会话 {len(self.sessions)} 个"
             + (f"（另有 {self.truncated_sessions} 个未分析）" if self.truncated_sessions else "")
             + f" · 结论 {len(self.conclusions)} 条（新 {self.reported} / 重复 {self.duplicated}）"
+            + (f" · 游标 {self.cursor}" if self.cursor else "")
+            + (f" · 窗口缺口：{self.window_gap}" if self.window_gap else "")
             + (f" · 模型回落 {self.rejected} 步" if self.rejected else "")
             + (f" · 错误 {self.errors}" if self.errors else "")
         )
@@ -212,27 +266,60 @@ def run_once(
     cache: EvidenceCache | None = None,
     now: str | None = None,
     client: AnalysisClient | None = None,
+    checkpoint: Checkpoint | None = None,
 ) -> AnalysisRun:
-    """跑一轮：读 → 去重 → 分析 → 上报结论。任何异常都被收住并记进 `errors`（近线，不得炸）。
+    """跑一轮：读（按游标增量）→ 去重 → 分析 → 上报结论。
+
+    任何异常都被收住并记进 `errors`（近线，不得炸）。
 
     `client`：模型客户端。`None`（默认）= 三步全走确定性规则，与接模型之前的行为一致；
     传入时三步各自「模型优先、失败回落」（模型失败**不影响整轮**：结论仍由规则版产出）。
+
+    `checkpoint`：增量游标。传同一个对象跨轮复用 ⇒ 只取游标之后的事件（`FIX-6`）：
+    游标**只在一轮跑完且没有致命错误时**推进；本轮取到的条数顶到 `limit` 且最早一条仍在游标之后
+    ⇒ 说明中间有一段没取到，记进 `run.window_gap`（丢事件必须可见）。
     """
     run = AnalysisRun()
     evidence = cache if cache is not None else EvidenceCache()
+    cursor = checkpoint.since if checkpoint is not None else ""
+    run.cursor = cursor
     try:
-        fetched = port.list_events(limit=limit)
+        # 只拉**判定事件**（`event_type`）：本链路只分析判定，而 worker 自己上报的结论事件
+        # 也在同一个窗口里、时间戳是本机当前时间 —— 不筛掉的话它们会挤占读取配额，
+        # 还会让「取到多少条」与「要看多少判定」不再是同一个数（缺口判断会失真）。
+        fetched = port.list_events(limit=limit, since=cursor or None, event_type="decision")
     except TelemetryUnavailable as exc:
         run.errors.append(f"遥测不可达：{exc}")
         return run
 
     run.fetched = len(fetched)
+    # 窗口缺口：取满了 limit 条，且**最早**那条仍晚于游标 ⇒ 游标与它之间的事件没被返回。
+    # （遥测面按 newest-first 返回；没有「复合位置」契约，这是当前能做的最强判断。）
+    if checkpoint is not None and len(fetched) >= limit and cursor:
+        oldest = min((event.created_at for event in fetched if event.created_at), default="")
+        if oldest and oldest > cursor:
+            run.window_gap = (
+                f"游标 {cursor} 与本次最早事件 {oldest} 之间的事件未取到"
+                f"（本轮取满 {limit} 条）—— 建议调大 --limit 或缩短轮询间隔"
+            )
+    # 推进只在**这一轮没有致命错误**之后：游标跳过一轮失败，那段就再也追不回来了
+    # （宁可重算，不可漏算 —— 重算由幂等吞掉，漏算没有补救）。
+    #
+    # 只按**判定事件**推进（不是「本批任意事件」）：worker 自己上报的结论事件也落在同一个窗口里，
+    # 它们的 `created_at` 是**本机当前时间**，可能比判定事件还新 —— 用它推进会把游标推到判定之前，
+    # 于是「时钟略慢的适配器」随后写入的判定会被静默跳过。只按我们真正处理的那类事件推进才安全。
+    decisions_in_batch = [event for event in fetched if event.event_type == "decision"]
+    if checkpoint is not None and decisions_in_batch and not run.errors:
+        checkpoint.advance(
+            max(event.created_at for event in decisions_in_batch if event.created_at)
+        )
     # 证据缓存要装「L4 会引用的 ID」：判定事件的**载荷里**是 `decision_id`（与契约、控制台一致），
     # 而遥测事件 ID 是 `decision:<decision_id>`（外层幂等键）。两者都装 ——
     # 只装后者曾导致 AR-12 误判「引用的证据不存在」，整条攻击链被作废（make dev 抓到的真 bug）。
     for event in fetched:
         evidence.feed([event.event_id, str(event.json_payload().get("decision_id", ""))])
 
+    # 读取侧已按 `event_type=decision` 收窄；这里保留同一过滤（防御：换实现时语义不悄悄变宽）。
     decisions = [event for event in fetched if event.event_type == "decision"]
     observations = parse_all([event.json_payload() for event in decisions])
     observations = [obs for obs in observations if obs.event_id]
@@ -638,11 +725,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     cache = EvidenceCache()
+    # 游标跨轮复用（进程内）：只取上一次之后的事件，不再每轮重读最近 limit 条（FIX-6）。
+    # ⚠️ 进程重启后游标丢失 ⇒ 重新读一个窗口；结论靠 AR-11 幂等不会重复写，代价是少量重算。
+    checkpoint = Checkpoint()
     while True:
         run = run_once(
-            port, limit=args.limit, window_seconds=args.window, cache=cache, client=client
+            port,
+            limit=args.limit,
+            window_seconds=args.window,
+            cache=cache,
+            client=client,
+            checkpoint=checkpoint,
         )
         print(f"[L4] {run.summary()}", flush=True)
+        if run.window_gap:
+            # 丢事件必须可见：否则效果口径会偏低而看不出来。
+            print(f"  · ⚠ 窗口缺口：{run.window_gap}", flush=True)
         for kind, reason in sorted(run.model_rejected.items()):
             print(f"  · 模型回落 {kind}：{reason}", flush=True)
         for conclusion in run.conclusions:
