@@ -32,6 +32,9 @@ $ scripts/shen.sh traffic --check-l4
 
 ---
 
+> **逐模块怎么验**：见 [`module-test-flow.md`](module-test-flow.md)（24 模块逐个的「文档 / 规则依据 / 测试 / 实测」表 + 伪造流量分层）。
+> **实现是否按架构来**：见 [`architecture-conformance.md`](architecture-conformance.md)（13 项结构检查 + 语义面引用表，引用可 grep 核）。
+
 ## 1.0 AI 注入 + 欺骗层整体功能的验证报告（2026-09-21 · 带 DAG 图）
 
 **报告**：[`ai-injection-2026-09-21/README.md`](ai-injection-2026-09-21/README.md) ——

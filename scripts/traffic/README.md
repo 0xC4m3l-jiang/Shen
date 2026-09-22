@@ -3,7 +3,7 @@
 给欺骗引擎发**伪造流量**，然后从**观测面**核对判定结果 —— 用于人工测试与回归验证。
 
 ```sh
-scripts/traffic/send.py                    # 全部场景（33 条，按分组打印）
+scripts/traffic/send.py                    # 全部场景（36 条，按分组打印）
 scripts/traffic/send.py --group 扫描器指纹   # 只跑一组
 scripts/traffic/send.py --only probe-git-headless --repeat 3
 scripts/traffic/send.py --check-l4         # 顺带核对 L4 结论与证据引用（AR-12）
@@ -50,8 +50,16 @@ scripts/shen.sh verify                     # 一键：状态 + 全量流量 + L4
 | `same_decision_as_previous` | 重复跑时断言与上一次**同一个** `decision_id`（验证 `ST-10` 判定复用） |
 | `distinct_decisions` | 重复跑时断言每次都是**不同** `decision_id`（换会话即换判定） |
 | `gap` | 已知缺口 `{kind: 未实现/精度/未覆盖, why, close}`：只打印、**不算失败** —— 用途是把"设计有、当前没做到"显式列出来 |
+| `executed` | 适配器**实际走了哪**（`origin`/`cache`/`failopen`/`origin_fallback`/`mirage`/`block`/`whitelist`）；可写一个值或集合。**需要接管形态**（影子栈里恒为 `origin`） |
+| `inject` | AI 内容注入的结果（`applied`/`disabled`/`no_content`/`off`）；**需要接管 + AI 层打开** |
 
-场景级 `session` 字段：`unique`（默认，每次新会话）· `shared`（同场景内复用会话，用于验证 `ST-10`）。
+场景级字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `session` | `unique`（默认，每次新会话）· `shared`（同场景内复用会话，用于验证 `ST-10`） |
+| `modules` | 这条流量**证明哪些模块在工作**（供 `make verify-modules` 把「模块 ↔ 功能场景」对上） |
+| `stack` | 需要哪种栈形态：`shadow`（默认）· `takeover`（真的改道/拦截，用 `deploy/docker/compose.verify-mirage.yaml`）· `takeover-ai`（接管 + AI 层打开） |
 
 **所有场景都会额外检查两件事**（无论期望怎么写）：
 
@@ -70,13 +78,19 @@ scripts/shen.sh verify                     # 一键：状态 + 全量流量 + L4
 所以 `probe-git-headless`（两者都命中）期望 `min_score: 0.8`，而 `/.env`、`/wp-login.php`、SQLi、Actuator 这类**示例规则没覆盖**的流量标为 `observe_only` —— 它们仍然很有用（人工看引擎"看见了什么"），但脚本不会替你断言一个尚未定义的期望。
 **改了规则请同步 `scenarios.json`**（否则断言会与真实配置漂移）。
 
-## 两个容易踩的点
+## 四个容易踩的点
 
 1. **防缓存参数**：同一 `(来源, 会话, 方法, 路径)` 在时间窗内复用判定（`ST-10` 判定缓存），
    不换参数的话第二轮不会有新记录 —— 核对就变成"看到上一轮的结果"。脚本默认追加 `?r=<随机>`；
    要复现"同窗复用"行为时用 `--no-nonce`。
 2. **异步上报**：判定写完与控制台可见之间有间隔（`AR-11` 异步批量）。脚本默认最多等 8 秒
    （`--wait`），等不到会在结果里报出来，而不是假装通过。
+3. **第一条请求要热身**：冷连接 + 适配器还没 Pull 到策略的窗口里会 failopen（`K-24`），
+   只跑单条场景时第一条几乎必然假红。脚本现在自动热身（失败时会打一行提示）。
+4. **`executed` / `inject` 要去逐请求链路里取**（`/api/graphs`，按 `decision_id`）——
+   判定记录（`/api/flow`）里**没有**这两个字段；断言它们时脚本会自动去链路里取并等。
+   **形态不匹配记「观察」不记失败**：影子栈里跑 `stack: takeover` 的场景、
+   或 AI 关闭时跑 `stack: takeover-ai` 的场景，会打印一行原因（例：`AI 层未打开（核心快照 ai.enabled=false）`）。
 
 ## 退出码
 

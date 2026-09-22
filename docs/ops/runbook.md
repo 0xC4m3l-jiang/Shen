@@ -13,6 +13,7 @@
 | **一键端到端验证** | `scripts/shen.sh verify` | 状态 → 全量伪造流量 + L4 核对 → 报告与定位线索（报告落在临时目录） |
 | **发伪造流量并核对判定** | `scripts/shen.sh traffic` | 10 个场景（探针 / 爆破 / 注入 / 正常对照）+ 断言评分与信号；见 [`../../scripts/traffic/README.md`](../../scripts/traffic/README.md) |
 | 仓库级验证 | `scripts/shen.sh check`（= `make gate` + `make dev`） | 门禁 + 开发循环 |
+| **逐模块验一遍** | `make verify-modules`（跑单测出表，30s）· `make verify-evidence`（只核证据，<1s） | 模块流程见 [`module-test-flow.md`](../ops/module-test-flow.md) |
 | **AI 注入端到端验收** | `make ai-check`（模板）· `make ai-check-llm`（模型，需 `SHEN_AI_KEY`） | 20/21 项：关闭态字节一致 · 注入 · `AR-30` · 关卡 · 秒级关闭 · 拦截 · DAG；报告见 [`ai-injection-2026-09-21/`](../ops/ai-injection-2026-09-21/README.md) |
 | DAG 图（从原始 JSON 渲染） | `make ai-dag`（`DAG_DIR` 可选） | 拓扑图 + 单请求链路图 |
 | 看日志（**不跟随**） | `scripts/shen.sh logs core` | 取尾部 80 行后立即返回 |

@@ -9,6 +9,73 @@
 
 ---
 
+## 2026-09-21 · 逐模块功能测试流程 + 架构解耦的机器判据 + 分层伪造流量
+
+**做了什么**：你提的四件事逐条落地 —— 流程、符合性、解耦稳定、伪造流量。
+
+1. **逐模块功能测试流程**（`make verify-modules`，30s，不需要 Docker）：从 `docs/design/modules.md` §1.1 解析 24 个模块，
+   逐个去读**模块文档自己的** §4 关键规则与 §7 测试，**真的把测试跑一遍**，出「文档 / 规则依据 / 测试目标 / 实测用例数 / 功能场景」表。
+   24/24 齐备（3 个豁免：`adapter-dns` 纯配置 · `netpolicy` 声明式 · `honeypot-shell` 状态行写明推迟）；
+   实测 judge 3 · policy 98 · adapter-proxy 90 · intent 12 / chain 11 / strategy 12 · console 27 例…（**按模块自己的 §7 目标过滤**后的数 —— 修掉「过滤词静默失效、数字其实是整个文件的」之后）；
+2. **架构解耦的三条新机器判据**（进 `make gate`，每条都做过反证 —— 注入违规必然报红）：
+   **决策取值闭集**（`MD-12`：防有人顺手 iota 出第四个 `Action`，它会落到 `String()="unknown"` 被当成放行）·
+   **响应路径纯度 + judge 纯函数**（`AR-30`/`MD-6`：热路径禁 `math` 包里的 `rand`，judge 禁 `time`/`os`/`net`）·
+   **L4 不碰写侧**（`AR-32`：`analysis/` 不得生成策略面桩）。**同时删掉了一条「永远为真」的假判据**（那条已被 `ST-3` 覆盖）；
+3. **伪造流量按形态分层**（36 条场景，每条标了它证明哪些模块在工作）：影子（`make up`）· 接管（`compose.verify-mirage.yaml`）·
+   接管+AI。新增 3 条接管场景（改道 / 拦截 / 注入），并给 send.py 补上逐场景的 `executed`/`inject` 断言；
+4. **独立评审后的修正**（评审 1 条 P1 + 7 条 P2，全部处置）：
+   **P1 —— 观察态会吞掉真失败**：原来凭「结果形状」把接管场景降级成「观察」，
+   分不出「影子栈（形态未开）」与「接管栈但改道没生效（真失败）」⇒ 忘挂接管覆盖文件也能绿着退出。
+   改用**控制台自己算的形态**（控制台聚合视图接口（topology） 的 `shadow`；实测逐请求链路 逐请求链路接口（graphs） 的行里**没有**该字段）；
+   P2 里最重的一条是**过滤词静默失效**：路径外面的收尾反引号没吃掉 ⇒ `（`test_xxx_*`）` 全部解析失败、
+   退化成「跑整个文件」——修后 intent 33→**12** · chain 33→**11** · strategy 33→**12** · llm-components 61→**52**
+   （数字变小是**对的**，以前数的是整个文件）；另修 6 条：`AR-32` 目录缺失静默跳过 / 禁词表漏 Python 写法 /
+   `MD-6` 不含子包 / 豁免靠整节子串 / 符合性文档 13 项只列 12 行 / 引用核验命令只覆盖 Go；
+5. **修掉四个让测试不稳的坑**（都是实测撞出来的）：① 第一条请求要**热身**（冷启动窗口 `K-24` ⇒ 假红）；
+   ② `executed`/`inject` 只在**逐请求链路**里（逐判定接口（`flow`） 没有）⇒ 按 `decision_id` 去取并等；
+   ③ `-k` 过滤词会把同行的 Markdown 链接吞进去 ⇒ 非法一律不加过滤；
+   ④ **演示业务站是单线程 + HTTP/1.1 长连接** ⇒ 幻境那一跳 10~20 秒无响应（看起来像引擎坏了）⇒ 改 `ThreadingHTTPServer`，并记进 `K-29`。
+
+**改了哪些文件**：
+
+- 新增：`scripts/verify/main.go` · `scripts/internal/modules/modules.go` · `docs/ops/module-test-flow.md` · `docs/ops/architecture-conformance.md` · `docs/plans/2026-09-21-module-test-flow.md`
+- 修改：`scripts/archcheck/main.go`（+3 判据、改用共享解析器）· `Makefile`（`verify-modules` / `verify-evidence`，后者进 `lint`）·
+  `scripts/traffic/scenarios.json`（+3 场景、每条加 `modules`、新增 `stack`）· `scripts/traffic/send.py`（热身 / 落点从链路取 / AI 开关感知 / 形态记观察）·
+  `scripts/demo/business.py`（**演示物料**：单线程→多线程）· `docs/kb/known-issues.md`（`K-29`）· `docs/README.md` · `docs/ops/runbook.md` · `docs/ops/functional-verification.md` · `scripts/traffic/README.md`
+
+**对应文档**：`docs/ops/module-test-flow.md`（流程 + 24 模块实测表 + 流量分层）· `docs/ops/architecture-conformance.md`（13 项结构检查 + 语义面引用表）·
+`docs/plans/2026-09-21-module-test-flow.md`（变更包，含追溯矩阵与 10 条审视）· `docs/kb/known-issues.md` 的 `K-29`
+
+**验证**：`make gate` 通过（**127 例** pytest + 13 项架构检查 + 逐模块证据链 + 追溯/泄漏/许可）·
+`make verify-modules` **24/24** 齐备（30s；去重前 2m35s）· 三条新判据**反证通过**（注入违规 ⇒ 必红；还原 ⇒ 绿）·
+符合性文档引用的 **47 个测试名全部存在**（缺失 0）· 接管形态伪造流量 **2/2 断言通过 + 1 条观察**（AI 未打开，已打印原因）。
+**未验**：`takeover-ai` 形态的在线注入断言（需「接管 + AI 打开」的栈；该行为已由 `docs/ops/ai-injection-2026-09-21/` 报告覆盖）·
+`judge` 的用例数偏薄（3 例）已记入变更包 §7。
+
+**证据**：
+
+| 场景 | 期望 | 实测 |
+| --- | --- | --- |
+| 24 模块证据链 | 每个都有文档 + 规则引用 + 测试 | ✅ 24/24（3 豁免） |
+| 真跑单测 | 全绿且用例数 > 0 | ✅ judge 3 · policy 98 · adapter-proxy 90 · intent 12 / chain 11 / strategy 12…（**按模块自己的 §7 目标过滤后的数**） |
+| 决策闭集 | 第四个取值必红 | ✅ `MD-12` 报「实际 4 个」 |
+| 热路径纯度 / judge 纯函数 | `math` 包里的 `rand` / `time` 必红 | ✅ `AR-30` / `MD-6` 各报一条 |
+| L4 不碰写侧 | 策略桩必红 | ✅ `AR-32` 报错 |
+| 接管：改道真的执行 | 200 + `executed=mirage` | ✅ ✓ |
+| 接管：拦截真的 403 | 403 + `executed=block` + `inject=off` | ✅ ✓ |
+| 接管- AI 关闭 | 记观察并打印原因 | ✅（非失败） |
+| **影子栈**（`shadow=true`）跑接管场景 | 三条都只能观察、退出码 0 | ✅ 3 条观察 + `exit=0` |
+| **P1 核心**：接管栈 + 落点仍是 origin | 必须**报红**（不是观察） | ✅ `stack_form=takeover ⇒ 失败数=1`；`shadow ⇒ 0`；`unknown ⇒ 1`（形态读不到不收宽） |
+| 观察行的 `status_in` 失败不再泄漏 | 退出码 0 | ✅ 修前 `exit=1` → 修后 `exit=0` |
+
+**没做 / 遗留**：三条新判据**没有自动化回归守着**（本轮的反证是手工注入后还原 —— 评审提出，建议加一个「故意违规的夹具」）·
+`judge` 用例偏薄（建议随规则扩充补齐）· `takeover-ai` 的 Docker 覆盖文件未加 · `adapter-dns`/`netpolicy` 仍是人工验证（已登记豁免）·
+不引入任何依赖（全用标准库）· 产品代码与 `docs/design/` **一行未动**（唯一产品侧改动是演示物料 `scripts/demo/business.py`）。
+
+> 变更包 §7.1（审视 10 条，含我自己引入并修掉的 6 处：假红 ×3、假绿 ×1、重复解析 ×1、断言取错接口 ×1）与独立评审见变更包 §7.1 / §7.3。
+
+---
+
 ## 2026-09-21 · 入口 README 换成四层架构图（欺骗层 / 蜜罐层 / web 真实业务层 / AI 模型层）
 
 **做了什么**：按你的要求把架构图改成四层视图，并顺手清掉 4 处「模型后端（阶段 B）」的过期说法。

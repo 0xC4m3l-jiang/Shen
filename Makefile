@@ -19,7 +19,7 @@ PROTOS := $(shell find common/api -name '*.proto')
 
 .PHONY: help generate build test vet fmt fmt-check staticcheck errcheck lint \
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
-        check-config replay smoke dev ai-check ai-check-llm ai-dag commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
+        check-config replay smoke dev ai-check ai-check-llm ai-dag verify-modules verify-evidence commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen check-pydeps analysis analysis-llm \
         docker-build up down docker-ps docker-logs docker-log check-ignore \
         start status app-smoke traffic verify
@@ -169,7 +169,7 @@ pytest: ## L4 单测（pytest）
 check-pydeps: ## 锁文件 ↔ venv 一致性（依据 TB-16；不一致即失败，指向 make pyenv）
 	@$(CURDIR)/scripts/gate/check-pydeps.sh
 
-lint: fmt-check vet staticcheck errcheck pyfmt-check check-pydeps pylint check-ignore archcheck trace leakcheck licensecheck ## 全部静态、结构与追溯检查
+lint: fmt-check vet staticcheck errcheck pyfmt-check check-pydeps pylint check-ignore archcheck verify-evidence trace leakcheck licensecheck ## 全部静态、结构、逐模块证据与追溯检查
 
 # ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
 #
@@ -274,6 +274,12 @@ smoke: ## 在线冒烟：对已在跑的核心发判定请求（地址取 SHEN_D
 
 dev: ## 一键开发验证：配置干跑 → 起核心 → 在线冒烟 → 规则回放 → 关核心
 	@scripts/dev/smoke.sh
+
+verify-modules: ## 逐模块功能测试流程：跑每个模块的单测并出表（约 30s；不需要 Docker）
+	@$(GO) run ./scripts/verify
+
+verify-evidence: ## 只核逐模块的证据链是否齐备（文档 · 规则依据 · 测试目标 · 功能场景；不跑测试）
+	@$(GO) run ./scripts/verify -no-run
 
 ai-check: ## 欺骗内容注入端到端验收（模板生成器；含拦截覆盖：关闭态字节一致 / 打开态注入 / AR-30 / 关卡 / 秒级关闭 / DAG / block）
 	@python3 scripts/dev/ai-inject-check.py --block

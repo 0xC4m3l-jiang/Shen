@@ -13,6 +13,9 @@
 //	language.md         TB-20 / TB-21（语言层数上限）/ TB-24（禁止 CGO 与本地库）
 //	architecture.md     AR-33（任何 LLM 生成必须经 ai-capability 的护栏出口）
 //	modules.md   §3     MD-4（依赖方向单向 —— Python 侧的 AI 能力独立性）
+//	terminology.md §4   MD-12（决策只有三值：route_origin / route_mirage / block，禁止第四值）
+//	architecture.md     AR-30（响应路径不得有非确定性）+ MD-6（不用时钟做判定）
+//	architecture.md     AR-32（L4 不得碰写侧：只上报结论事件，不改策略、不写响应）
 //
 // 清单**从文档解析，不硬编码** —— 文档改则检查跟着改，不会两边漂移。
 // 解析结果不达预期时**直接报错退出**，绝不静默放行：静默通过等于假绿。
@@ -31,6 +34,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"shen/scripts/internal/modules"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -46,14 +51,9 @@ type pkg struct {
 	CgoFiles   []string
 }
 
-// module 是 modules.md §1.1 的一行。
-type module struct {
-	Name   string // 模块名，如 judge
-	Layer  string // 层，如 核心
-	Langs  string // 声明的语言，如 Go / 配置 + Go
-	SrcDir string // 源码目录，如 core/internal/judge/
-	Stage  string // 阶段 1/2/3
-}
+// module 是 modules.md §1.1 的一行 —— 解析器在 `scripts/internal/modules`
+// （`scripts/verify` 也用同一张表；各写一份会漂移）。
+type module = modules.Module
 
 // finding 是一条检查结果。ID 与 Human 一起输出 —— 只给 ID 审计的人看不懂。
 type finding struct {
@@ -90,7 +90,7 @@ func main() {
 	if err != nil {
 		fatal("解析 structure.md §1.1 的容器子目录失败：%v", err)
 	}
-	mods, err := parseModules(filepath.Join(root, "docs/design/modules.md"))
+	mods, err := modules.Parse(filepath.Join(root, "docs/design/modules.md"))
 	if err != nil {
 		fatal("解析 modules.md §1.1 的模块清单失败：%v", err)
 	}
@@ -128,6 +128,9 @@ func main() {
 	findings = append(findings, checkLanguages(root)...)
 	findings = append(findings, checkGuardrailIsSoleExit(root)...)
 	findings = append(findings, checkPythonDependencyDirection(root)...)
+	findings = append(findings, checkDecisionClosedSet(root)...)
+	findings = append(findings, checkHotPathPurity(root, pkgs)...)
+	findings = append(findings, checkL4StaysOffTheWritePlane(root)...)
 
 	report(findings)
 }
@@ -757,50 +760,6 @@ func parseTopLevelDirs(path string) ([]string, error) {
 	return out, nil
 }
 
-func parseModules(path string) ([]module, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	sec := section(string(b), "### 1.1 源码模块", "### 1.2")
-	if sec == "" {
-		return nil, errors.New("找不到 §1.1 源码模块 小节")
-	}
-	var out []module
-	for _, line := range strings.Split(sec, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "|") {
-			continue
-		}
-		cells := strings.Split(line, "|")
-		// | # | 模块 | 层 | 语言 | 源码目录 | 模块文档 | 职责 | 阶段 |
-		if len(cells) < 9 {
-			continue
-		}
-		src := strings.Trim(strings.TrimSpace(cells[5]), "`")
-		if !strings.Contains(src, "/") {
-			continue // 表头或分隔行
-		}
-		name := strings.Trim(strings.TrimSpace(cells[2]), "`")
-		// 已废弃 / 已合并的行用删除线标记（同 D-6：保留编号但不再是有效模块）。
-		// 这类行不参与「模块与目录一致」的比对，否则会报出幽灵模块。
-		if strings.Contains(name, "~~") || strings.Contains(src, "~~") {
-			continue
-		}
-		out = append(out, module{
-			Name:   name,
-			Layer:  strings.TrimSpace(cells[3]),
-			Langs:  strings.TrimSpace(cells[4]),
-			SrcDir: strings.Trim(src, "~"),
-			Stage:  strings.Trim(strings.TrimSpace(cells[8]), "*"),
-		})
-	}
-	if len(out) < 15 {
-		return nil, fmt.Errorf("只解析到 %d 个模块，明显偏少 —— 文档格式可能变了，拒绝静默放行", len(out))
-	}
-	return out, nil
-}
-
 // section 取 from 到 to 之间的文本（不含 to）。找不到 from 返回空串。
 func section(s, from, to string) string {
 	i := strings.Index(s, from)
@@ -1192,6 +1151,7 @@ func report(findings []finding) {
 		fmt.Println("  顶层目录 · 跨平面依赖 · 核心内部可见性 · store 唯一 I/O 出口")
 		fmt.Println("  模块清单一致性 · CGO 与本地库 · 语言层数 · 护栏为唯一出口（AR-33）")
 		fmt.Println("  AI 能力独立性（MD-4：aicap / llm 的依赖白名单）")
+		fmt.Println("  决策三值闭集（MD-12）· 响应路径纯度与 judge 纯函数（AR-30 / MD-6）· L4 不碰写侧（AR-32）")
 		return
 	}
 	fmt.Fprintf(os.Stderr, "架构检查发现 %d 个问题：\n\n", len(findings))
@@ -1206,4 +1166,255 @@ func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "archcheck: "+format+"\n", args...)
 	fmt.Fprintln(os.Stderr, "检查未执行完毕 —— 视为失败，不静默放行。")
 	os.Exit(1)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 检查 10 · MD-12 决策取值是**闭集**（三值；禁止第四值）
+// ─────────────────────────────────────────────────────────────────────────────
+
+var decisionValues = []string{"route_origin", "route_mirage", "block"}
+
+// checkDecisionClosedSet 把「决策只有三值」变成可执行判据，核三件事：
+//
+//	① `contract.Action` 的 iota 块里**恰好三个**常量；
+//	② `Action.String()` 返回的字符串**恰好**是那三个（顺序一致）；
+//	③ `design/terminology.md` 里也写着这三个（文档与代码不许两边各说一套）。
+//
+// 为什么值得机器核：加第四值最常见的写法就是「顺手 iota 一个 ActionX」——
+// 那样 `String()` 会把它落到 `"unknown"`，而下游是按字符串比较的，
+// 于是它被**静默当成一个不认识的取值**（既不改道也不拦截，看起来像放行）。
+func checkDecisionClosedSet(root string) []finding {
+	const rel = "common/core/internal/contract/decision.go"
+	raw, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		return []finding{{ID: "MD-12", Human: "读 contract/decision.go 失败", Where: err.Error()}}
+	}
+	body := string(raw)
+
+	block := regexp.MustCompile(`(?s)const\s*\((.*?)\)`).FindStringSubmatch(body)
+	if block == nil {
+		return []finding{{
+			ID:    "MD-12",
+			Human: "contract/decision.go 里找不到 const 块 —— 解析规则可能已过期（拒绝静默放行）",
+			Where: rel,
+		}}
+	}
+	var got []string
+	for _, m := range regexp.MustCompile(`(?m)^\s*(Action[A-Za-z0-9]+)`).FindAllStringSubmatch(block[1], -1) {
+		got = append(got, m[1])
+	}
+
+	var out []finding
+	if len(got) != len(decisionValues) {
+		out = append(out, finding{
+			ID: "MD-12",
+			Human: fmt.Sprintf("决策取值必须是闭集（恰好 %d 个），实际 %d 个：%s",
+				len(decisionValues), len(got), strings.Join(got, " / ")),
+			Where: rel,
+		})
+	}
+	strs := regexp.MustCompile(`case\s+Action[A-Za-z0-9]+:\s*\n\s*return\s+"([^"]+)"`).
+		FindAllStringSubmatch(body, -1)
+	var values []string
+	for _, m := range strs {
+		values = append(values, m[1])
+	}
+	if strings.Join(values, ",") != strings.Join(decisionValues, ",") {
+		out = append(out, finding{
+			ID: "MD-12",
+			Human: "Action.String() 的取值与约定的三值不一致：实际 [" + strings.Join(values, " ") +
+				"]，期望 [" + strings.Join(decisionValues, " ") + "]",
+			Where: rel,
+		})
+	}
+
+	// ③ 文档侧：三值必须都在 design/terminology.md 里（术语表是三值的权威出处）
+	doc, derr := os.ReadFile(filepath.Join(root, "docs/design/terminology.md"))
+	if derr != nil {
+		return append(out, finding{ID: "MD-12", Human: "读 terminology.md 失败", Where: derr.Error()})
+	}
+	for _, v := range decisionValues {
+		if !strings.Contains(string(doc), v) {
+			out = append(out, finding{
+				ID:    "MD-12",
+				Human: "代码里的决策取值 " + v + " 在 design/terminology.md 里没有 —— 文档与代码两边各说一套",
+				Where: "docs/design/terminology.md",
+			})
+		}
+	}
+	return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 检查 11 · AR-30 / MD-6 响应路径不许有非确定性；judge 必须是纯函数
+// ─────────────────────────────────────────────────────────────────────────────
+
+// hotPathPkgs 是「响应/判定路径」上的包：它们的输出会直接影响对手看到的响应。
+var hotPathPkgs = []string{
+	"common/core/internal/judge",
+	"common/core/internal/director",
+	"common/core/internal/responder",
+	"common/core/internal/session",
+	"common/core/internal/decoy",
+	"modules/deception/proxy",
+	"modules/deception/injection",
+}
+
+// nondeterminismImports 是响应路径上**禁止**出现的伪随机源。
+//
+// 为什么不连 `crypto/rand` 一起禁：它是**生成标识/令牌**的正当用法（每会话一次、随会话冻结），
+// 而 AR-30 约束的是「同会话同资源同答案」这个**响应内容**不变量；把正当用法一并禁掉会逼出绕路写法。
+var nondeterminismImports = []string{"math/rand", "math/rand/v2"}
+
+// judgeMustStayPure 是 judge 包**禁止**引入的东西：判定必须是纯函数（同样的观测得同样的分）。
+//
+// 依据 `AR-2`（判定只实现一次）+ `MD-6`（不用系统时钟做判定）：
+// 判定一旦读了时钟/网络/文件，同一份观测在不同时刻就会给出不同分 —— 那既不可复现也不可解释。
+var judgeMustStayPure = []string{"time", "os", "net", "net/http", "os/exec", "math/rand", "math/rand/v2"}
+
+// judgePkg 是判定包；用前缀匹配**含子包** —— 否则有人把判定拆成 judge/rules 子包时，
+// 这条检查会静默失效（检查不该因为它没预见的重构而变弱）。
+const judgePkg = "common/core/internal/judge"
+
+func checkHotPathPurity(root string, pkgs []pkg) []finding {
+	var out []finding
+	for _, p := range pkgs {
+		rel, err := filepath.Rel(root, p.Dir)
+		if err != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		onHotPath := false
+		for _, hot := range hotPathPkgs {
+			if rel == hot || strings.HasPrefix(rel, hot+"/") {
+				onHotPath = true
+				break
+			}
+		}
+		if !onHotPath {
+			continue
+		}
+		for _, imp := range p.Imports {
+			for _, bad := range nondeterminismImports {
+				if imp == bad {
+					out = append(out, finding{
+						ID:    "AR-30",
+						Human: "响应路径不得引入伪随机（同会话同资源必须同答案）：import " + imp,
+						Where: rel,
+					})
+				}
+			}
+		}
+		if rel == judgePkg || strings.HasPrefix(rel, judgePkg+"/") {
+			for _, imp := range p.Imports {
+				for _, bad := range judgeMustStayPure {
+					if imp == bad {
+						out = append(out, finding{
+							ID:    "MD-6",
+							Human: "judge 必须保持纯函数（不用时钟/随机/网络/文件），但它 import 了 " + imp,
+							Where: rel,
+						})
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 检查 12 · AR-32 L4 不许碰到「写侧」（策略下发 / 响应回写）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// checkL4StaysOffTheWritePlane 核两件事：
+//
+//	① `analysis/proto/` 里只允许有 **telemetry** 契约（L4 与核心之间唯一的通道）；
+//	② `analysis/` 的源码里不出现策略写侧的客户端（L4 只能把结论当**事件**上报，不能改策略/改响应）。
+//
+// 为什么值得机器核：策略面（`common/api/policy/v1`）是**适配器**的接口（拉取 + 回执）。
+// L4 一旦生成它的桩并接上，就出现了第二条「分析层 → 处置」的通路，而这正是 `AR-32` 禁止的。
+func checkL4StaysOffTheWritePlane(root string) []finding {
+	var out []finding
+	protoDir := filepath.Join(root, "analysis", "proto")
+	entries, err := os.ReadDir(protoDir)
+	if err != nil {
+		// 目录不见了 = 这条检查**失去依据**，必须报出来而不是静默跳过
+		// （否则把目录改名/删掉就能让 AR-32 的检查①消失）。
+		out = append(out, finding{
+			ID:    "AR-32",
+			Human: "找不到 analysis/proto/（L4 只允许 telemetry 契约，这条检查失去了检查对象）：" + err.Error(),
+			Where: "analysis/proto/",
+		})
+	}
+	for _, e := range entries {
+		name := e.Name()
+		// 与别的检查同口径：隐藏目录、__pycache__ 等工具产物不算「契约」
+		if strings.HasPrefix(name, ".") || name == "__pycache__" {
+			continue
+		}
+		// 不只看子目录：直接摆在 analysis/proto/ 下的策略契约（如 policy.proto）同样要报。
+		// 例外是 Python 的包标记 `__init__.py`（脚手架，不是契约）—— 不放行它只会得到假红。
+		if !e.IsDir() {
+			if name != "__init__.py" {
+				out = append(out, finding{
+					ID:    "AR-32",
+					Human: "analysis/proto/ 下只允许 telemetry 契约（L4 与核心的唯一通道），出现了文件 " + name,
+					Where: "analysis/proto/",
+				})
+			}
+			continue
+		}
+		if e.IsDir() && name != "telemetry" {
+			out = append(out, finding{
+				ID:    "AR-32",
+				Human: "analysis/proto/ 下只允许 telemetry 契约（L4 与核心的唯一通道），出现了 " + name,
+				Where: "analysis/proto/",
+			})
+		}
+	}
+
+	// 禁词表要覆盖**两种语言的实际写法**：Go 的包名（policyv1 / policypb）与
+	// Python 的生成物习惯（policy_pb2）及服务桩（PolicyServiceStub，被 PolicyService 覆盖）。
+	// 漏掉的写法会让这条检查看起来很强、实际可绕。
+	forbidden := []string{
+		"PolicyClient", "policypb", "policy_pb2", "policyv1", "policy/v1",
+		"PolicyService", "PolicySnapshot", "PolicyAck", "common.api.policy",
+	}
+	err = filepath.WalkDir(filepath.Join(root, "analysis"), func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "__pycache__" || name == "proto" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".py" {
+			return nil
+		}
+		if strings.Contains(filepath.ToSlash(path), "/tests/") {
+			return nil // 测试里出现这些词是允许的（它们在断言「不该有」）
+		}
+		b, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		rel, _ := filepath.Rel(root, path)
+		for _, bad := range forbidden {
+			if strings.Contains(string(b), bad) {
+				out = append(out, finding{
+					ID:    "AR-32",
+					Human: "L4 不得触碰策略写侧（只能把结论当事件上报）：出现 " + bad,
+					Where: filepath.ToSlash(rel),
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		out = append(out, finding{ID: "AR-32", Human: "遍历 analysis/ 失败，检查不完整", Where: err.Error()})
+	}
+	return out
 }

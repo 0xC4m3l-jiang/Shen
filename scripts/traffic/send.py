@@ -179,10 +179,18 @@ def fetch_flows(console: str) -> list[dict[str, Any]]:
     return flows
 
 
-def wait_for_flow(console: str, scenario: dict[str, Any], *, wait: float) -> dict[str, Any] | None:
+def wait_for_flow(
+    console: str,
+    scenario: dict[str, Any],
+    *,
+    wait: float,
+) -> dict[str, Any] | None:
     """在控制台的判定流动里找这条请求的记录（按方法与路径匹配，取最新一条）。
 
     为什么要等：适配器的上报是**异步**的（`AR-11` 异步批量幂等），写入与控制台可见之间有间隔。
+
+    注意：**`executed` / `inject` 不在这里**（这是判定记录）—— 它们在逐请求链路里，
+    由 `wait_for_graph` 单独取（实测：本接口的 `executed` 恒为 None）。
     """
     # 控制台记录的是**解码后**的路径（实测：非 ASCII 路径存成 /搜索/商品），
     # 所以两边都按解码形态比较，编码与非编码的写法都能匹配上。
@@ -202,6 +210,29 @@ def wait_for_flow(console: str, scenario: dict[str, Any], *, wait: float) -> dic
         ]
         if matches:
             return max(matches, key=lambda row: str(row.get("at", "")))
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.5)
+
+
+def wait_for_graph(console: str, decision_id: str, *, wait: float) -> dict[str, Any] | None:
+    """从逐请求链路（`/api/graphs`）里按 `decision_id` 取这条请求的**实际落点**与注入结果。
+
+    为什么要单独取：`executed` / `inject` **只在这条记录里**（`/api/flow` 是判定记录，没有它们 ——
+    实测它的这两个字段恒为 None）。判定记录先到、逐请求记录随后到，所以要**等**。
+    """
+    if not decision_id:
+        return None
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            rows = fetch_json("/api/graphs?limit=200", console) or []
+        except ConsoleError:
+            rows = []
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and str(row.get("decision_id") or "") == decision_id:
+                    return row
         if time.monotonic() >= deadline:
             return None
         time.sleep(0.5)
@@ -231,6 +262,7 @@ def judge(
     flow: dict[str, Any] | None,
     *,
     previous_decision: str | None,
+    stack_form: str = "unknown",
 ) -> dict[str, Any]:
     """把一条场景的实测结果与期望比对，返回结果字典。
 
@@ -238,7 +270,17 @@ def judge(
     "设计有、当前没做到" 的东西显式列出来，而不是制造红灯。
     """
     expect = scenario.get("expect") or {}
-    observe_only = bool(expect.get("observe_only"))
+    # 形态判定必须在**任何断言之前**：需要接管形态的场景在影子栈里连状态码都不该被断言
+    # （`block` 场景在影子栈里必然 200 —— 那是形态，不是失败）。以前这段在状态码检查**之后**，
+    # 于是观察行里残留一条失败 ⇒ 整次运行退出码 1。
+    needs_takeover = str(scenario.get("stack") or "") == "takeover"
+    form_observe = needs_takeover and stack_form == "shadow"
+    observe_only = bool(expect.get("observe_only")) or form_observe
+    if form_observe:
+        scenario["_observe_note"] = (
+            "影子栈（/api/topology 的 shadow=true）⇒ 只算不处置，本场景只能观察；"
+            "要跑接管形态请加 deploy/docker/compose.verify-mirage.yaml"
+        )
     gap = expect.get("gap")
     result: dict[str, Any] = {
         "id": scenario["id"],
@@ -248,6 +290,7 @@ def judge(
         "path": scenario["path"],
         "http_status": status,
         "observe_only": observe_only,
+        "observe_note": scenario.get("_observe_note", ""),
         "gap": gap,
         "flow": flow,
         "findings": header_findings(headers),
@@ -256,8 +299,15 @@ def judge(
     }
 
     failures: list[str] = []
+    if scenario.get("_unknown_ai"):
+        failures.append(
+            "读不到核心快照（/api/config）⇒ 无法判定 AI 层是否打开：证据缺失，不当作通过"
+            "（先确认控制台可达、再重跑）"
+        )
     status_in = expect.get("status_in")
-    if status_in:
+    if observe_only:
+        pass  # 观察行不断言状态码（影子栈里 block 场景必然 200 —— 那是形态）
+    elif status_in:
         # 显式声明可接受的状态码（例：演示站没实现 POST，501 是**业务自己**的行为，
         # 与 NI-1（引擎不得影响业务）无关 —— 这类场景要靠 status_in 说清楚）。
         allowed = [as_int(code) for code in status_in]
@@ -272,10 +322,30 @@ def judge(
         score = as_float(flow.get("score"))
         signals = list(flow.get("signals") or [])
         action = str(flow.get("action") or "")
+        executed = str(flow.get("executed") or "")
+        inject = str(flow.get("inject") or "")
         decision_id = str(flow.get("decision_id") or "")
         result["signals"] = signals
         result["action"] = action
+        result["executed"] = executed
+        result["inject"] = inject
         result["decision_id"] = decision_id
+
+        # 形态不匹配 ⇒ 记「观察」，**不是失败** —— 但判据必须是**权威信号**，不是结果形状。
+        #
+        # 为什么：`executed=origin` 有两种成因 —— ① 影子栈（只算不处置，INT-11）；
+        # ② 接管栈但改道/拦截**没生效**（真失败）。凭形状降级会把 ② 放行成绿，
+        # 而「忘了挂 compose.verify-mirage.yaml」恰好就长成 ②。
+        # 权威信号是控制台链路里的 `shadow`（graph 自己算，见 modules/console 的 Graph.Shadow）：
+        # 它是 true ⇒ 形态是影子，只能观察；是 false ⇒ 接管形态，落点不对就是失败。
+        # 形态的判据与说明在函数开头就定了（见 `form_observe`）：
+        #   · shadow=true  ⇒ 形态就是影子，落点必是 origin（观察，不是失败）；
+        #   · shadow=false ⇒ 接管形态 ⇒ 落点/决策不对就是**真失败**
+        #     （「忘了挂 compose.verify-mirage.yaml」正是这个形状 —— 以前会被形状判据放行）；
+        #   · 读不到 ⇒ 不降级、也不额外指控，同样走断言。
+        result["stack_form"] = stack_form
+        result["observe_only"] = observe_only
+        result["observe_note"] = scenario.get("_observe_note", "")
         if score is not None:
             result["score"] = score
 
@@ -309,6 +379,15 @@ def judge(
                     failures.append(f"未命中全部期望信号 {expect['signals_all']}（实际 {signals}）")
                 if "action" in expect and action != expect["action"]:
                     failures.append(f"决策 {action} ≠ 期望 {expect['action']}")
+                # 逐场景的落点 / 注入期望（`executed` 允许写一个值或一个集合）：
+                # 这两条是「处置真的执行下去了」与「内容真的注进去了」的可断言形式。
+                if "executed" in expect:
+                    want = expect["executed"]
+                    allowed = want if isinstance(want, list) else [want]
+                    if executed not in [str(w) for w in allowed]:
+                        failures.append(f"落点 {executed or '（空）'} 不在期望 {allowed} 内")
+                if "inject" in expect and inject != str(expect["inject"]):
+                    failures.append(f"注入结果 {inject or '（空）'} ≠ 期望 {expect['inject']}")
     elif not (observe_only or gap):
         failures.append("控制台里没找到这条判定（适配器上报是否正常？）")
 
@@ -419,6 +498,8 @@ def render(
             f"{row['http_status']:>4}  {score:>5}  "
             f"{row.get('action', '—'):<12} {','.join(row.get('signals', [])) or '—'}  {mark}"
         )
+        if row.get("observe_note"):
+            print(f"{'':<{width}}    ↳ {row['observe_note']}")
         for failure in row["failures"]:
             print(f"{'':<{width}}    ↳ {failure}")
         for finding in row["findings"]:
@@ -558,9 +639,56 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{exc}\n先跑 scripts/shen.sh status 看看服务起来没", file=sys.stderr)
         return 1
 
+    # AI 层开没开，由**核心自己的快照**说了算（不猜）。
+    # 为什么需要它：声明 `stack: takeover-ai` 的场景在「接管但 AI 关」的栈里，
+    # 落点是对的（mirage）而注入结果是 `disabled` —— 那是**形态没打开**，不是被测行为不达标。
+    # 形态的**权威信号**：控制台聚合视图里的 `shadow`（`/api/topology` 的 Graph.Shadow）。
+    # 为什么不用逐请求链路里的字段：`/api/graphs` 的行里**没有** shadow（实测；
+    # 它是聚合视图才有的字段）—— 拿不到就会退化成「凭结果形状猜形态」，那正是要避免的。
+    stack_form = "unknown"  # shadow / takeover / unknown
+    try:
+        topo = fetch_json("/api/topology", args.console) or {}
+        if isinstance(topo.get("shadow"), bool):
+            stack_form = "shadow" if topo["shadow"] else "takeover"
+    except (ConsoleError, AttributeError):
+        stack_form = "unknown"
+
+    ai_state = "unknown"  # on / off / unknown（三态：读不到 ≠ 关着）
+    try:
+        snapshot = fetch_json("/api/config", args.console) or {}
+        ai_state = "on" if (snapshot.get("ai") or {}).get("enabled") else "off"
+    except (ConsoleError, AttributeError):
+        # 读不到就**没有结论**：既不当作「关着」去降级成观察（那会把真失败放行），
+        # 也不当作「开着」去报红（那是无证据的控告）—— 交给 judge 报「证据缺失」。
+        ai_state = "unknown"
+
     results: list[dict[str, Any]] = []
+    # 热身（K-24）：第一条请求常落在「冷连接 + 适配器还没 Pull 到策略」的窗口里，
+    # 结果是 failopen（放行到业务、没有判定记录）—— 那是**通道时序**，不是被测行为。
+    # 不热身的话，只跑单条场景时第一条几乎必然假红（实测：takeover-mirage-routed 超时）。
+    warm_host, warm_port, _ = parse_http_url(args.entry)
+    warm_url = f"http://{warm_host}:{warm_port}/healthz"
+    try:
+        # scheme 与主机名已由 parse_http_url 显式校验（只允许 http/https），与 fetch_json 同一做法：
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
+        with urllib.request.urlopen(warm_url, timeout=args.timeout) as response:
+            response.read()
+        time.sleep(1.0)
+    except OSError as exc:
+        # 不静默：热身失败本身不判失败，但要让人看见（否则第一条场景的红会让人查错方向）
+        print(f"（热身请求失败，不影响判定：{exc}）", file=sys.stderr)
+
     for scenario in scenarios:
         expect = scenario.get("expect") or {}
+        if str(scenario.get("stack") or "") == "takeover-ai":
+            if ai_state == "off":
+                expect["observe_only"] = True
+                scenario["_observe_note"] = (
+                    "AI 层未打开（核心快照 ai.enabled=false）⇒ 本场景只能观察；"
+                    "打开 AI 层（ai.enabled=true + 清单 + SHEN_PROXY_INJECT_CONTENT=true）后再跑"
+                )
+            elif ai_state == "unknown":
+                scenario["_unknown_ai"] = True
         needs_pair = bool(
             expect.get("same_decision_as_previous") or expect.get("distinct_decisions")
         )
@@ -584,7 +712,8 @@ def main(argv: list[str] | None = None) -> int:
                         "method": scenario["method"].upper(),
                         "path": scenario["path"],
                         "http_status": 0,
-                        "observe_only": False,
+                        "observe_only": bool(expect.get("observe_only")),
+                        "observe_note": scenario.get("_observe_note", ""),
                         "gap": expect.get("gap"),
                         "flow": None,
                         "findings": [],
@@ -596,21 +725,32 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 continue
             flow = wait_for_flow(args.console, scenario, wait=args.wait)
-            row = judge(scenario, status, headers, body, flow, previous_decision=previous_decision)
+            # 落点 / 注入结果在逐请求链路里，不在判定记录里 —— 按 decision_id 取回并合进 flow
+            if flow is not None and any(
+                name in (scenario.get("expect") or {}) for name in ("executed", "inject")
+            ):
+                graph_row = wait_for_graph(
+                    args.console, str(flow.get("decision_id") or ""), wait=args.wait
+                )
+                if graph_row is not None:
+                    for name in ("executed", "inject", "status", "content_id", "bytes"):
+                        if graph_row.get(name) not in (None, ""):
+                            flow[name] = graph_row[name]
+            row = judge(
+                scenario,
+                status,
+                headers,
+                body,
+                flow,
+                previous_decision=previous_decision,
+                stack_form=stack_form,
+            )
             row["attempt"] = attempt + 1
             if flow is not None:
                 previous_decision = str(flow.get("decision_id") or "") or previous_decision
             results.append(row)
             if args.delay:
                 time.sleep(args.delay)
-
-    graph: dict[str, Any] | None = None
-    if args.check_graph:
-        try:
-            graph = check_graph(args.console)
-        except (ConsoleError, ValueError) as exc:
-            print(f"链路核对失败：{exc}", file=sys.stderr)
-            return 1
 
     graph: dict[str, Any] | None = None
     if args.check_graph:
@@ -684,7 +824,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         render(results, l4, graph)
 
-    failed = any(row["failures"] for row in results)
+    # 观察行不算失败（形态没打开不是被测行为的错；它们的失败已在 judge 里跳过）
+    failed = any(row["failures"] for row in results if not row["observe_only"])
     hygiene = any(row["findings"] or row["st7_findings"] for row in results)
     dangling = bool(l4 and l4["dangling_evidence"])
     graph_bad = bool(graph and graph["problems"])

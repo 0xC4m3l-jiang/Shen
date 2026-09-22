@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "_about": "伪造流量场景（声明式）。每条 = 一次请求 + 期望；期望从**观测面**（控制台）核对 —— 判定响应禁止回显分值/信号（ST-7）。",
+  "_about": "伪造流量场景（声明式）。每条 = 一次请求 + 期望；期望从**观测面**（控制台）核对 —— 判定响应禁止回显分值/信号（ST-7）。 每条还可以带 `modules`（这条流量证明哪些模块在工作）与 `stack`（需要哪种栈形态）——前者供 `scripts/verify` 把「模块 ↔ 功能场景」对上，后者区分影子与接管。",
   "_expect_fields": {
     "min_score / max_score": "从控制台看到的分数的上下界（含）；分数在 1.0 处截断",
     "signals_any / signals_all": "至少命中一个 / 必须全部命中（信号 ID = 配置里的规则 id）",
@@ -9,7 +9,9 @@
     "observe_only": "true = 只发不判（人工观察）",
     "same_decision_as_previous": "重复多次时，断言与上一次**同一个** decision_id（ST-10 判定缓存）",
     "distinct_decisions": "重复多次时，断言每次都是**不同**的 decision_id",
-    "gap": "已知缺口 {kind: 未实现|精度|未覆盖, why, close} —— 只打印、不算失败，用于把功能欠缺显式列出"
+    "gap": "已知缺口 {kind: 未实现|精度|未覆盖, why, close} —— 只打印、不算失败，用于把功能欠缺显式列出",
+    "executed": "适配器实际走了哪（origin/cache/failopen/origin_fallback/mirage/block/whitelist）；可写一个值或一个集合。需要接管形态",
+    "inject": "AI 内容注入的结果（applied/disabled/no_content/off）；需要接管形态 + 打开 AI"
   },
   "_session": "session: unique（默认，每次新会话）| shared（同场景内复用会话）—— 判定键是 (来源, 会话, 方法, 路径)",
   "_note": "期望值按 deploy/config/config.example.yaml 的 16 条示例规则写；改规则请同步本文件。",
@@ -31,7 +33,11 @@
           "path-probe"
         ],
         "action": "route_origin"
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "probe-git-normal-ua",
@@ -48,7 +54,11 @@
         "signals_all": [
           "path-probe"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "probe-git-head",
@@ -65,7 +75,11 @@
         "signals_all": [
           "path-probe"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "headless-home",
@@ -82,7 +96,11 @@
         "signals_all": [
           "ua-headless"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "probe-gitignore",
@@ -99,7 +117,11 @@
           "why": "前缀匹配只看字符串开头，`/.gitignore` 被当成源码目录探测",
           "close": "改为路径段边界匹配（或 equals 具体文件），并在配置规范里写明前缀语义"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "probe-git-prefixed",
@@ -116,7 +138,11 @@
           "why": "未归一化就匹配，加一层无害前缀即可绕过",
           "close": "对 path 归一化（去 `..`、合并重复斜杠）后再匹配；需评估代价"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "scanner-sqlmap",
@@ -133,7 +159,11 @@
         "signals_all": [
           "ua-sqlmap"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "scanner-nuclei",
@@ -151,7 +181,11 @@
           "ua-nuclei",
           "path-actuator"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "scanner-nikto",
@@ -168,7 +202,11 @@
         "signals_all": [
           "ua-nikto"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "scanner-masscan",
@@ -185,7 +223,11 @@
         "signals_all": [
           "ua-masscan"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "scanner-script-client",
@@ -202,7 +244,11 @@
         "signals_all": [
           "ua-script-client"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "control"
+      ]
     },
     {
       "id": "endpoint-env",
@@ -219,7 +265,11 @@
         "signals_all": [
           "path-env"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "endpoint-svn",
@@ -236,7 +286,11 @@
         "signals_all": [
           "path-svn"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "endpoint-aws-credentials",
@@ -253,7 +307,11 @@
         "signals_all": [
           "path-aws-credentials"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "endpoint-admin",
@@ -270,7 +328,11 @@
         "signals_all": [
           "path-admin"
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "endpoint-wp-login",
@@ -293,7 +355,11 @@
           200,
           501
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "injection-traversal-plain",
@@ -310,7 +376,11 @@
           "why": "载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的穿越/SQLi 完全不可见",
           "close": "给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "injection-traversal-encoded",
@@ -327,7 +397,11 @@
           "why": "规则匹配原始路径字符串，编码后不命中",
           "close": "匹配前解码/归一化 query（注意解码代价与幂等）"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "injection-sqli-union",
@@ -344,7 +418,11 @@
           "why": "载荷在**查询串**里，而判定用的 `path` 字段不含查询串 ⇒ 查询参数里的注入完全不可见",
           "close": "给观测加 `query`（或 `raw_uri`）字段并允许规则匹配它；落地后把本条改回断言（min_score 0.65/0.75）"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "injection-sqli-encoded",
@@ -361,7 +439,11 @@
           "why": "同上：编码形式不被字符串规则命中",
           "close": "同 encoded-traversal"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "method-delete",
@@ -382,7 +464,11 @@
           200,
           501
         ]
-      }
+      },
+      "modules": [
+        "judge",
+        "director"
+      ]
     },
     {
       "id": "method-put",
@@ -405,7 +491,11 @@
           "why": "示例规则只登记 DELETE，PUT/PATCH 未建模（演示站对两者都回 501，属业务行为）",
           "close": "按业务语义补齐方法维度规则或给出推荐基线集"
         }
-      }
+      },
+      "modules": [
+        "judge",
+        "policy"
+      ]
     },
     {
       "id": "session-reuse",
@@ -421,7 +511,11 @@
         "min_score": 0.8,
         "max_score": 1.0,
         "same_decision_as_previous": true
-      }
+      },
+      "modules": [
+        "session",
+        "isolation"
+      ]
     },
     {
       "id": "session-distinct",
@@ -437,7 +531,11 @@
         "min_score": 0.8,
         "max_score": 1.0,
         "distinct_decisions": true
-      }
+      },
+      "modules": [
+        "session",
+        "isolation"
+      ]
     },
     {
       "id": "whitelist-monitoring",
@@ -454,7 +552,11 @@
           "why": "白名单**已实现**：边缘侧命中即 `executed=whitelist` 且不调核心，核心侧 `loader.Whitelist()` → `director.whitelisted()` 先于引流判定（单测 TestWhitelistByUserAgentSkipsJudgement）。但演示栈默认配置的 whitelist 段是**空的**，所以这条场景在默认栈里断言不了",
           "close": "用 `deploy/docker/compose.verify-mirage.yaml` 覆盖起栈，并把 `SHEN_VERIFY_WHITELIST` 设成你的来源网段，再发同一条请求：应看到 `executed=whitelist` + `unjudged=true`。实证：docs/ops/ai-injection-2026-09-21/logs/docker-whitelist.txt"
         }
-      }
+      },
+      "modules": [
+        "director",
+        "adapter-proxy"
+      ]
     },
     {
       "id": "normal-firefox-home",
@@ -468,7 +570,12 @@
       "expect": {
         "max_score": 0.05,
         "action": "route_origin"
-      }
+      },
+      "modules": [
+        "judge",
+        "director",
+        "adapter-proxy"
+      ]
     },
     {
       "id": "normal-safari-api",
@@ -481,7 +588,12 @@
       },
       "expect": {
         "max_score": 0.05
-      }
+      },
+      "modules": [
+        "judge",
+        "director",
+        "adapter-proxy"
+      ]
     },
     {
       "id": "normal-static-asset",
@@ -494,7 +606,12 @@
       },
       "expect": {
         "max_score": 0.05
-      }
+      },
+      "modules": [
+        "judge",
+        "director",
+        "adapter-proxy"
+      ]
     },
     {
       "id": "normal-chrome-css",
@@ -507,7 +624,12 @@
       },
       "expect": {
         "max_score": 0.05
-      }
+      },
+      "modules": [
+        "judge",
+        "director",
+        "adapter-proxy"
+      ]
     },
     {
       "id": "boundary-long-ua",
@@ -520,7 +642,11 @@
       },
       "expect": {
         "max_score": 0.05
-      }
+      },
+      "modules": [
+        "control",
+        "session"
+      ]
     },
     {
       "id": "boundary-long-path",
@@ -537,7 +663,11 @@
           200,
           404
         ]
-      }
+      },
+      "modules": [
+        "control",
+        "session"
+      ]
     },
     {
       "id": "boundary-empty-ua",
@@ -548,7 +678,11 @@
       "headers": {},
       "expect": {
         "max_score": 0.05
-      }
+      },
+      "modules": [
+        "control",
+        "session"
+      ]
     },
     {
       "id": "boundary-unicode-path",
@@ -565,7 +699,90 @@
           200,
           404
         ]
+      },
+      "modules": [
+        "control",
+        "session"
+      ]
+    },
+    {
+      "id": "takeover-mirage-routed",
+      "group": "接管 · 改道",
+      "why": "改道真的执行下去了（不是只算了个分）：route_mirage ⇒ executed=mirage",
+      "modules": [
+        "director",
+        "adapter-proxy",
+        "honeypot"
+      ],
+      "stack": "takeover",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "HeadlessChrome/120"
+      },
+      "expect": {
+        "min_score": 0.7,
+        "action": "route_mirage",
+        "executed": "mirage",
+        "status_in": [
+          200
+        ]
+      }
+    },
+    {
+      "id": "takeover-mirage-injected",
+      "group": "接管 · 注入",
+      "why": "AI 生成的欺骗内容真的进了改道侧响应（inject=applied 且带 content_id）；路径取演示配置里能过改道阈值的 /.git/config",
+      "modules": [
+        "ai-capability",
+        "adapter-proxy",
+        "edge-injection"
+      ],
+      "stack": "takeover-ai",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "HeadlessChrome/120"
+      },
+      "expect": {
+        "min_score": 0.7,
+        "action": "route_mirage",
+        "executed": "mirage",
+        "inject": "applied",
+        "status_in": [
+          200
+        ]
+      }
+    },
+    {
+      "id": "takeover-block-403",
+      "group": "接管 · 拦截",
+      "why": "拦截是真的 403（block 默认关，需 SHEN_BLOCK_ENABLED=true —— Q5 / INT-12 阶梯放开）",
+      "modules": [
+        "director",
+        "adapter-proxy",
+        "control"
+      ],
+      "stack": "takeover",
+      "method": "GET",
+      "path": "/.git/config",
+      "headers": {
+        "User-Agent": "sqlmap/1.7"
+      },
+      "expect": {
+        "action": "block",
+        "executed": "block",
+        "inject": "off",
+        "status_in": [
+          403
+        ]
       }
     }
-  ]
+  ],
+  "_stack_fields": {
+    "shadow（默认）": "按 deploy/config/config.example.yaml 起的常规栈：影子模式、只观测不处置",
+    "takeover": "用 deploy/docker/compose.verify-mirage.yaml 覆盖起栈：关闭影子、真的改道/拦截",
+    "takeover-ai": "接管 + ai.enabled=true + 内容清单 + SHEN_PROXY_INJECT_CONTENT=true（看 inject=applied）",
+    "说明": "声明了非 shadow 的场景在 shadow 栈里会记为**观察**（不是失败）—— 见 send.py 的 judge()"
+  }
 }
