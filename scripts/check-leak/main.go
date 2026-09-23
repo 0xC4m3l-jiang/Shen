@@ -61,13 +61,19 @@ const modulesDoc = "docs/design/modules.md"
 //
 // 依据 OH-2 的适用位置表 —— 配置面（`policy`）与存储面（`store`）、会话与遥测
 // 的字符串不会进入响应，故不在扫描范围内；它们的内部术语由 `TM-6` 允许。
+// ⚠️ 本表**必须与 `modules.md` §1.1 的有效模块一致**：模块被删除/改名时这里要同步，
+// 否则 `responseSurfaceDirs` 会直接失败（「找不到这些响应面模块」）—— 那是有意的，
+// 免得模块消失后扫描面**静默缩小**（漏扫才是真的漏）。
+//
+// 历史：`responder`（伪造响应内容）已于 2026-09-23 删除 —— 响应内容改由 L4 离线生成
+// （`analysis/aicap`）+ 适配器 `edge-injection` 改写注入；响应面因此由 `adapter-proxy` /
+// `edge-injection` 覆盖，内容过滤的**字面量表**迁到 `common/core/internal/policy/contentfilter.go`。
 var responseSurfaceModules = map[string]string{
 	"adapter-mirror": "① 旁路镜像接收端（只回 202，但仍是接入面）",
 	"adapter-proxy":  "③④ 前置与边车：响应头、错误页、403、注入",
 	"edge-injection": "改写蜜罐侧响应体（直接上屏）",
 	"judge":          "判定面（判定文本可能随事件外流）",
 	"director":       "决策取值与后端名的来源",
-	"responder":      "伪造响应内容（直接上屏）",
 	"isolation":      "隔离短路时对外可见的行为描述",
 	"control":        "gRPC 服务面（ST-7 禁止回显的强制点）",
 	"decoy":          "诱饵内容与投放片段（会被投放/上屏）",

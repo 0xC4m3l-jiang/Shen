@@ -6,7 +6,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +35,6 @@ import (
 	"shen/common/core/internal/isolation"
 	"shen/common/core/internal/judge"
 	"shen/common/core/internal/policy"
-	"shen/common/core/internal/responder"
 	"shen/common/core/internal/session"
 	"shen/common/core/internal/store"
 	"shen/common/core/internal/telemetry"
@@ -291,14 +289,9 @@ func assembleDeception(ctx context.Context, loader *policy.Loader, stores *store
 		return nil, err
 	}
 
-	// 响应生成：一致性不变量（AR-30）；高保真内容由 L4 离线预生成落库。
-	respond, err := responder.New(stores.Content)
-	if err != nil {
-		return nil, err
-	}
-	if err := assertConsistency(ctx, respond); err != nil {
-		return nil, err
-	}
+	// 响应生成：**已由清单链承担**（见 docs/plans/2026-09-23-responder-migration.md）——
+	// 内容是 L4 离线预生成的冻结字节 + 校验和（装载期验一次、注入前再验一次），
+	// 「同输入同字节」（AR-30）由它保证；旧 `responder` 的读取键与清单链不同（死路径），已删除。
 
 	// 隔离：命中则不再调用决策层，客户端**不可见**。
 	iso, err := isolation.New(stores.Isolation, nil)
@@ -307,26 +300,6 @@ func assembleDeception(ctx context.Context, loader *policy.Loader, stores *store
 	}
 
 	return &deception{surface: surface, pool: pool, isolate: iso, assets: assets}, nil
-}
-
-// assertConsistency 验证 AR-30：同一输入两次必须逐字节一致。
-//
-// 这是「幻境不可区分」的前提（AR-26 的启动期断言精神）—— 它坏了就该启动失败，
-// 而不是带着一个会被一眼识破的引擎继续跑。
-func assertConsistency(ctx context.Context, r responder.Responder) error {
-	probe := contract.RespondRequest{SessionID: "startup-probe", Resource: "GET /__selftest", Kind: contract.DecoyBait}
-	first, err := r.Respond(ctx, probe)
-	if err != nil {
-		return err
-	}
-	second, err := r.Respond(ctx, probe)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(first.Body, second.Body) {
-		return errors.New("responder: 一致性不变量被破坏（AR-30）—— 同输入两次结果不同")
-	}
-	return nil
 }
 
 // ── 观测面适配器（把 store / telemetry 接到 control 定义的接口上）────────────

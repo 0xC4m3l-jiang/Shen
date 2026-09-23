@@ -83,23 +83,3 @@ type HoneypotBackend struct {
 	Enabled bool
 	Healthy bool // 运行期健康；由装配层或健康检查更新
 }
-
-// RespondRequest 是 responder 的输入。
-//
-// 注意它**不含 decoy 资产的具体字段**（除 ID/Kind）：responder 只按
-// (SessionID, Resource) 与资产标识生成响应，不解析资产定义 —— 保持接口解耦。
-type RespondRequest struct {
-	SessionID string // 会话键（一致性种子的一半）
-	Resource  string // 资源键：方法 + 路径 + query（一致性种子的另一半）
-	AssetID   string // 命中的诱饵资产标识（可为空 = 无资产命中）
-	Kind      DecoyKind
-}
-
-// RespondOutput 是 responder 的输出：一个伪造响应。
-//
-// 一致性不变量（AR-30）：同 (SessionID, Resource) 必得同一 Response。
-type RespondOutput struct {
-	Status  int
-	Headers map[string]string
-	Body    []byte
-}

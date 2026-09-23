@@ -3,13 +3,12 @@ package main
 // 欺骗引擎的**端到端集成测试**。
 //
 // 放在装配层（cmd）的原因与 main_test.go 相同：它同时依赖多个模块的**真实实现**
-// （policy / judge / director / honeypot / decoy / responder / isolation / control），
+// （policy / judge / director / honeypot / decoy / isolation / control），
 // 而 MD-22 只约束模块自身的测试 —— 装配层正是「把具体实现拼起来」的地方。
 //
 // 这个文件本身就是「模块之间能快速接入」的证据：全部接线只需要构造函数 + 接口。
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -25,7 +24,6 @@ import (
 	"shen/common/core/internal/isolation"
 	"shen/common/core/internal/judge"
 	"shen/common/core/internal/policy"
-	"shen/common/core/internal/responder"
 	"shen/common/core/internal/session"
 	"shen/common/core/internal/store"
 )
@@ -182,31 +180,13 @@ func TestDeceptionChainEndToEnd(t *testing.T) {
 		t.Error("诱饵必须有投放片段（投放才是最后一公里）")
 	}
 
-	// ⑥ 响应生成：一致性不变量（AR-30）
-	resp, err := responder.New(stores.Content)
-	if err != nil {
-		t.Fatalf("构造 responder 失败：%v", err)
+	// ⑥ 响应内容：**已由清单链承担**（旧 `responder` 的读取键与清单链不同 ⇒ 死路径，已删）。
+	// 一致性（AR-30）由「冻结字节 + 校验和」结构性保证：装载期验一次（`policy.LoadContentManifest`），
+	// 注入前再验一次（适配器的 `contentFor`）；可用性由 `make ai-check` 端到端覆盖。
+	if len(hit.ID) == 0 {
+		t.Error("应命中诱饵资产")
 	}
-	rreq := contract.RespondRequest{SessionID: key.ID, Resource: "GET /portal/api/content", AssetID: hit.ID, Kind: hit.Kind}
-	first, err := resp.Respond(ctx, rreq)
-	if err != nil {
-		t.Fatalf("生成响应失败：%v", err)
-	}
-	for i := 0; i < 5; i++ {
-		again, _ := resp.Respond(ctx, rreq)
-		if !bytes.Equal(first.Body, again.Body) {
-			t.Fatalf("同一 (会话, 资源) 必须逐字节一致（AR-30）\n%s\nvs\n%s", first.Body, again.Body)
-		}
-	}
-	if len(first.Body) == 0 {
-		t.Error("响应体不能为空")
-	}
-	if first.Headers["Content-Type"] == "" {
-		t.Error("响应必须带 Content-Type")
-	}
-	if len(first.Headers) != 1 {
-		t.Errorf("不得新增响应头（NI-9），得到 %v", first.Headers)
-	}
+	// 投放片段必须含诱饵路径（上一步已断言）——响应生成的断言已随旧模块一起移走。
 }
 
 // TestLowScoreAgentStaysOnOrigin 反例：低分请求放行 —— 误调度率是首要约束。

@@ -17,7 +17,7 @@ flowchart TB
 
   subgraph D["欺骗层 · Go（modules/deception 适配器 + 核心）"]
     AD["L1 适配器（这里画的是 ③ 前置 / ④ 边车：内嵌 Caddy 转发 + TLS）<br/>白名单 → 本地缓存 → 调核心 → 按三值执行 → 异步上报"]
-    CO["核心（无状态多副本，可随时重启）<br/>判定 judge → 决策 director（三值）<br/>会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面<br/>欺骗面：诱饵 decoy · 幻境入口 honeypot · 响应生成 responder"]
+    CO["核心（无状态多副本，可随时重启）<br/>判定 judge → 决策 director（三值）<br/>会话 · 隔离 · 策略 · 遥测 · 存储 · 服务面<br/>欺骗面：诱饵 decoy（含路由表下发）· 幻境入口 honeypot<br/>响应内容由 L4 生成 → 清单 → 适配器注入"]
   end
 
   WEB["web 真实业务层<br/>被保护的真实业务站（上游）<br/>引擎挂了它照常服务"]
