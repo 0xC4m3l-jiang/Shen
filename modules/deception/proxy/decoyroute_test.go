@@ -342,3 +342,27 @@ func TestHostMatchesSemantics(t *testing.T) {
 		}
 	}
 }
+
+// TestNoPolicyMeansNoDecoyProtection 显式钉住一条**已知边界**：还没有拿到策略时，诱饵路径没有保护。
+//
+// 为什么要把"没做到"写成测试：建议书 §1.1 点出「影子模式、策略尚未装载、路由被删除/禁用后，
+// 请求转回常规链路，可能到业务」。这是**当前事实**，不是 bug 报告 —— 把它写成可断言的用例，
+// 将来有人补上"启动即保护"时这条会**主动失败**，提醒改这里与文档，而不是悄悄改变行为。
+func TestNoPolicyMeansNoDecoyProtection(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, &stubReporter{})
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+
+	// 从未应用过策略（等价于"策略面还没就绪"）：/admin 走常规链路 ⇒ 落到业务。
+	w := do(h, http.MethodGet, "http://svc.example/admin/login", "", nil)
+	if got := w.Header().Get("X-Backend"); got != "origin" {
+		t.Fatalf("策略未就绪时该路径应走常规链路到业务（已知边界），实际落点 %q", got)
+	}
+	if n := origin.calls.Load(); n != 1 {
+		t.Fatalf("应恰好落到源站 1 次，实际 %d", n)
+	}
+	if n := judge.callCount(); n != 1 {
+		t.Fatalf("应照常判定（观测完整），实际调核心 %d 次", n)
+	}
+}

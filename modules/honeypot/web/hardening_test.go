@@ -442,3 +442,36 @@ func templateMustFail(t *testing.T) *template.Template {
 	t.Helper()
 	return template.Must(template.New("broken").Parse(`{{.NoSuchField.Sub}}`))
 }
+
+// failingRand 让会话 id 生成失败（模拟内核随机源不可用）——用来触达 500 分支。
+type failingRand struct{}
+
+func (failingRand) Read([]byte) (int, error) { return 0, errRandUnavailable{} }
+
+// errRandUnavailable 是本测试用的随机源失败错误。
+type errRandUnavailable struct{}
+
+func (errRandUnavailable) Error() string { return "模拟随机源不可用" }
+
+// TestServerErrorPageIsComplete 补 500 这一档（建议书 §5 第 2 条点名 400/401/404/413/500 逐个检查）。
+//
+// 为什么单独立一例：500 是**唯一**由"我们自己的依赖坏了"触发的分支（随机源/场景数据），
+// 它最容易写成"只有状态码没有正文"——而那正是对手能一眼看出的破绽。
+func TestServerErrorPageIsComplete(t *testing.T) {
+	h := New(Options{ScenarioID: "atlas", Rand: failingRand{}})
+	resp := do(h, http.MethodPost, "/admin/login", url.Values{
+		"username": {"a"}, "password": {"b"},
+	}.Encode(), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("随机源不可用应 500，实际 %d", resp.Code)
+	}
+	body := resp.Body.String()
+	for _, must := range []string{"<!doctype html>", "</html>", h.scenario.Org, h.scenario.Product} {
+		if !strings.Contains(body, must) {
+			t.Fatalf("500 页缺少 %q（状态码对、正文是半成品）：%s", must, body)
+		}
+	}
+	if sessionCookieFrom(resp) != "" {
+		t.Fatal("没建起会话就不得下发 cookie")
+	}
+}
