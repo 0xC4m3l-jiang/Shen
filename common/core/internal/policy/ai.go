@@ -243,6 +243,13 @@ func LoadContentManifest(path string, wantVariants int) (contract.ContentManifes
 					where, body.Checksum, got))
 				continue
 			}
+			// AR-22 的**读侧**防线：生成侧的护栏是第一道闸，这里不假设「来源一定经过护栏」——
+			// 清单文件可能被手工改过、或被中间的构建步骤改过（校验和只能证明「与清单一致」，
+			// 不能证明「内容合格」）。命中泄露/自曝类就丢这一条，并如实记原因。
+			if err := ValidateContentBody([]byte(body.Body)); err != nil {
+				dropped = append(dropped, fmt.Sprintf("%s（%v）", where, err))
+				continue
+			}
 			bodies = append(bodies, body)
 		}
 		if len(bodies) == 0 {

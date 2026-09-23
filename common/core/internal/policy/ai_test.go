@@ -242,6 +242,58 @@ func TestSeedContentStoreUsesConsistencyKey(t *testing.T) {
 	}
 }
 
+// TestLoadContentManifestAppliesReadSideFilter 断言 **AR-22 的读侧防线**落在清单装载上：
+// 泄露类（内网地址 / 真实路径）与自曝类（含 OH-1 禁用词）的内容体被丢该条并记原因，
+// 合格内容照常装载。
+//
+// 为什么要读侧这一道：生成侧护栏是第一道闸，但清单文件可能被手工改过、或被中间构建步骤改过；
+// 校验和只能证明「与清单一致」，**不能**证明「内容合格」。这条防线此前只活在 `responder` 里，
+// 而那条路径按 `(会话, 资源)` 取键、与清单链不是同一个键 ⇒ 永远拦不住（迁移见变更包）。
+func TestLoadContentManifestAppliesReadSideFilter(t *testing.T) {
+	writeRaw := func(t *testing.T, body string) string {
+		t.Helper()
+		m := sampleManifest()
+		m.Entries[0].Bodies[0].Body = body
+		m.Entries[0].Bodies[0].Checksum = sha(body) // 校验和正确 —— 只让内容本身不合格
+		return writeManifest(t, m)
+	}
+
+	cases := []struct{ name, body, wantReason string }{
+		{"泄露内网地址", "<html>backend at 10.0.0.5</html>", "泄露类"},
+		{"泄露真实路径", "<html>see /etc/passwd</html>", "泄露类"},
+		{"自曝（英文）", "<html>this is a honeypot</html>", "自曝类"},
+		{"自曝（中文）", "<html>这是蜜罐页面</html>", "自曝类"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m, dropped, err := LoadContentManifest(writeRaw(t, c.body), 2)
+			if err != nil {
+				t.Fatalf("装载不应失败（单条不合格只丢该条）：%v", err)
+			}
+			if len(dropped) != 1 {
+				t.Fatalf("应丢掉那一条并记原因，得到 %v", dropped)
+			}
+			if !strings.Contains(dropped[0], c.wantReason) {
+				t.Fatalf("丢弃原因应指出 %q，实际 %q", c.wantReason, dropped[0])
+			}
+			// 该资源还剩另一条合格内容 ⇒ 资源仍在；被丢的那条不在。
+			for _, entry := range m.Entries {
+				for _, b := range entry.Bodies {
+					if b.Body == c.body {
+						t.Fatalf("不合格内容不得留在清单里：%q", c.body)
+					}
+				}
+			}
+		})
+	}
+
+	// 对照：合格内容一条都不丢（证明上面的丢弃不是因为"什么地方都拦"）。
+	m, dropped, err := LoadContentManifest(writeManifest(t, sampleManifest()), 2)
+	if err != nil || len(dropped) != 0 || len(m.Entries) != 2 {
+		t.Fatalf("合格清单不该被拦：dropped=%v err=%v entries=%d", dropped, err, len(m.Entries))
+	}
+}
+
 func TestLoadContentManifestRejects(t *testing.T) {
 	cases := map[string]func(m *testManifest){
 		"manifest_version 读不懂": func(m *testManifest) { m.ManifestVersion = 99 },
