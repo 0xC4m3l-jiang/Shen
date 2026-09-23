@@ -27,7 +27,12 @@ services:
     depends_on: [core]
     environment:
       SHEN_WEB_LISTEN: "127.0.0.1:19090"   # 只监听本机（幻境后端不对宿主机暴露）
-      SHEN_WEB_SCENARIO: "atlas"
+      # 场景**是数据**（C04）：装载外部场景包（格式见 docs/spec/decoy-scenario.md）并选中一套。
+      # 不设 SHEN_WEB_SCENARIOS 时用内置包；文件非法则启动失败（坏素材不带出去）。
+      SHEN_WEB_SCENARIOS: "/etc/shen/scenarios.json"
+      SHEN_WEB_SCENARIO: "contoso"
+    volumes:
+      - ../config/scenarios.example.json:/etc/shen/scenarios.json:ro
     restart: unless-stopped
 
   proxy:

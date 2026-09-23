@@ -40,6 +40,9 @@ const maxSessions = 4096
 type Options struct {
 	// ScenarioID 选一套场景包（未知 id 回落到内置默认场景）。
 	ScenarioID string
+	// Packs 是**外部场景包**（`LoadPacks` 的产物）；空 = 只用内置默认场景。
+	// 选中的 id 不在其中时回落到内置场景 —— 配置写错不该让整条诱饵路由变成 502（启动日志会点名）。
+	Packs map[string]Scenario
 	// Events 可空：合成交互的事件出口（谁发生了什么）。**禁止**往里塞请求体/密码。
 	Events EventSink
 	// MaxBodyBytes 0 = 默认 64 KiB。
@@ -66,7 +69,7 @@ type Handler struct {
 
 // New 构造处理器（未知场景 id 回落默认场景，不报错：诱饵后端不该因配置写错就整体不可用）。
 func New(opts Options) *Handler {
-	sc := ScenarioFor(opts.ScenarioID)
+	sc := SelectScenario(opts.Packs, opts.ScenarioID)
 	if sc.PageSize <= 0 {
 		sc.PageSize = 3
 	}

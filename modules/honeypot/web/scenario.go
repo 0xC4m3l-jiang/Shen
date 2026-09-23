@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"time"
 )
 
@@ -64,65 +65,100 @@ type AuditEvent struct {
 	Target string `json:"target"`
 }
 
-// ScenarioFor 返回内置场景（未知 id 回落到默认场景 —— 诱饵后端不该因为配置写错就不可用）。
+// builtinPack 是**内置场景包**：与外部包同一份文档类型、过同一个 `validateScenarioDoc`。
 //
-// 确定性：所有内容由 `id` 派生（`fnv` 播种），不读时钟、不用随机数 ⇒ 同场景恒同数据。
-func ScenarioFor(id string) Scenario {
-	if id == "atlas" || id == "" {
-		return atlasScenario()
-	}
-	return atlasScenario()
-}
-
-// defaultScenarioID 是内置场景的标识。
-const defaultScenarioID = "atlas"
-
-// atlasScenario 是内置的「Atlas 控制台」场景：一家虚构机器人公司的内部管理台。
-func atlasScenario() Scenario {
+// 为什么内置包也要过校验（而不是直接构造 Scenario）：默认场景不该是"规则之外的特例" ——
+// 同一份判据保证「内置包合法」是**可测的**（`TestBuiltinPackPassesValidation`），
+// 而不是"因为它写在代码里所以大概没问题"。
+func builtinPack() packDoc {
 	const (
 		org  = "Northwind Robotics"
 		host = "atlas.northwind.example"
 	)
 	seed := seedOf(defaultScenarioID)
-	users := []User{
-		{ID: id("u", seed, 1), Name: "A. Vance", Role: "owner", Enabled: true, LastSeen: at(0)},
-		{ID: id("u", seed, 2), Name: "M. Okonkwo", Role: "admin", Enabled: true, LastSeen: at(35)},
-		{ID: id("u", seed, 3), Name: "L. Perez", Role: "operator", Enabled: true, LastSeen: at(120)},
-		{ID: id("u", seed, 4), Name: "R. Sato", Role: "auditor", Enabled: false, LastSeen: at(1440)},
+	yes, no := true, false
+	doc := packDoc{
+		PackVersion: PackSchemaVersion,
+		Scenarios: []scenarioDoc{{
+			ID:          defaultScenarioID,
+			Org:         org,
+			Product:     "Atlas Console",
+			Host:        host,
+			Outcome:     string(LoginDemo),
+			PageSize:    3,
+			MaxPageSize: 20,
+			Users: []userDoc{
+				{ID: id("u", seed, 1), Name: "A. Vance", Role: "owner", Enabled: &yes, LastSeen: at(0)},
+				{ID: id("u", seed, 2), Name: "M. Okonkwo", Role: "admin", Enabled: &yes, LastSeen: at(35)},
+				{ID: id("u", seed, 3), Name: "L. Perez", Role: "operator", Enabled: &yes, LastSeen: at(120)},
+				{ID: id("u", seed, 4), Name: "R. Sato", Role: "auditor", Enabled: &no, LastSeen: at(1440)},
+			},
+			Config: []configDoc{
+				{Key: "deployment.region", Value: "eu-central-1"},
+				{Key: "console.version", Value: "4.7.2+build.2199"},
+				{Key: "database.host", Value: host},
+				{Key: "database.name", Value: "atlas_prod"},
+				{Key: "storage.bucket", Value: "northwind-atlas-artifacts"},
+				{Key: "integrations.webhook", Value: "https://hooks.northwind.example/atlas"},
+				// ⚠️ 占位符，不是可用凭证：任何真实密钥**禁止**出现在场景包里（C04 的验收判据，由校验器强制）。
+				{Key: "database.password", Value: "SCENARIO-PLACEHOLDER-NOT-A-CREDENTIAL"},
+				{Key: "api.token", Value: "SCENARIO-PLACEHOLDER-NOT-A-CREDENTIAL"},
+			},
+			Audit: []auditDoc{
+				{At: at(2), Actor: id("u", seed, 2), Action: "config.update", Target: "storage.bucket"},
+				{At: at(17), Actor: id("u", seed, 2), Action: "user.disable", Target: id("u", seed, 4)},
+				{At: at(41), Actor: id("u", seed, 3), Action: "deployment.create", Target: "atlas-worker-7"},
+				{At: at(96), Actor: id("u", seed, 1), Action: "policy.update", Target: "auth.mfa.required"},
+				{At: at(180), Actor: id("u", seed, 3), Action: "deployment.rollback", Target: "atlas-worker-7"},
+				{At: at(305), Actor: id("u", seed, 2), Action: "config.read", Target: "database.host"},
+				{At: at(420), Actor: id("u", seed, 4), Action: "audit.export", Target: "2026-09"},
+			},
+		}},
 	}
-	cfg := []ConfigItem{
-		{Key: "deployment.region", Value: "eu-central-1"},
-		{Key: "console.version", Value: "4.7.2+build.2199"},
-		{Key: "database.host", Value: host},
-		{Key: "database.name", Value: "atlas_prod"},
-		{Key: "storage.bucket", Value: "northwind-atlas-artifacts"},
-		{Key: "integrations.webhook", Value: "https://hooks.northwind.example/atlas"},
-		// ⚠️ 占位符，不是可用凭证：任何真实密钥**禁止**出现在场景包里（C04 的验收判据）。
-		{Key: "database.password", Value: "SCENARIO-PLACEHOLDER-NOT-A-CREDENTIAL"},
-		{Key: "api.token", Value: "SCENARIO-PLACEHOLDER-NOT-A-CREDENTIAL"},
-	}
-	audit := []AuditEvent{
-		{At: at(2), Actor: users[1].ID, Action: "config.update", Target: "storage.bucket"},
-		{At: at(17), Actor: users[1].ID, Action: "user.disable", Target: users[3].ID},
-		{At: at(41), Actor: users[2].ID, Action: "deployment.create", Target: "atlas-worker-7"},
-		{At: at(96), Actor: users[0].ID, Action: "policy.update", Target: "auth.mfa.required"},
-		{At: at(180), Actor: users[2].ID, Action: "deployment.rollback", Target: "atlas-worker-7"},
-		{At: at(305), Actor: users[1].ID, Action: "config.read", Target: "database.host"},
-		{At: at(420), Actor: users[3].ID, Action: "audit.export", Target: "2026-09"},
-	}
-	return Scenario{
-		ID:          defaultScenarioID,
-		Org:         org,
-		Product:     "Atlas Console",
-		Host:        host,
-		Outcome:     LoginDemo,
-		Users:       users,
-		Config:      cfg,
-		Audit:       audit,
-		PageSize:    3,
-		MaxPageSize: 20,
-	}
+	return doc
 }
+
+// builtinScenarios 是启动期就构造好的内置场景（构造失败 = 代码缺陷 ⇒ 直接 panic，由单测兜住）。
+var builtinScenarios = mustBuildPacks(builtinPack())
+
+func mustBuildPacks(doc packDoc) map[string]Scenario {
+	packs, err := buildPacks(doc)
+	if err != nil {
+		panic("web: 内置场景包不合法（这是代码缺陷）：" + err.Error())
+	}
+	return packs
+}
+
+// ScenarioFor 返回内置场景（未知 id 回落到默认场景 —— 诱饵后端不该因为配置写错就整体不可用）。
+//
+// 确定性：所有内容由场景种子派生，不读时钟、不用随机数 ⇒ 同场景恒同数据。
+func ScenarioFor(id string) Scenario {
+	return SelectScenario(builtinScenarios, id)
+}
+
+// SelectScenario 在给定集合里选一个场景；id 为空或不存在时回落到内置默认场景。
+//
+// 为什么"回落"而不是报错：诱饵后端不可用的代价是**整条诱饵路由变成 502**（对手立刻发现异常），
+// 而"配置写错一个 id"不该有这种后果 —— 回落是安全的，配置错误由启动日志点名。
+func SelectScenario(packs map[string]Scenario, id string) Scenario {
+	if sc, ok := packs[strings.TrimSpace(id)]; ok {
+		return sc
+	}
+	if sc, ok := builtinScenarios[defaultScenarioID]; ok {
+		return sc
+	}
+	return atlasScenario()
+}
+
+// atlasScenario 是 `SelectScenario` 的**最后兜底**（内置包若被误改到构造失败，仍有一个可用场景）。
+//
+// 正常路径永远不会走到这里；保留它是因为"回落到不可用"比"回落到一个静态场景"更糟。
+func atlasScenario() Scenario {
+	return scenarioFromDoc(builtinPack().Scenarios[0])
+}
+
+// defaultScenarioID 是内置场景的标识。
+const defaultScenarioID = "atlas"
 
 // seedOf 由场景 id 派生稳定种子（同 id 恒同种子）。
 func seedOf(id string) uint32 {

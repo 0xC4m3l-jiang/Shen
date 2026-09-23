@@ -1,0 +1,49 @@
+{
+  "pack_version": 1,
+  "scenarios": [
+    {
+      "id": "contoso",
+      "org": "Contoso Logistics",
+      "product": "Contoso Dispatch Console",
+      "host": "dispatch.contoso.example",
+      "outcome": "demo",
+      "page_size": 2,
+      "max_page_size": 10,
+      "users": [
+        { "id": "u-1001", "name": "R. Feld", "role": "owner", "enabled": true, "last_seen": "2026-09-12T07:15:00Z" },
+        { "id": "u-1002", "name": "S. Aoki", "role": "dispatcher", "enabled": true, "last_seen": "2026-09-12T09:40:00Z" },
+        { "id": "u-1003", "name": "T. Marek", "role": "readonly", "enabled": false, "last_seen": "2026-09-05T18:02:00Z" }
+      ],
+      "config": [
+        { "key": "dispatch.version", "value": "2.9.1+build.8841" },
+        { "key": "region", "value": "eu-west-3" },
+        { "key": "queue.default", "value": "dispatch-inbound" },
+        { "key": "integrations.webhook", "value": "https://hooks.contoso.example/dispatch" },
+        { "key": "database.password", "value": "SCENARIO-PLACEHOLDER-NOT-A-CREDENTIAL" }
+      ],
+      "audit": [
+        { "at": "2026-09-12T07:20:00Z", "actor": "u-1001", "action": "config.update", "target": "queue.default" },
+        { "at": "2026-09-12T09:41:00Z", "actor": "u-1002", "action": "user.disable", "target": "u-1003" },
+        { "at": "2026-09-12T10:05:00Z", "actor": "u-1002", "action": "route.recalculate", "target": "dispatch-inbound" }
+      ]
+    },
+    {
+      "id": "fabrikam",
+      "org": "Fabrikam Instruments",
+      "product": "Fabrikam Telemetry",
+      "host": "telemetry.fabrikam.example",
+      "outcome": "fail",
+      "page_size": 4,
+      "max_page_size": 20,
+      "users": [
+        { "id": "u-2001", "name": "L. Novak", "role": "admin", "enabled": true, "last_seen": "2026-09-11T06:00:00Z" }
+      ],
+      "config": [
+        { "key": "telemetry.version", "value": "0.9.14" }
+      ],
+      "audit": [
+        { "at": "2026-09-11T06:05:00Z", "actor": "u-2001", "action": "config.read", "target": "telemetry.version" }
+      ]
+    }
+  ]
+}

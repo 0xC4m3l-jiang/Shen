@@ -24,6 +24,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,8 +51,13 @@ func main() {
 		log.Fatalf("web: %v", err)
 	}
 
+	// 场景包（可选）：`SHEN_WEB_SCENARIOS` 指向 JSON 文件（格式见 docs/spec/decoy-scenario.md）。
+	// 文件存在即**必须**合法：坏素材宁可启动失败，也不带出去（见 pack.go 的三条设计要点）。
+	packs := loadScenarioPacks(env("SHEN_WEB_SCENARIOS", ""), scenarioID)
+
 	h := web.New(web.Options{
 		ScenarioID:   scenarioID,
+		Packs:        packs,
 		MaxBodyBytes: maxBody,
 		SessionTTL:   ttl,
 		Events:       eventLogger{},
@@ -85,6 +91,32 @@ type eventLogger struct{}
 func (eventLogger) Event(_ context.Context, ev web.Event) {
 	log.Printf("web: 合成交互 kind=%s path=%s user=%q outcome=%s",
 		ev.Kind, ev.Path, ev.User, ev.Outcome)
+}
+
+// loadScenarioPacks 装载外部场景包；未配置时返回 nil（= 只用内置包）。
+//
+// 三条行为：
+//   - 路径为空 ⇒ 返回 nil，不打日志（内置包是默认形态）；
+//   - 路径非空且文件非法 ⇒ **启动失败**（`log.Fatalf`）：坏素材不带出去；
+//   - 选中的 id 不在包里 ⇒ 记一行 WARN（回落内置场景是**安全**的，但配置写错要可见）。
+func loadScenarioPacks(path, scenarioID string) map[string]web.Scenario {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	packs, err := web.LoadPacks(path)
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
+	ids := make([]string, 0, len(packs))
+	for id := range packs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	log.Printf("场景包已装载：%s（%d 套：%s）", path, len(packs), strings.Join(ids, ", "))
+	if _, ok := packs[scenarioID]; !ok {
+		log.Printf("WARN SHEN_WEB_SCENARIO=%q 不在场景包里 ⇒ 回落到内置场景（改 id 或补场景）", scenarioID)
+	}
+	return packs
 }
 
 // ── env 解析（与其它适配器同一套写法：写错即启动失败，不悄悄回落）──────────────
