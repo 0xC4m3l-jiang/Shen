@@ -6,16 +6,23 @@
 # 本文件必须始终通过那里的全部校验（有单测守着：common/core/internal/policy 的 TestExampleConfigLoads）。
 # 策略是数据：规则随配置下发，不编译进代码（ST-24）。
 #
-# 用法：SHEN_CONFIG=deploy/config/config.example.yaml make run
+# 用法（本档**不是**默认启动项）：
+#   docker compose -f deploy/docker/compose.yaml \
+#     -f deploy/docker/compose.verify-mirage.yaml up -d
+#   本地直跑：SHEN_CONFIG=deploy/config/config.verify-mirage.yaml make run
 #
-# ⚠️ 本期（阶段 2a）只消费 policy 与 rules 两段；其余段会被解析与校验但暂不消费，
-#    消费方分别是：core.listen/session → 接入物料与启动参数；thresholds/whitelist → director。
+# ⚠️ 已消费的段落与默认档**相同**（不存在“只消费 policy/rules”）：
+#    core / session / thresholds / whitelist / rules / injects /
+#    decoys / honeypots / ai。差别只在**取值**：
+#    关闭影子、灰度 100、开 block、登记可达与故意不可达的幻境后端、
+#    启用合成 Web 管理台。
 
 core:
   listen: "127.0.0.1:9443"      # 也要用 SHEN_LISTEN 环境变量可覆盖
 
-# 影子模式 —— 首次上线必须如此：只观测、不处置、不回写。
-# 必须为 true；放开必须按「仅观测 → 只对高置信 Agent 误导 → 放开阈值 → 全量」逐级推进（INT-11 / INT-12）。
+# 影子模式 —— **首次上线必须为 true**（INT-11）：只观测、不处置、不回写。
+# 本档刻意关掉它（`shadow: false`），因为验证档要看的是"处置真的执行下去了"（改道/诱饵投递）。
+# 生产放开必须按「仅观测 → 只对高置信 Agent 误导 → 放开阈值 → 全量」逐级推进（INT-11 / INT-12）。
 shadow: false
 
 # 会话身份提取：三级优先级的第 ① 级（业务自身的 session cookie）。

@@ -189,6 +189,13 @@ func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	resp.ContentLength = int64(len(out))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
 	resp.Header.Del("Content-Encoding") // 已解出明文并改写，去掉压缩标记
+	// **校验器必须跟着正文一起失效**（`N10`）：`ETag` / `Last-Modified` 是"这段字节的身份"，
+	// 我们刚刚把它改了。留着它们会让条件请求（`If-None-Match` / `If-Modified-Since`）得到 304 ——
+	// 客户端据此认为内容没变，于是**看不到注入的线索**，而我们这边还以为投放成功了。
+	// 不重算 ETag 而直接删除：重算需要与上游同一套口径（弱/强校验、分块、压缩前/后），
+	// 删掉只会让缓存重新取一次完整响应 —— 对诱饵路径而言这是**正确**的代价。
+	resp.Header.Del("ETag")
+	resp.Header.Del("Last-Modified")
 	return resp, nil
 }
 

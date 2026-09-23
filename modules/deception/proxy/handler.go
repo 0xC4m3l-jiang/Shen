@@ -63,6 +63,14 @@ type Handler struct {
 	// 租约期内在边缘继续用固定错误结束这些路径（不回生产），租约到期才释放归属。
 	DecoyLease caddy.Duration `json:"decoy_lease,omitempty"`
 
+	// BackendHealthInterval 是幻境后端的**健康探针间隔**（`enabled` 之外的第二个判据）。
+	// 符号约定：`0` = 没配 ⇒ 用默认 30s；**负数 = 显式关闭**
+	// （关掉后"健康"就等于 `enabled` —— 这是刻意可关的，所以不是"设 0 关掉"）。
+	BackendHealthInterval caddy.Duration `json:"backend_health_interval,omitempty"`
+
+	// BackendHealthTimeout 是单次探测超时（0 = 默认 1s）。
+	BackendHealthTimeout caddy.Duration `json:"backend_health_timeout,omitempty"`
+
 	// ForwardCredentials 为真时把请求的认证材料（Authorization / 业务会话 Cookie）**原样**
 	// 转发给幻境后端。默认 **false**（剥离）—— 幻境不是业务，不该收到生产认证材料（W4）。
 	ForwardCredentials bool `json:"forward_credentials,omitempty"`
@@ -135,6 +143,11 @@ type Handler struct {
 
 	// remote 是策略面当前生效的远端策略（整块原子替换：不会出现「后端表换了、白名单还是旧的」）。
 	remote atomic.Pointer[remoteState]
+
+	// health 是幻境后端的活跃健康状态（`enabled` 不是健康：见 health.go）。
+	health *backendHealth
+	// healthWake 让「策略刚变」立刻触发一轮探测（缓冲 1：唤醒语义是"该看一眼了"）。
+	healthWake chan struct{}
 
 	// policy 是策略面客户端；nil = 未接策略面（单测与「不拉策略」的部署）。
 	policy PolicyClient
@@ -264,6 +277,18 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	}
 	h.events = make(chan *telemetryv1.TelemetryEvent, queue)
 	go h.runReporter()
+
+	// 幻境后端健康：`enabled` 只说明"允许使用"，不说明"现在活着"（建议书 §8 第 7 项）。
+	h.health = newBackendHealth()
+	h.healthWake = make(chan struct{}, 1)
+	// 符号约定（与字段注释一致）：负数 = **显式关闭**；0 = 没配 ⇒ 用默认间隔。
+	if h.BackendHealthInterval >= 0 {
+		interval := time.Duration(h.BackendHealthInterval)
+		if interval == 0 {
+			interval = defaultBackendHealthInterval
+		}
+		go h.runHealthProbes(h.ctx, interval)
+	}
 
 	// 策略面（S4）：与判定/遥测走同一条 gRPC 连接（同主机、同一个进程边界）。
 	// 拉不到就继续用本地配置（NI-1）—— 策略面不是请求路径上的依赖。
@@ -494,6 +519,14 @@ type policySnapshotKey struct{}
 // 返回的 result 是事件里的 `delivery_result`：`matched`/`delivered`/`backend_unavailable`/
 // `delivery_failed`/`tombstoned`。只看 `executed=decoy` 分不出「投出去了」与「后端没了」。
 func (h *Handler) deliverDecoy(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, route policyDecoyRoute) (string, error) {
+	if reason := h.healthReason(route.backend); reason != "" {
+		// 探针判定后端不可达（**不是**配置问题）：仍固定 502、绝不回生产（§9.2），
+		// 但结果值不同 —— 运维动作也不同（修后端 vs 改配置）。
+		log.Printf("proxy: 诱饵 %s（路径 %s）的后端 %q 探针判定不健康 ⇒ 固定 502（不回生产）：%s",
+			route.id, r.URL.Path, route.backend, reason)
+		w.WriteHeader(http.StatusBadGateway)
+		return backendUnhealthy, nil
+	}
 	if route.revoked {
 		// 搜索碑（N6）：这条路径曾被登记为诱饵，现已撤销但租约未到期。
 		// 它仍**不属于业务** —— 残留链接 / 扫描器继续拿到固定错误，而不是突然看到真站。
@@ -626,6 +659,12 @@ func (h *Handler) mirageHandler(st *remoteState, name string) (caddyhttp.Middlew
 // 用 trackingWriter 记录「是否已写出字节」：没写过 → 可安全重放到业务；
 // 写过 → 只能把错误如实抛出（由 Caddy 错误路由处理），否则会输出半截响应。
 func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (bool, error) {
+	if reason := h.healthReason(backend); reason != "" {
+		// 评分改道：后端探针判定不可达 ⇒ **回落业务**（`NI-1`：引流失败绝不能变成业务失败）。
+		// 与"转发失败后回落"同一条语义，只是不必先吃满一次连接失败。
+		log.Printf("proxy: 幻境后端 %q 探针判定不健康，改道回落业务：%s", backend, reason)
+		return true, h.origin.ServeHTTP(w, r, next)
+	}
 	rp, ok := h.mirageHandler(st, backend)
 	if !ok {
 		// 理论上到不了这里（dispatch 已查过表）；真到了就回落业务，不报 500。

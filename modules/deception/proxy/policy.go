@@ -118,6 +118,9 @@ type remoteState struct {
 	// 它与 `backends` 分开：后端表是「能去哪」，路由表是「什么路径该去哪」。
 	// 空 = 没有诱饵路由（此时请求照常走判定 / 白名单 / 兜底）。
 	decoys []policyDecoyRoute
+	// addresses 是「后端名 → TCP dial 地址（host:port）」：只给**健康探针**用（`health.go`）。
+	// 与 backends 分开：backends 是构造好的 Caddy handler（不可反查地址），探针只需要地址。
+	addresses map[string]string
 	// tombstones 是**已撤销但仍未过租约的诱饵路径**（N6）。
 	//
 	// 一条诱饵路径一旦对外出现过，旧链接 / 爬虫 / 对手笔记都会继续用它。若路由一被删除
@@ -183,6 +186,7 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte, checksum stri
 	}
 
 	backends := map[string]caddyhttp.MiddlewareHandler{}
+	addresses := make(map[string]string, len(doc.Backends))
 	declared := make(map[string]struct{}, len(doc.Backends))
 	var dropped []string
 	var revokedLocal []string
@@ -209,6 +213,9 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte, checksum stri
 			continue
 		}
 		backends[b.Name] = rp
+		if dial, _, derr := upstreamAddr(b.Address); derr == nil {
+			addresses[b.Name] = dial
+		}
 	}
 
 	cidrs := make([]netip.Prefix, 0, len(doc.Whitelist.SourceCIDRs))
@@ -277,7 +284,12 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte, checksum stri
 		content:             newContentIndex(doc.ContentManifest),
 		decoys:              decoys,
 		tombstones:          tombstones,
+		addresses:           addresses,
 	})
+	// 策略刚变 ⇒ 立刻看一眼新后端是否活着（否则要等到下一个探针周期）。
+	if h.healthWake != nil {
+		h.wake()
+	}
 	if len(dropped) > 0 {
 		log.Printf("proxy: 策略 v%d 中有 %d 个后端地址不可用，已跳过：%s",
 			doc.Version, len(dropped), strings.Join(dropped, ", "))

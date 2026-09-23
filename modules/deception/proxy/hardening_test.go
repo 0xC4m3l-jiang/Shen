@@ -5,6 +5,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -453,6 +454,104 @@ var _ = telemetryv1.ReportAck{} // 保持 telemetry 依赖显式（替身接口�
 var _ = caddy.Duration(0)
 var _ = policyInjectRule{}
 
+// ── §8 第 7 项：后端健康不是 `enabled` ──────────────────────────────────────
+
+// TestHealthProbeMarksUnreachableAndRecovers 断言探针的**两向**转移：
+// 关掉的监听被判不健康；重新监听即判恢复。用真 TCP 监听，不用替身（探针的产物就是"能不能连上"）。
+func TestHealthProbeMarksUnreachableAndRecovers(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, &stubJudge{}, &stubReporter{})
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	h.health = newBackendHealth()
+	raw := decoyPolicyFixture(t, 1,
+		[]policyBackend{{Name: "hp", Address: "http://" + addr, Enabled: true}},
+		[]policyDecoy{{ID: "admin", Path: "/admin", Backend: "hp"}})
+	if err := h.applyEdgePolicy(context.Background(), raw, "s"); err != nil {
+		t.Fatal(err)
+	}
+
+	h.probeOnce(context.Background())
+	if reason, bad := h.health.isUnhealthy("hp"); bad {
+		t.Fatalf("监听还在，不应判不健康：%s", reason)
+	}
+
+	_ = ln.Close()
+	h.probeOnce(context.Background())
+	if _, bad := h.health.isUnhealthy("hp"); !bad {
+		t.Fatal("监听已关闭，探针必须判不健康（否则“健康”就只是 enabled 的同义词）")
+	}
+
+	ln2, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("端口 %s 已被占用，跳过恢复断言：%v", addr, err)
+	}
+	defer func() { _ = ln2.Close() }()
+	h.probeOnce(context.Background())
+	if _, bad := h.health.isUnhealthy("hp"); bad {
+		t.Fatal("重新监听后探针必须判恢复（否则一次抖动会永久摘掉后端）")
+	}
+}
+
+// TestUnhealthyDecoyBackendStillReturns502AndNeverOrigin：健康门禁**不改变安全语义**。
+func TestUnhealthyDecoyBackendStillReturns502AndNeverOrigin(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
+	report := &stubReporter{}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, report)
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+	h.health = newBackendHealth()
+	h.health.set("hp", errStub("dial tcp: connection refused"))
+
+	raw := decoyPolicyFixture(t, 1,
+		[]policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}},
+		[]policyDecoy{{ID: "admin", Path: "/admin", Backend: "hp"}})
+	if err := h.applyEdgePolicy(context.Background(), raw, "s"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := do(h, http.MethodGet, "http://svc.example/admin/", "", nil)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("不健康的后端仍应固定 502，实际 %d", w.Code)
+	}
+	if n := origin.calls.Load(); n != 0 {
+		t.Fatalf("绝不回生产（§9.2），实际源站 %d 次", n)
+	}
+	waitEvents(t, report, 1)
+	if p := payloadOf(t, report, 0); p["delivery_result"] != backendUnhealthy {
+		t.Fatalf("delivery_result 应点出是**探针判定**（不是配置缺失）：%v", p["delivery_result"])
+	}
+}
+
+// TestUnhealthyMirageBackendFallsBackToOrigin：评分改道的健康门禁走 `NI-5`（回落业务）。
+func TestUnhealthyMirageBackendFallsBackToOrigin(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_MIRAGE, Backend: "hp"}}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, &stubReporter{})
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+	h.health = newBackendHealth()
+	h.health.set("hp", errStub("dial tcp: connection refused"))
+	raw := decoyPolicyFixture(t, 1,
+		[]policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}, nil)
+	if err := h.applyEdgePolicy(context.Background(), raw, "s"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := do(h, http.MethodGet, "http://svc.example/whatever", "", nil)
+	if got := w.Header().Get("X-Backend"); got != "origin" {
+		t.Fatalf("改道后端不健康应回落业务（NI-1），实际落点 %q（状态 %d）", got, w.Code)
+	}
+	if n := origin.calls.Load(); n != 1 {
+		t.Fatalf("应恰好回落到源站 1 次，实际 %d", n)
+	}
+}
+
 // errBackendUnavailable 是测试用的「后端构造失败」错误。
 var errBackendUnavailable = errStub("后端不可用")
 
@@ -460,3 +559,39 @@ var errBackendUnavailable = errStub("后端不可用")
 type errStub string
 
 func (e errStub) Error() string { return string(e) }
+
+// TestApplyPolicyWakesHealthProbe 断言"策略到达 ⇒ 立刻探一轮"的唤醒信号确实发出（`§8 第 7 项`）。
+//
+// 为什么单独测这一条：没有它，新后端就位后要等一个完整探针周期（默认 30s）才被判定，
+// 那段时间每条请求都要先吃一次真实连接失败 —— 而"有没有唤醒"这件事在请求级别几乎看不出来。
+func TestApplyPolicyWakesHealthProbe(t *testing.T) {
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, &stubJudge{}, &stubReporter{})
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	h.health = newBackendHealth()
+	h.healthWake = make(chan struct{}, 1)
+
+	raw := decoyPolicyFixture(t, 1,
+		[]policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}, nil)
+	if err := h.applyEdgePolicy(context.Background(), raw, "s"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.healthWake:
+	default:
+		t.Fatal("策略应用后必须唤醒探针（否则新后端最多要等一个周期才被判定）")
+	}
+
+	// 再应用一次：通道已满时**不得阻塞**（唤醒是可丢弃信号）。
+	done := make(chan struct{})
+	go func() {
+		if err := h.applyEdgePolicy(context.Background(), raw, "s2"); err != nil {
+			t.Error(err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("唤醒不得阻塞策略应用")
+	}
+}

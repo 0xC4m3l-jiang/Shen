@@ -43,6 +43,10 @@ const (
 
 	// 默认策略拉取间隔：60s（ADR-0018）。0 = 不拉策略，完全用本地配置。
 	defaultPolicyInterval = 60 * time.Second
+
+	// 幻境后端健康探针（见 modules/deception/proxy/health.go）。
+	defaultBackendHealthInterval = 30 * time.Second
+	defaultBackendHealthTimeout  = time.Second
 )
 
 func main() {
@@ -97,6 +101,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// 幻境后端健康探针（建议书 §8 第 7 项）：`enabled` 不是健康。
+	// 0/未设 = 默认 30s；**负数 = 关闭**（关掉后"健康"就等于 enabled —— 这是刻意可关的）。
+	healthInterval, err := envDuration("SHEN_PROXY_BACKEND_HEALTH_INTERVAL", defaultBackendHealthInterval)
+	if err != nil {
+		return err
+	}
+	healthTimeout, err := envDuration("SHEN_PROXY_BACKEND_HEALTH_TIMEOUT", defaultBackendHealthTimeout)
+	if err != nil {
+		return err
+	}
 
 	handler := &proxy.Handler{
 		Upstream:        upstream,
@@ -120,6 +134,9 @@ func run() error {
 		PolicyID:       strings.TrimSpace(os.Getenv("SHEN_PROXY_POLICY_ID")),
 		AdapterID:      env("SHEN_PROXY_ADAPTER_ID", "proxy@"+listen),
 		PolicyInterval: caddy.Duration(policyInterval),
+
+		BackendHealthInterval: caddy.Duration(healthInterval),
+		BackendHealthTimeout:  caddy.Duration(healthTimeout),
 	}
 
 	cfg, err := proxy.BuildConfig(proxy.Options{
