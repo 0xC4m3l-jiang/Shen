@@ -25,6 +25,7 @@ const (
 	NodeWhitelist = "branch:whitelist"
 	NodeCache     = "branch:cache"
 	NodeFailOpen  = "branch:failopen"
+	NodeDecoy     = "branch:decoy"
 	NodeJudge     = "judge"
 	NodeOrigin    = "origin"
 	NodeBlock     = "block"
@@ -251,6 +252,13 @@ func Build(in Input, alertScore float64) Graph {
 			totals.FailOpen++
 			node(NodeFailOpen, "判定失败（NI-3 放行）", "branch").Note = firstNonEmpty(j.DecisionError, "核心不可达或超时")
 			edge(NodeAdapter, NodeFailOpen, "alert").add(alerts, highRisk)
+		case "decoy":
+			// 专属诱饵路由（§9.2）：按**路径归属**直接投递，压根不问核心 —— 它不是判定分支，
+			// 也不该被算进「核心判定」里（否则页面上会显示成"引擎判过了"，那是误导）。
+			decisionID = NodeDecoy
+			totals.Unjudged++
+			node(NodeDecoy, "专属诱饵路由（未判定）", "branch").add(alerts, highRisk)
+			edge(NodeAdapter, NodeDecoy, "normal").add(alerts, highRisk)
 		default:
 			node(NodeJudge, "核心判定", "judge").add(alerts, highRisk)
 			edge(NodeAdapter, NodeJudge, "normal").add(alerts, highRisk)
@@ -259,7 +267,7 @@ func Build(in Input, alertScore float64) Graph {
 		// 意图节点（三值）—— 缓存/白名单/失败放行没有核心判定，就不画意图节点。
 		destKind := "normal"
 		switch j.Executed {
-		case "mirage":
+		case "mirage", "decoy":
 			name := j.Backend
 			if name == "" {
 				name = "（未命名）"
@@ -444,7 +452,10 @@ func BuildRequests(in Input, alertScore float64) []RequestGraph {
 			}
 			rg.HighRisk = dec.Score >= alertScore
 		}
-		rg.Unjudged = j.Executed == "whitelist" || j.Executed == "cache" || j.Executed == "failopen"
+		// 没有核心判定的三种来源：白名单（INT-25）· 本地缓存（ST-11）· 判定失败放行（NI-3/4），
+		// 以及**专属诱饵路由**（§9.2：按路径归属直接投递，压根不问核心）。
+		rg.Unjudged = j.Executed == "whitelist" || j.Executed == "cache" ||
+			j.Executed == "failopen" || j.Executed == "decoy"
 
 		// 链路：客户端 → 适配器 → （分支 or 核心判定）→ 意图 → 实际落点（→ L4）
 		obs := fmt.Sprintf("%s %s（来源 %s · UA %s）", j.Method, j.Path,
@@ -653,6 +664,8 @@ func adapterSource(executed string) string {
 		return "白名单（未调核心）"
 	case "cache":
 		return "本地判定缓存（未调核心）"
+	case "decoy":
+		return "专属诱饵路由（按路径归属投递，未调核心）"
 	case "failopen":
 		return "调核心失败 ⇒ 放行"
 	default:

@@ -61,8 +61,14 @@ var InjectKinds = []string{"developer_api", "instruction_file", "hidden_link", "
 type DecoyAsset struct {
 	ID      string    // 唯一标识
 	Kind    DecoyKind // 五类之一
-	Path    string    // 触发路径（前缀匹配）
+	Path    string    // 触发路径（归一化 + 路径段边界匹配；见 docs/spec/config.md §2.4 同一口径）
 	Content string    // 内容模板标识（模板随代码分发，ST-22）
+	// Backend 是这个资产**投递到的幻境后端**（`HoneypotBackend.Name`）。
+	//
+	// 为什么资产必须带后端：C01 的验收判据是「部署未就绪不投放线索」——
+	// 没有可用后端时「投放」只会把请求送进一个不存在的目标（方案 §9.2：故障**不回生产**）。
+	// 启用中的资产**必须**有后端；未启用的可以先留空（影子期）。
+	Backend string
 	Enabled bool
 }
 

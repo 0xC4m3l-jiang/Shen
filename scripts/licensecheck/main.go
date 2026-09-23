@@ -113,6 +113,30 @@ var licenseFileNames = []string{"LICENSE", "LICENCE", "COPYING", "NOTICE"}
 //
 // 取**最严格**的那条：双许可（如 Apache-2.0 + MIT）取宽松的没问题，
 // 但 Apache-2.0 + GPL 这种组合必须取 GPL 侧 —— 用得上的一定是较严的那份。
+// looksLikeText 判断一个文件是否**像许可文本**（而不是可执行文件 / 大二进制）。
+//
+// 判据取最保守的两条：大小 ≤ 512 KiB，且前 4 KiB 内没有 NUL 字节。
+// 许可文本一定是小体积纯文本；反过来（把二进制当文本读）会产生无法解释的假阳性。
+func looksLikeText(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil || info.Size() > 512*1024 {
+		return false
+	}
+	buf := make([]byte, 4096)
+	n, _ := f.Read(buf)
+	for _, b := range buf[:n] {
+		if b == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func classify(dir string) (id string, v verdict, why string, files []string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -126,7 +150,14 @@ func classify(dir string) (id string, v verdict, why string, files []string) {
 		up := strings.ToUpper(e.Name())
 		for _, want := range licenseFileNames {
 			if strings.HasPrefix(up, want) {
-				b, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+				full := filepath.Join(dir, e.Name())
+				if !looksLikeText(full) {
+					// 前缀匹配会撞上同名可执行文件（本仓库根的预编译 `licensecheck` 就是
+					// `LICENSE…` 开头），从二进制里搜许可串会得到**假阳性** —— 实测它把
+					// 我们自己的许可证误报成 AGPL-3.0（规则表字符串就嵌在二进制里）。
+					continue
+				}
+				b, rerr := os.ReadFile(full)
 				if rerr != nil {
 					continue
 				}
@@ -297,7 +328,13 @@ func main() {
 	if err != nil {
 		fail("枚举依赖失败：%v", err)
 	}
-	goRows := goModuleRows(mods)
+	// 仓库根：门禁从仓库根调用本工具（Makefile 里就是 `go run ./scripts/licensecheck`）。
+	// 读不到就退化为「未声明」提示，不因为读路径失败而误报依赖问题。
+	root, rerr := os.Getwd()
+	if rerr != nil {
+		root = ""
+	}
+	goRows := goModuleRows(mods, root)
 
 	// Python 侧失败 = 审计未执行完毕 = 门禁失败（见 python.go 文件头设计决策 1/3）。
 	pyRowList, err := pyRows(*pyLock, *pyVenv)
@@ -312,11 +349,26 @@ func main() {
 	audit(goRows, pyRowList)
 }
 
-// goModuleRows 把 Go 模块枚举结果转成审计行。
-func goModuleRows(mods []buildModule) []row {
+// goModuleRows 把 Go 模块枚举结果转成审计行。`root` 是本仓库根（读本项目自己的 LICENSE 用）。
+func goModuleRows(mods []buildModule, root string) []row {
 	var rows []row
 	for _, m := range mods {
 		if m.Own {
+			// 本项目自己：**读根目录的 LICENSE**（与依赖同一套识别规则）。
+			// 为什么要读而不是写死：许可证一旦定下来（2026-09-23 定为 Apache-2.0），
+			// 写死的「未声明」就变成一条**过期的信号** —— 门禁天天报一个已经不存在的问题，
+			// 人就会学会忽略它（这比不检查更糟）。
+			if root != "" {
+				id, v, why, files := classify(root)
+				if id != "" {
+					rows = append(rows, row{
+						Module: m.Path, Version: "（本项目）", License: id, Own: true, Lang: langGo,
+						Verdict: v, Note: fmt.Sprintf("%s（%s）", why, strings.Join(files, ", ")),
+						Files: files,
+					})
+					continue
+				}
+			}
 			rows = append(rows, row{
 				Module: m.Path, Version: "（本项目）", License: "未声明", Own: true, Lang: langGo,
 				Verdict: unknown, Note: "本项目自身尚无 LICENSE 文件；属产品决策，交付前必须定",

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -54,6 +55,17 @@ type edgePolicy struct {
 	InjectEnabled bool `json:"inject_enabled"`
 	// ContentManifest 是内容清单（含内容体）。nil = 没有内容 ⇒ 一律报 `no_content`。
 	ContentManifest *contentManifest `json:"content_manifest"`
+	// Decoys 是**诱饵路由表**：专属路径 → 幻境后端逻辑名（方案 §9.2 / C01）。
+	//
+	// 核心只投影**启用中**的资产 ⇒ 这里没有「撤销」这种中间态：载荷里没有 = 边缘没有这条路由。
+	Decoys []policyDecoy `json:"decoys,omitempty"`
+}
+
+// policyDecoy 是诱饵路由表的一行（与核心侧 `policy.edgeDecoy` 手工对齐）。
+type policyDecoy struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Backend string `json:"backend"`
 }
 
 // policyInjectRule 是一条响应改写规则（与核心侧手工对齐，见 docs/spec/policy-payload.md）。
@@ -97,6 +109,18 @@ type remoteState struct {
 	injectEnabled bool
 	// content 是已索引的远端内容清单；无可用内容时为 nil（= 报 `no_content`）。
 	content *contentIndex
+	// decoys 是**专属诱饵路由表**（已归一化路径 + 按路径长度降序，便于最长匹配）。
+	//
+	// 它与 `backends` 分开：后端表是「能去哪」，路由表是「什么路径该去哪」。
+	// 空 = 没有诱饵路由（此时请求照常走判定 / 白名单 / 兜底）。
+	decoys []policyDecoyRoute
+}
+
+// policyDecoyRoute 是一条已归一化的诱饵路由。
+type policyDecoyRoute struct {
+	path    string // 归一化路径（`contract.NormalizePath` 同一口径 —— 适配器侧用同一份语义）
+	id      string // 资产 id（日志与事件用）
+	backend string // 幻境后端逻辑名
 }
 
 // remotePolicy 返回当前生效的远端策略；未应用过时为 nil。
@@ -193,6 +217,24 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 		}
 	}
 
+	// 诱饵路由表：归一化路径 + 按路径长度**降序**（匹配时取第一个命中的即最长匹配）；
+	// 后端名可解析性在**路由时**判断（后端表可能在同一份载荷里；顺序与健康都会变）。
+	decoys := make([]policyDecoyRoute, 0, len(doc.Decoys))
+	for _, d := range doc.Decoys {
+		path := normalizeRoutePath(d.Path)
+		if path == "" || d.Backend == "" {
+			// 空路径 = 什么都命中（那不是路由，是漏洞）；空后端 = 送不到任何地方。
+			continue
+		}
+		decoys = append(decoys, policyDecoyRoute{path: path, id: d.ID, backend: d.Backend})
+	}
+	sort.Slice(decoys, func(i, j int) bool {
+		if len(decoys[i].path) != len(decoys[j].path) {
+			return len(decoys[i].path) > len(decoys[j].path)
+		}
+		return decoys[i].path < decoys[j].path // 同长度按字典序，保证确定性（AR-30）
+	})
+
 	h.remote.Store(&remoteState{
 		version:             doc.Version,
 		checksum:            "",
@@ -203,6 +245,7 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 		injector:            inj,
 		injectEnabled:       doc.InjectEnabled,
 		content:             newContentIndex(doc.ContentManifest),
+		decoys:              decoys,
 	})
 	if len(dropped) > 0 {
 		log.Printf("proxy: 策略 v%d 中有 %d 个后端地址不可用，已跳过：%s",

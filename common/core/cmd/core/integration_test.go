@@ -65,6 +65,7 @@ decoys:
       kind: "developer_api"
       path: "/portal/api/content"
       content: "site-developer-api"
+      backend: "mirage"     # 启用中的诱饵必须指向已启用的幻境后端（C01）
       enabled: true
 honeypots:
   - name: "mirage"

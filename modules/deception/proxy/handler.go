@@ -328,6 +328,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	outcome := &injectOutcome{}
 	r = r.WithContext(withInjectOutcome(r.Context(), outcome))
 
+	// ⓪ 专属诱饵路由（方案 §9.2 / C01）：路径归属在**白名单与判定之前**。
+	//
+	// 为什么在最先：已登记的诱饵路径属于幻境，而「业务白名单不能把它送回 origin」
+	// （§9.2 原话）—— 否则内部探针打到诱饵路径时会看到真站。
+	// 影子模式下**不投递**（INT-11：只观测不处置），请求照常走后面的判定/白名单链路。
+	if !h.Shadow {
+		if route, ok := h.matchDecoy(r.URL.Path); ok {
+			executed, derr := h.deliverDecoy(sw, r, next, route)
+			h.reportRoute(r, id, judgev1.Action_ACTION_MIRAGE,
+				routeInfo{executed: executed, backend: route.backend}, sw, started)
+			return derr
+		}
+	} else if h.LogRequests && len(h.currentDecoyRoutes()) > 0 {
+		if route, ok := h.matchDecoy(r.URL.Path); ok {
+			log.Printf("proxy: 诱饵路由命中 %s（资产 %s）但当前是**影子模式** ⇒ 不投递（INT-11），照常走判定",
+				r.URL.Path, route.id)
+		}
+	}
+
 	// ① 白名单先于改道判定（INT-25）—— 命中则不调核心，直接透传。
 	// 本地白名单（env）与远端白名单（策略面）取**并集**：护栏只增不减（见 applyEdgePolicy）。
 	ip := clientIP(r, h.TrustXFF)
@@ -359,6 +378,41 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	executed, derr := h.dispatch(sw, r, next, act, backend)
 	h.reportRoute(r, id, act, routeInfo{executed: executed, backend: backend}, sw, started)
 	return derr
+}
+
+// matchDecoy 在当前策略的**诱饵路由表**里做最长匹配（段边界 + 归一化，见 decoyroute.go）。
+func (h *Handler) matchDecoy(reqPath string) (policyDecoyRoute, bool) {
+	return matchDecoyRoute(h.currentDecoyRoutes(), reqPath)
+}
+
+// currentDecoyRoutes 取当前生效的诱饵路由表（未接过策略面时为空）。
+func (h *Handler) currentDecoyRoutes() []policyDecoyRoute {
+	if st := h.remotePolicy(); st != nil {
+		return st.decoys
+	}
+	return nil
+}
+
+// deliverDecoy 把请求投递到诱饵后端。
+//
+// **故障绝不回生产**（方案 §9.2）：后端不可用/已撤销时返回固定 502，而不是回落到业务 ——
+// 已登记为诱饵的请求回源，既会让对手看见真站，也可能把非幂等操作重复执行。
+// 它同时是「专属诱饵路由上的非幂等重放」这个 P0 边界的落地点（Q2 的中间路线）。
+func (h *Handler) deliverDecoy(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, route policyDecoyRoute) (string, error) {
+	rp, ok := h.mirageHandler(route.backend)
+	if !ok {
+		// 后端未登记 / 未启用 / 已被撤销：固定错误（不回生产）。
+		log.Printf("proxy: 诱饵 %s（路径 %s）的后端 %q 不可用 ⇒ 固定 502，不回生产（§9.2）",
+			route.id, r.URL.Path, route.backend)
+		w.WriteHeader(http.StatusBadGateway)
+		return executedDecoy, nil
+	}
+	if err := rp.ServeHTTP(w, r, next); err != nil {
+		// 后端中途失败也**不回生产**：调用方按错误处理（Caddy 错误路由），客户端看到 5xx。
+		log.Printf("proxy: 诱饵 %s 的后端 %q 投递失败：%v（不回生产，§9.2）", route.id, route.backend, err)
+		return executedDecoy, err
+	}
+	return executedDecoy, nil
 }
 
 // dispatch 按决策结果选择路径。
@@ -506,6 +560,7 @@ const (
 	executedFallback  = "origin_fallback" // route_mirage 但后端不可用 ⇒ 回落源站（NI-5）
 	executedMirage    = "mirage"          // route_mirage 且成功转发到幻境后端
 	executedBlock     = "block"           // block，返回 403
+	executedDecoy     = "decoy"           // 专属诱饵路由命中并投递（未调核心；§9.2）
 )
 
 // executedFor 决定「实际落点」的取值 —— 这是图上区分「核心判成什么」与「实际走了哪」的唯一依据。

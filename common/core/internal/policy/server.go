@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -46,6 +47,36 @@ type edgeDoc struct {
 	InjectEnabled bool `json:"inject_enabled"`
 	// ContentManifest 是内容清单的**投影**（含内容体）。nil = 没有内容。
 	ContentManifest *edgeContentManifest `json:"content_manifest,omitempty"`
+	// Decoys 是**诱饵路由表**的投影：专属路径 → 幻境后端（方案 §9.2 / C01）。
+	//
+	// 只含**启用中**的资产：未启用/已撤销的资产在载荷里**不出现** ⇒ 边缘没有这条路由
+	// （撤销因此天然生效，不需要额外的回执语义）。
+	// 排序（按 path）是为了让「同内容必得同一校验和」继续成立（`AR-30` 精神）。
+	Decoys []edgeDecoy `json:"decoys,omitempty"`
+}
+
+// edgeDecoy 是诱饵路由表的一行：归一化路径 → 幻境后端逻辑名。
+type edgeDecoy struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Backend string `json:"backend"`
+}
+
+// edgeBackendURL 把后端地址规范化成**适配器能用的 URL**。
+//
+// 为什么必须做这一步（实测踩到的真缺陷）：配置里的 `honeypots[].addr` 是 `host:port`
+// （见 `docs/spec/config.md` §2.9），而载荷里的 `backends[].address` 契约是**URL**
+// （适配器用 HTTP 转发，`upstreamAddr` 要求带 scheme）。直接把 `host:port` 塞进去的后果是
+// 适配器把**每一个**远端后端都判为非法地址并跳过 —— 于是远端后端表一直是空的，
+// 全靠本地 env 兜底掩盖着（日志里那句「N 个后端地址不可用，已跳过」就是它）。
+//
+// 规则：已经有 scheme 就原样保留（支持 https / 自定义 scheme）；否则补 `http://`。
+func edgeBackendURL(addr string) string {
+	a := strings.TrimSpace(addr)
+	if a == "" || strings.Contains(a, "://") {
+		return a
+	}
+	return "http://" + a
 }
 
 // edgeContentManifest 是下发给适配器的内容清单（字段与生成侧清单对齐，见 docs/spec/ai-contract.md §3）。
@@ -206,6 +237,10 @@ func (s *Server) edgePayload(ctx context.Context, snap contract.PolicySnapshot) 
 	if err != nil {
 		return nil, err
 	}
+	assets, err := s.loader.Decoys(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	doc := edgeDoc{
 		SchemaVersion: EdgePayloadSchemaVersion,
@@ -213,9 +248,23 @@ func (s *Server) edgePayload(ctx context.Context, snap contract.PolicySnapshot) 
 		Version:       snap.Version,
 		Backends:      make([]edgeBackend, 0, len(backends)),
 		Whitelist:     edgeWhitelist{SourceCIDRs: make([]string, 0, len(wl.SourceCIDRs))},
+		Decoys:        make([]edgeDecoy, 0, len(assets)),
 	}
+	// 只投影**启用中**的资产（未启用 = 边缘不该有这条路由）；路径归一化后再排序，
+	// 让「同内容必得同一校验和」继续成立（`AR-30` 精神：下发的字节要可复现）。
+	for _, a := range assets {
+		if !a.Enabled || a.Backend == "" {
+			continue
+		}
+		doc.Decoys = append(doc.Decoys, edgeDecoy{
+			ID: a.ID, Path: contract.NormalizePath(a.Path), Backend: a.Backend,
+		})
+	}
+	sort.Slice(doc.Decoys, func(i, j int) bool { return doc.Decoys[i].Path < doc.Decoys[j].Path })
 	for _, b := range backends {
-		doc.Backends = append(doc.Backends, edgeBackend{Name: b.Name, Address: b.Addr, Enabled: b.Enabled})
+		doc.Backends = append(doc.Backends, edgeBackend{
+			Name: b.Name, Address: edgeBackendURL(b.Addr), Enabled: b.Enabled,
+		})
 	}
 	sort.Slice(doc.Backends, func(i, j int) bool { return doc.Backends[i].Name < doc.Backends[j].Name })
 	for _, p := range wl.SourceCIDRs {

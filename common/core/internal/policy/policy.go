@@ -121,6 +121,7 @@ type decoyAssetDoc struct {
 	Kind    *string `yaml:"kind"`
 	Path    *string `yaml:"path"`
 	Content *string `yaml:"content"`
+	Backend *string `yaml:"backend"`
 	Enabled *bool   `yaml:"enabled"`
 }
 
@@ -327,7 +328,43 @@ func (d *configDoc) validate() ([]contract.Rule, error) {
 	if err := d.validateAI(); err != nil {
 		return nil, err
 	}
+	// 跨段一致性检查放在最后：它要同时看 decoys 与 honeypots 两段。
+	if err := d.validateDecoyBackends(); err != nil {
+		return nil, err
+	}
 	return rules, nil
+}
+
+// validateDecoyBackends 校验「启用中的诱饵 → 已登记且启用的幻境后端」这条跨段引用（C01）。
+//
+// 为什么必须跨段检查：`decoys.assets[].backend` 是一个**逻辑名**，它的有效定义在 `honeypots[]`。
+// 只检查「非空」时，把后端名写错（或忘了启用它）会通过启动校验，然后在运行时表现为
+// 「每个命中该诱饵的请求都拿到 502」—— 那是**部署未就绪却投放了线索**，
+// 而 C01 的验收判据正是「部署未就绪不投放线索」。配置错就该在启动时失败（本项目的既有规矩）。
+func (d *configDoc) validateDecoyBackends() error {
+	if d.Decoys == nil || d.Decoys.Assets == nil {
+		return nil
+	}
+	enabledBackends := map[string]bool{}
+	if d.Honeypots != nil {
+		for _, b := range *d.Honeypots {
+			if b.Name != nil && b.Enabled != nil && *b.Enabled {
+				enabledBackends[*b.Name] = true
+			}
+		}
+	}
+	for i := range *d.Decoys.Assets {
+		a := (*d.Decoys.Assets)[i]
+		if a.Enabled == nil || !*a.Enabled || a.Backend == nil {
+			continue
+		}
+		if !enabledBackends[*a.Backend] {
+			return fmt.Errorf(
+				"policy: decoys.assets[%d].backend=%q 不是**已启用**的幻境后端 —— 先在 honeypots[] 里登记并启用它（C01：部署未就绪不投放线索）",
+				i, *a.Backend)
+		}
+	}
+	return nil
 }
 
 // validateInjects 校验响应改写规则段。该段**可选**（nil = 未配置）。
@@ -396,6 +433,13 @@ func (d *configDoc) validateDecoys() error {
 		if a.Enabled == nil {
 			return missing(p + ".enabled")
 		}
+		// 「部署未就绪不投放线索」（C01 验收）：启用中的资产**必须**有后端。
+		// 未启用时允许留空 —— 影子期先登记路径与内容，等后端就绪再打开（INT-11 的阶梯）。
+		if *a.Enabled {
+			if a.Backend == nil || strings.TrimSpace(*a.Backend) == "" {
+				return fmt.Errorf("policy: %s.backend 不能为空 —— 启用中的诱饵必须指定投递到的幻境后端（C01）", p)
+			}
+		}
 	}
 	return nil
 }
@@ -459,12 +503,15 @@ func (d *configDoc) buildDecoys() []contract.DecoyAsset {
 	for i := range *d.Decoys.Assets {
 		a := (*d.Decoys.Assets)[i]
 		kind, _ := parseDecoyKind(*a.Kind)
-		content := ""
+		content, backend := "", ""
 		if a.Content != nil {
 			content = *a.Content
 		}
+		if a.Backend != nil {
+			backend = strings.TrimSpace(*a.Backend)
+		}
 		out = append(out, contract.DecoyAsset{
-			ID: *a.ID, Kind: kind, Path: *a.Path, Content: content, Enabled: *a.Enabled,
+			ID: *a.ID, Kind: kind, Path: *a.Path, Content: content, Backend: backend, Enabled: *a.Enabled,
 		})
 	}
 	return out

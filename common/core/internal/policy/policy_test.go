@@ -278,9 +278,15 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 	ok := decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal/api/content"
+      backend: "mirage"
       enabled: true
 `)
-	l := mustLoad(t, validYAML+ok)
+	l := mustLoad(t, validYAML+ok+`honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`)
 	assets, err := l.Decoys(context.Background())
 	if err != nil || len(assets) == 0 {
 		t.Fatalf("合法诱饵资产应被装载：%v / %d 条", err, len(assets))
@@ -296,6 +302,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "portal/api"
+      backend: "mirage"
       enabled: true
 `),
 			want: "必须以 / 开头",
@@ -305,6 +312,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal//api"
+      backend: "mirage"
       enabled: true
 `),
 			want: "不是归一化形态",
@@ -314,6 +322,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal/../api"
+      backend: "mirage"
       enabled: true
 `),
 			want: "不是归一化形态",
@@ -323,10 +332,12 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal/api"
+      backend: "mirage"
       enabled: true
     - id: "b"
       kind: "mcp"
       path: "/portal/api"
+      backend: "mirage"
       enabled: true
 `),
 			want: "冲突",

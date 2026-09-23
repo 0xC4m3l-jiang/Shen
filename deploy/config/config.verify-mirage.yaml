@@ -120,11 +120,21 @@ whitelist:
 # 诱饵面必须 observe-only（MD-25）—— 在诱饵面上不得产出 challenge / isolate / block。
 decoys:
   assets:
+    # ① 正常投递：路径归属 /portal/api/content → 幻境后端 mirage（本档把它指向演示站端口）。
     - id: "dev-api"
       kind: "developer_api"
       path: "/portal/api/content"
       content: "site-developer-api"   # 内容模板标识（模板随代码分发，ST-22）
-      enabled: false                   # 默认关：先影子观察，再逐级放开（INT-11 / INT-12）
+      backend: "mirage"                # 投递目标（幻境后端逻辑名；启用时必填）
+      enabled: true                    # 本档用于**验证诱饵路由**；默认配置里是 false（INT-11）
+    # ② 故障不回源：后端指向一个**不可达**地址（127.0.0.1:1）——
+    #    期望 502 且**绝不**回落到业务（方案 §9.2 的硬边界）。
+    - id: "no-fallback"
+      kind: "bait"
+      path: "/portal/dead"
+      content: "site-developer-api"
+      backend: "dead-decoy"
+      enabled: true
 
 # 幻境后端池（ADR-0011：**只做入口，不实现具体蜜罐**）。
 # 逻辑名 name 就是 director 在 route_mirage 时给出的 Backend。
@@ -139,6 +149,11 @@ honeypots:
   - name: "mirage"
     type: "nginx-admin"
     addr: "127.0.0.1:19080"
+    enabled: true
+  # ⚠️ 仅用于验证「诱饵后端不可用 ⇒ 固定 502 且不回生产」：地址故意不可达。
+  - name: "dead-decoy"
+    type: "nginx-admin"
+    addr: "127.0.0.1:1"
     enabled: true
 #  - name: "mirage"
 #    type: "ssh"

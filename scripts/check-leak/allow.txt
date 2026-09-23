@@ -9,8 +9,9 @@
 #   4. 规则级豁免（内部日志参数、内部错误构造参数、struct tag）写在 main.go 的包注释里；
 #      整个文件是过滤器（如 AR-22 黑名单表）则由该文件自己声明 `//check-leak:filter <理由>`。
 #
-# 当前 4 条例外：
+# 当前 5 条例外：
 OH-1 common/core/internal/director/director.go mirage  # 内部逻辑后端名：核心→适配器的 gRPC backend 字段取值，也是运维配置的键；对外回显被 ST-7 单独禁止，不上攻击者的屏幕（OH-2）
 OH-1 modules/deception/proxy/cmd/proxy/main.go SHEN_PROXY_MIRAGE  # 环境变量名（运维面接口）：文档、配置模板、启动失败提示都用它，攻击者不可见
 OH-1 modules/deception/proxy/handler.go route_mirage  # 适配器**日志**里的设计三值术语（terminology.md §4）：只进 stdout 供运维排查，绝不写入响应（ST-7 禁止回显）；与控制台/核心日志用同一套词，改名会让排查对不上
-OH-1 modules/deception/proxy/handler.go mirage  # 执行落点的取值之一（events.md §2.2 的七值表，与 route_mirage 同一套设计术语）：只进日志与遥测事件，绝不写入响应（ST-7 禁止回显）；改名会让日志、流量调度图与文档三处对不上
+OH-1 modules/deception/proxy/handler.go mirage  # 执行落点的取值之一（events.md §2.2 的八值表，与 route_mirage 同一套设计术语）：只进日志与遥测事件，绝不写入响应（ST-7 禁止回显）；改名会让日志、流量调度图与文档三处对不上
+OH-1 modules/deception/proxy/handler.go decoy  # 执行落点的登记取值之一（events.md §2.2 的八值表，与 mirage/route_mirage 同一套内部术语）：只进逐请求日志与遥测事件，绝不写入响应（ST-7 禁止回显）；它是「专属诱饵路由」在事件契约里的键，控制台按它画节点，改名会让日志/DAG/文档三处对不上

@@ -16,7 +16,19 @@ import (
 )
 
 // serverYAML = 合法配置 + 幻境后端池：策略面下发的边缘文档要有真实来源才测得出东西。
-const serverYAML = validYAML + `honeypots:
+const serverYAML = validYAML + `decoys:
+  assets:
+    - id: "decoy-on"
+      kind: "developer_api"
+      path: "/portal/api/content"
+      backend: "hp-b"
+      enabled: true
+    - id: "decoy-off"
+      kind: "mcp"
+      path: "/portal/mcp"
+      backend: "hp-b"
+      enabled: false
+honeypots:
   - name: "hp-b"
     type: "ssh"
     addr: "127.0.0.1:2222"
@@ -86,12 +98,112 @@ func TestPullProjectsEdgePayload(t *testing.T) {
 	if doc.Backends[0].Name != "hp-a" || doc.Backends[1].Name != "hp-b" {
 		t.Errorf("后端应按名排序：%+v", doc.Backends)
 	}
-	if doc.Backends[1].Address != "127.0.0.1:2222" || !doc.Backends[1].Enabled {
-		t.Errorf("后端字段投影有误：%+v", doc.Backends[1])
+	// 地址必须是**适配器能用的 URL**（带 scheme）：配置里写的是 `host:port`，
+	// 直接塞进载荷会让适配器把每一个后端都判为非法地址并跳过（真实缺陷，2026-09-23 修）。
+	if doc.Backends[1].Address != "http://127.0.0.1:2222" || !doc.Backends[1].Enabled {
+		t.Errorf("后端字段投影有误（地址应补 http:// 前缀）：%+v", doc.Backends[1])
 	}
 	if len(doc.Whitelist.SourceCIDRs) != 1 || doc.Whitelist.SourceCIDRs[0] != "10.0.0.0/8" {
 		t.Errorf("白名单应带 10.0.0.0/8：%+v", doc.Whitelist.SourceCIDRs)
 	}
+}
+
+// TestEdgeBackendURLAddsScheme 断言后端地址的规范化：`host:port` 补 `http://`，
+// 已带 scheme 的原样保留（支持 https 或自定义 scheme）。
+func TestEdgeBackendURLAddsScheme(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"mirage.internal:8080", "http://mirage.internal:8080"},
+		{"http://127.0.0.1:8080", "http://127.0.0.1:8080"},
+		{"https://mirage.internal", "https://mirage.internal"},
+		{" 127.0.0.1:1 ", "http://127.0.0.1:1"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := edgeBackendURL(c.in); got != c.want {
+			t.Errorf("edgeBackendURL(%q) = %q，期望 %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestPullProjectsDecoyRoutes 断言诱饵资产的投影（方案 §9.2 / C01）：
+// **只投影启用中的**资产（未启用 = 边缘不该有这条路由）、路径归一化、按路径排序（校验和才稳）。
+func TestPullProjectsDecoyRoutes(t *testing.T) {
+	srv, _ := newServerFixture(t)
+
+	got, err := srv.Pull(context.Background(), &policyv1.PolicyPullRequest{})
+	if err != nil {
+		t.Fatalf("Pull 应当成功：%v", err)
+	}
+	var doc struct {
+		Decoys []struct {
+			ID      string `json:"id"`
+			Path    string `json:"path"`
+			Backend string `json:"backend"`
+		} `json:"decoys"`
+	}
+	if err := json.Unmarshal(got.GetPayload(), &doc); err != nil {
+		t.Fatalf("载荷必须是合法 JSON：%v", err)
+	}
+
+	if len(doc.Decoys) != 1 {
+		t.Fatalf("只应投影**启用中**的资产（未启用的不出现），得到 %+v", doc.Decoys)
+	}
+	got1 := doc.Decoys[0]
+	if got1.ID != "decoy-on" || got1.Path != "/portal/api/content" || got1.Backend != "hp-b" {
+		t.Fatalf("诱饵路由字段投影有误：%+v", got1)
+	}
+}
+
+// TestLoadRejectsEnabledDecoyWithoutBackend 断言「部署未就绪不投放线索」（C01 验收）：
+// 启用中的诱饵**必须**指定后端；未启用时允许留空（影子期先登记路径与内容）。
+func TestLoadRejectsEnabledDecoyWithoutBackend(t *testing.T) {
+	block := `decoys:
+  assets:
+    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      enabled: true
+`
+	if _, err := Load(strings.NewReader(validYAML + block)); err == nil {
+		t.Fatal("启用中的诱饵缺 backend 必须装载失败")
+	} else if !strings.Contains(err.Error(), "backend") {
+		t.Fatalf("报错应指向 backend 字段，实际：%v", err)
+	}
+
+	// 未启用：允许留空（影子期），也不需要后端存在。
+	ok := `decoys:
+  assets:
+    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      enabled: false
+`
+	mustLoad(t, validYAML+ok)
+
+	// 后端名写了，但没在 honeypots[] 里登记/启用 ⇒ 同样是坏配置（跨段引用，C01）。
+	unknown := `decoys:
+  assets:
+    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      backend: "nope"
+      enabled: true
+`
+	if _, err := Load(strings.NewReader(validYAML + unknown)); err == nil {
+		t.Fatal("后端未登记/未启用时必须装载失败（部署未就绪不投放线索）")
+	} else if !strings.Contains(err.Error(), "已启用") {
+		t.Fatalf("报错应指出后端不是已启用的幻境后端，实际：%v", err)
+	}
+
+	// 登记并启用后端之后：装载通过（正样本，证明上面的拒绝不是因为"任何 backend 都拒"）。
+	good := unknown + `honeypots:
+  - name: "nope"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	mustLoad(t, validYAML+good)
 }
 
 // TestPullIsDeterministic 同内容两次下发必须逐字节一致 —— 否则适配器每次轮询都会以为策略变了。
