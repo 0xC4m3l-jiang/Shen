@@ -15,6 +15,11 @@ const (
 	EventLoginAttempt EventKind = "login_attempt"
 	// EventPageView：有人打开了合成管理台的某个页面/接口。
 	EventPageView EventKind = "page_view"
+	// EventStateChange：有人对**合成对象**发起了受限写操作（`C06`）。
+	//
+	// `Outcome` 取四个登记值：`applied`（值真的变了）· `noop`（幂等命中，值本来就一样）·
+	// `rejected`（被拒：不存在/取值非法/版本冲突/配额用尽）· 空（未涉及）。
+	EventStateChange EventKind = "state_change"
 )
 
 // Event 是一条**合成交互事件**：谁在什么时候碰了哪个场景资源。

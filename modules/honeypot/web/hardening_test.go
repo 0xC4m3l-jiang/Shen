@@ -405,11 +405,13 @@ func TestSessionTableFullEvictsOldestNotEveryone(t *testing.T) {
 	now := time.Now()
 	h.now = func() time.Time { return now }
 	// 直接把表填满：逐出逻辑是**单元**行为，用 4096 次登录去构造它只是慢。
-	for i := 0; i < maxSessions; i++ {
-		h.sessions[fmt.Sprintf("s-%05d", i)] = now.Add(time.Duration(i) * time.Second)
+	for i := range maxSessions {
+		h.sessions[fmt.Sprintf("s-%05d", i)] = &sessionState{
+			expires: now.Add(time.Duration(i) * time.Second),
+		}
 	}
 	newest := fmt.Sprintf("s-%05d", maxSessions-1)
-	if _, err := h.newSession(); err != nil {
+	if _, err := h.newSession("probe"); err != nil {
 		t.Fatal(err)
 	}
 	if _, alive := h.sessions[newest]; !alive {

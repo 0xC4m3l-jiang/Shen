@@ -92,7 +92,7 @@ type Handler struct {
 	emitter      *asyncEmitter
 
 	mu       sync.Mutex
-	sessions map[string]time.Time // 合成会话：id -> 到期时刻
+	sessions map[string]*sessionState // 合成会话：id -> 到期时刻 + **可变场景状态**（C06）
 }
 
 // New 构造处理器（未知场景 id 回落默认场景，不报错：诱饵后端不该因配置写错就整体不可用）。
@@ -113,7 +113,7 @@ func New(opts Options) *Handler {
 		cookieSecure: opts.CookieSecure,
 		requestLog:   opts.RequestLog,
 		login:        newLoginLimiter(opts.LoginBurst, opts.LoginWindow),
-		sessions:     map[string]time.Time{},
+		sessions:     map[string]*sessionState{},
 	}
 	if opts.Events != nil {
 		h.emitter = newAsyncEmitter(opts.Events, opts.EventQueue)
@@ -156,12 +156,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/admin/login" && r.Method == http.MethodPost:
 		h.handleLogin(w, r)
 	case r.URL.Path == "/admin/" || r.URL.Path == "/admin":
-		if !h.authed(r) {
+		if _, ok := h.sessionOf(r); !ok {
 			http.Redirect(w, r, "/admin/login", http.StatusFound)
 			return
 		}
 		h.emitFor(r, Event{Kind: EventPageView, Outcome: "dashboard"})
 		h.render(w, http.StatusOK, tmplDashboard, h.dashboardView())
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, adminPrefix+"/api/"):
+		// 受限写路径（C06）：JSON API 与页面表单走**同一套状态机**（写后读两边一致）。
+		h.handleAdminWrite(w, r)
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, adminPrefix+"/"):
+		h.handleAdminPageWrite(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, adminPrefix+"/api/"):
 		// 浏览器链路（`W1`）：与页面同前缀 ⇒ cookie（Path=/admin）自动带上。
 		h.handleAdminAPI(w, r)
@@ -225,7 +230,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 				"The provided credentials were not accepted."))
 		return
 	}
-	id, err := h.newSession()
+	id, err := h.newSession(user)
 	if err != nil {
 		h.render(w, http.StatusInternalServerError, tmplError,
 			h.errViewOf("Unavailable", http.StatusInternalServerError,
@@ -261,7 +266,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminPage 渲染合成列表页（与 API 共用同一份数据与分页）。
 func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
-	if !h.authed(r) {
+	sess, ok := h.sessionOf(r)
+	if !ok {
 		http.Redirect(w, r, "/admin/login", http.StatusFound)
 		return
 	}
@@ -269,15 +275,15 @@ func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 	h.emitFor(r, Event{Kind: EventPageView, Outcome: "page"})
 	switch r.URL.Path {
 	case "/admin/users":
-		p := paginate(h.scenario.Users, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
+		p := paginate(sess.users, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
 		h.render(w, http.StatusOK, tmplList, h.listView("Users", metaOf("/admin/users", p),
 			[]string{"ID", "Name", "Role", "State", "Last seen"}, userRows(p.Items)))
 	case "/admin/config":
-		p := paginate(h.scenario.Config, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
+		p := paginate(sess.config, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
 		h.render(w, http.StatusOK, tmplList, h.listView("Configuration", metaOf("/admin/config", p),
 			[]string{"Key", "Value"}, cfgRows(p.Items)))
 	case "/admin/audit":
-		p := paginate(h.scenario.Audit, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
+		p := paginate(latestFirst(sess.audit), page, h.pageSizeParam(r), h.scenario.MaxPageSize)
 		h.render(w, http.StatusOK, tmplList, h.listView("Audit log", metaOf("/admin/audit", p),
 			[]string{"Time", "Actor", "Action", "Target"}, auditRows(p.Items)))
 	default:
@@ -288,7 +294,8 @@ func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 
 // handleAdminAPI 返回合成 JSON（与页面同源：同一个 `paginate`，同一批对象）。
 func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
-	if !h.authed(r) {
+	sess, ok := h.sessionOf(r)
+	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
 		return
 	}
@@ -303,11 +310,11 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	var body any
 	switch resource {
 	case "users":
-		body = paginate(h.scenario.Users, page, size, h.scenario.MaxPageSize)
+		body = paginate(sess.users, page, size, h.scenario.MaxPageSize)
 	case "config":
-		body = paginate(h.scenario.Config, page, size, h.scenario.MaxPageSize)
+		body = paginate(sess.config, page, size, h.scenario.MaxPageSize)
 	case "audit":
-		body = paginate(h.scenario.Audit, page, size, h.scenario.MaxPageSize)
+		body = paginate(latestFirst(sess.audit), page, size, h.scenario.MaxPageSize)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		return
@@ -347,8 +354,8 @@ func (h *Handler) evictOldestLocked(n int) {
 		exp time.Time
 	}
 	all := make([]entry, 0, len(h.sessions))
-	for id, exp := range h.sessions {
-		all = append(all, entry{id: id, exp: exp})
+	for id, st := range h.sessions {
+		all = append(all, entry{id: id, exp: st.expires})
 	}
 	sort.Slice(all, func(i, j int) bool {
 		if !all[i].exp.Equal(all[j].exp) {
@@ -363,13 +370,18 @@ func (h *Handler) evictOldestLocked(n int) {
 
 // ── 合成会话（内存、有 TTL、有容量上限）─────────────────────────────────────
 
-func (h *Handler) newSession() (string, error) {
+// newSession 建一个合成会话：不透明 id + **该会话自己的可变场景状态**（`C06` 的隔离单位）。
+//
+// 为什么状态随会话走：写后读要求"同会话可见"，跨会话隔离要求"别人看不到" ——
+// 一个 `*sessionState`（登录时从场景基础数据深拷贝）同时满足这两条。
+func (h *Handler) newSession(actor string) (string, error) {
 	buf := make([]byte, 16)
 	if _, err := io.ReadFull(h.rand, buf); err != nil {
 		return "", err
 	}
 	id := hex.EncodeToString(buf)
 	exp := h.now().Add(h.ttl)
+	state := newSessionState(h.scenario, actor, exp)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if len(h.sessions) >= maxSessions {
@@ -379,8 +391,8 @@ func (h *Handler) newSession() (string, error) {
 		// 对一个正在观察幻境的对手来说，"整个管理台突然把我踢出去"本身就是一个异常信号；
 		// 而逐出最老的一批只影响最不可能还在活动的那部分。
 		now := h.now()
-		for k, e := range h.sessions {
-			if !now.Before(e) {
+		for k, st := range h.sessions {
+			if !now.Before(st.expires) {
 				delete(h.sessions, k)
 			}
 		}
@@ -388,27 +400,29 @@ func (h *Handler) newSession() (string, error) {
 			h.evictOldestLocked(maxSessions/8 + 1)
 		}
 	}
-	h.sessions[id] = exp
+	h.sessions[id] = state
 	return id, nil
 }
 
-// authed 判断请求是否带一个未过期的合成会话。
-func (h *Handler) authed(r *http.Request) bool {
+// sessionOf 取请求对应的**会话状态**（未登录/已过期 ⇒ false）。
+//
+// 它同时是"写后读"的可见性保证：同一会话的读取与写入拿到的是**同一个** `*sessionState`。
+func (h *Handler) sessionOf(r *http.Request) (*sessionState, bool) {
 	c, err := r.Cookie(scratchSessionCookie)
 	if err != nil || c.Value == "" {
-		return false
+		return nil, false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	exp, ok := h.sessions[c.Value]
+	st, ok := h.sessions[c.Value]
 	if !ok {
-		return false
+		return nil, false
 	}
-	if !h.now().Before(exp) {
+	if !h.now().Before(st.expires) {
 		delete(h.sessions, c.Value)
-		return false
+		return nil, false
 	}
-	return true
+	return st, true
 }
 
 // ── 视图（模板随代码分发：ST-22；不含任何真实素材）─────────────────────────

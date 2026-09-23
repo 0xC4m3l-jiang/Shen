@@ -119,6 +119,18 @@ docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.verify-mir
 3. **撤销不等于立刻还给业务**：路由从策略里移除后，边缘在**搜索碑租约**内（默认 24h）仍以固定 502
    结束那些路径（不回生产）—— 这是为了避免旧链接突然打到真实站点。
 
+**受限写路径**（`C06`）：合成管理台支持两类写动作（改账号启用状态 / 改配置项取值），
+浏览器表单与 JSON API 共用同一套状态机。状态**按会话隔离**：同会话写后立刻可见（列表与审计页一致），
+另一个会话看到的是原始值；写操作幂等（值没变不记账）、可选 CAS（版本不符 409、可重试不双写）、
+有配额（每会话写 ≤200 次、审计 ≤200 条）。**只改内存里的合成对象**——不执行真实命令/SQL、不出站、不落盘。
+
+```sh
+curl -s -c /tmp/jar -d 'username=x&password=y' http://127.0.0.1:18080/admin/login
+curl -s -b /tmp/jar -H 'Content-Type: application/json' \
+  -d '{"enabled":false}' http://127.0.0.1:18080/admin/api/users/u-1001   # 受限写
+curl -s -b /tmp/jar 'http://127.0.0.1:18080/admin/api/audit?page=1'      # 审计里出现这次变更（写后读）
+```
+
 > 诱饵路由与普通评分改道的**失败语义不同**：专属路由故障 ⇒ 固定 502 且**绝不回源**；
 > 普通 `route_mirage` 失败仍会**回落业务**（`NI-1`）。看单条请求的 `executed` / `delivery_result` 区分。
 > Web 的合成交互事件目前**只进日志**（尚未接入核心遥测）。
