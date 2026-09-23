@@ -158,6 +158,7 @@ func newTestHandler(t *testing.T, cfg Config, judge JudgeClient, report Telemetr
 		DecisionTimeout:       caddy.Duration(cfg.DecisionTimeout),
 		CacheTTL:              caddy.Duration(cfg.CacheTTL),
 		Window:                caddy.Duration(cfg.Window),
+		SessionCookie:         cfg.SessionCookie,
 		MirageResponseTimeout: caddy.Duration(cfg.MirageResponseTimeout),
 		Shadow:                cfg.Shadow,
 		TrustXFF:              cfg.TrustXFF,
@@ -399,26 +400,28 @@ func TestDecisionIDStableWithinWindowAndDiffersAcross(t *testing.T) {
 	base := time.Unix(1700000000, 0)
 	clock := base
 
-	r1 := httptest.NewRequest(http.MethodGet, "http://svc.example/a", nil)
-	r2 := httptest.NewRequest(http.MethodGet, "http://svc.example/a", nil)
-
-	id1 := decisionID(r1, false, time.Minute, clock)
-	if id2 := decisionID(r2, false, time.Minute, clock); id1 != id2 {
+	// 会话分量是**最小身份值**（不是整段 Cookie 头）—— 见 `sessionHint` 与方案 §5.2。
+	id1 := decisionID("sid-1", "203.0.113.7", "/a", time.Minute, clock)
+	if id2 := decisionID("sid-1", "203.0.113.7", "/a", time.Minute, clock); id1 != id2 {
 		t.Errorf("同一窗口内同请求必须得到同一 ID（ST-10）：%s vs %s", id1, id2)
 	}
 
 	clock = base.Add(2 * time.Minute) // 跨窗口
-	if id3 := decisionID(r2, false, time.Minute, clock); id3 == id1 {
+	if id3 := decisionID("sid-1", "203.0.113.7", "/a", time.Minute, clock); id3 == id1 {
 		t.Errorf("跨时间窗必须得到不同 ID（ST-10），实际仍是 %s", id3)
 	}
 }
 
 func TestDecisionIDSeparatesByPath(t *testing.T) {
-	a := decisionID(httptest.NewRequest(http.MethodGet, "http://svc.example/a", nil), false, time.Minute, time.Now())
-	b := decisionID(httptest.NewRequest(http.MethodGet, "http://svc.example/b", nil), false, time.Minute, time.Now())
-
+	now := time.Now()
+	a := decisionID("sid-1", "203.0.113.7", "/a", time.Minute, now)
+	b := decisionID("sid-1", "203.0.113.7", "/b", time.Minute, now)
 	if a == b {
 		t.Error("不同路径必须得到不同 decision_id")
+	}
+	// 会话变了也要变（否则「换会话」不会换判定身份 —— 那正是会话语义的根）。
+	if c := decisionID("sid-2", "203.0.113.7", "/a", time.Minute, now); c == a {
+		t.Error("不同会话必须得到不同 decision_id")
 	}
 }
 

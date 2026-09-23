@@ -50,7 +50,7 @@ func TestQueryOfReachesFixedPoint(t *testing.T) {
 // 观测必须带上 query，且 path 仍**不含**查询串（HTTP 语义：两者是不同的事实）。
 func TestObservationCarriesQuerySeparatelyFromPath(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "http://svc.example/download?file=%2e%2e%2fetc%2fpasswd", nil)
-	obs := observationFrom(r, false)
+	obs := observationFrom(r, false, DefaultSessionCookie)
 
 	if got, want := obs.GetPath(), "/download"; got != want {
 		t.Fatalf("path 必须不含查询串：期望 %q，得到 %q", want, got)

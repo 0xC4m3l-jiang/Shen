@@ -198,7 +198,17 @@ type Observation struct {
 	//
 	// 为什么要它：`AR-31` 要求攻击者可控字段原样保留；而且「编码本身就是信号」——
 	// 想匹配 `%2e%2e` / `%00` 这类形态，只能在原样字段上做（规范化后的字段已经没有编码了）。
-	QueryRaw      string `protobuf:"bytes,8,opt,name=query_raw,json=queryRaw,proto3" json:"query_raw,omitempty"`
+	QueryRaw string `protobuf:"bytes,8,opt,name=query_raw,json=queryRaw,proto3" json:"query_raw,omitempty"`
+	// session_hint 是适配器按 `session.cookie_name` 取出的**最小会话身份值**：
+	// 只有那一个 cookie 的值，**不含整段 Cookie 头**（因此认证材料不再跨接缝，见方案 §5.2）。
+	//
+	// 语义边界（很重要）：
+	//
+	//	· 多来源**优先级仍由核心决定**（① 业务 cookie → ② TLS ticket → ③ 指纹兜底，INT-19）；
+	//	  适配器只做「按约定的名字把候选值取出来」，不做任何判定（AR-2）。
+	//	· 核心把它当作优先级① 的候选；为空时回退到 TLS 指纹 / 指纹兜底。
+	//	· 兼容：**没有**这个字段时，核心仍会从 `headers["cookie"]` 里按名提取（旧适配器照常工作）。
+	SessionHint   string `protobuf:"bytes,9,opt,name=session_hint,json=sessionHint,proto3" json:"session_hint,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -289,6 +299,13 @@ func (x *Observation) GetQueryRaw() string {
 	return ""
 }
 
+func (x *Observation) GetSessionHint() string {
+	if x != nil {
+		return x.SessionHint
+	}
+	return ""
+}
+
 type JudgeResponse struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Action Action                 `protobuf:"varint,1,opt,name=action,proto3,enum=judge.v1.Action" json:"action,omitempty"`
@@ -359,7 +376,7 @@ const file_judge_v1_judge_proto_rawDesc = "" +
 	"\fJudgeRequest\x12\x1f\n" +
 	"\vdecision_id\x18\x01 \x01(\tR\n" +
 	"decisionId\x121\n" +
-	"\bobserved\x18\x02 \x01(\v2\x15.judge.v1.ObservationR\bobserved\"\xcb\x02\n" +
+	"\bobserved\x18\x02 \x01(\v2\x15.judge.v1.ObservationR\bobserved\"\xee\x02\n" +
 	"\vObservation\x12\x1b\n" +
 	"\tsource_ip\x18\x01 \x01(\tR\bsourceIp\x12\x1d\n" +
 	"\n" +
@@ -369,7 +386,8 @@ const file_judge_v1_judge_proto_rawDesc = "" +
 	"\x0ftls_fingerprint\x18\x05 \x01(\tR\x0etlsFingerprint\x12<\n" +
 	"\aheaders\x18\x06 \x03(\v2\".judge.v1.Observation.HeadersEntryR\aheaders\x12\x14\n" +
 	"\x05query\x18\a \x01(\tR\x05query\x12\x1b\n" +
-	"\tquery_raw\x18\b \x01(\tR\bqueryRaw\x1a:\n" +
+	"\tquery_raw\x18\b \x01(\tR\bqueryRaw\x12!\n" +
+	"\fsession_hint\x18\t \x01(\tR\vsessionHint\x1a:\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x83\x01\n" +

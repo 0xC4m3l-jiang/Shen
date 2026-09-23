@@ -86,6 +86,52 @@ func TestReceiver_ObservationCarriesQuery(t *testing.T) {
 	}
 }
 
+// TestSessionHintSemantics 断言最小会话身份的取法（与形态③④同语义、各自实现，INT-5）。
+func TestSessionHintSemantics(t *testing.T) {
+	cases := []struct {
+		name   string
+		cookie string
+		want   string
+	}{
+		{"只取约定的那个", "sid=abc; other=zzz", "abc"},
+		{"顺序无关", "other=zzz; sid=abc", "abc"},
+		{"没有这个名字", "other=zzz", ""},
+		{"完全没有 cookie", "", ""},
+		// 名字两侧空白不宽容：与核心的 session.cookieValue 同口径（RFC 6265 的 name 不含空白）。
+		{"名字两侧空白不宽容", "  sid = abc ", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sessionHint(c.cookie, "sid"); got != c.want {
+				t.Fatalf("sessionHint(%q) = %q，期望 %q", c.cookie, got, c.want)
+			}
+		})
+	}
+}
+
+// TestMirrorUsesMinimalIdentityEverywhere 断言镜像侧的三处（decision_id / 观测 / 遥测会话标识）
+// 用的是**同一个最小身份值**，且整段 Cookie 不出接缝。
+func TestMirrorUsesMinimalIdentityEverywhere(t *testing.T) {
+	j, tm := &fakeJudge{}, &fakeTelemetry{}
+	r := newReceiver(j, tm)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+	req.Header.Set("Cookie", "sid=sess-1; auth_token=SECRET")
+	r.ServeHTTP(httptest.NewRecorder(), req)
+
+	obs := j.got[0].GetObserved()
+	if obs.GetSessionHint() != "sess-1" {
+		t.Fatalf("session_hint 应是最小身份，得到 %q", obs.GetSessionHint())
+	}
+	wantID := decisionID(obs, 60*time.Second, time.Unix(1700000000, 0))
+	if got := j.got[0].GetDecisionId(); got != wantID {
+		t.Fatalf("decision_id 必须由**最小身份**派生：期望 %s，实际 %s", wantID, got)
+	}
+	if got := tm.got[0].GetSessionId(); got != "sess-1" {
+		t.Fatalf("遥测会话标识应是最小身份（此前是整段 Cookie），得到 %q", got)
+	}
+}
+
 func TestReceiver_ForwardsObservationToCore(t *testing.T) {
 	j, tm := &fakeJudge{}, &fakeTelemetry{}
 	r := newReceiver(j, tm)
@@ -110,9 +156,16 @@ func TestReceiver_ForwardsObservationToCore(t *testing.T) {
 	if obs.GetUserAgent() != "HeadlessChrome/120" {
 		t.Fatalf("User-Agent 应原样透传，得到 %q", obs.GetUserAgent())
 	}
-	// 头名归一化为小写，便于核心侧稳定取值。
-	if obs.GetHeaders()["cookie"] != "sid=abc" {
-		t.Fatalf("Cookie 应以小写键传递，得到 %+v", obs.GetHeaders())
+	// Cookie 头**不跨接缝**（方案 §5.2）：核心只需要最小身份值（session_hint）。
+	if _, forwarded := obs.GetHeaders()["cookie"]; forwarded {
+		t.Fatalf("整段 Cookie 头禁止跨接缝，得到 %+v", obs.GetHeaders())
+	}
+	if obs.GetSessionHint() != "abc" {
+		t.Fatalf("session_hint 应是约定的那一个 cookie 值，得到 %q", obs.GetSessionHint())
+	}
+	// 其它头仍归一化为小写键，便于核心侧稳定取值。
+	if obs.GetHeaders()["x-forwarded-for"] != "203.0.113.7, 10.0.0.1" {
+		t.Fatalf("其它头应以小写键传递，得到 %+v", obs.GetHeaders())
 	}
 }
 

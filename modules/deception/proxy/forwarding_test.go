@@ -266,7 +266,7 @@ func TestLargeUploadReachesUpstreamIntact(t *testing.T) {
 func TestObservationDoesNotCarryBody(t *testing.T) {
 	// 这条不需要真进程：它约束的是**我们构造观测的方式**（纯函数）。
 	req := httptest.NewRequest(http.MethodPost, "http://x/upload", strings.NewReader("SECRET-BODY"))
-	obs := observationFrom(req, false)
+	obs := observationFrom(req, false, DefaultSessionCookie)
 
 	raw, err := json.Marshal(obs)
 	if err != nil {

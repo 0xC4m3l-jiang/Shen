@@ -150,6 +150,11 @@ type Loader struct {
 	wl        contract.Whitelist
 	// injects 为 nil 表示**未配置**该段（与「配置为空数组」语义不同，见 Injects）。
 	injects *[]contract.InjectRule
+	// sessionCookie 是业务自身的 session cookie 名（`session.cookie_name`）。
+	//
+	// 它此前**只被校验、没被消费**（cmd/core 里写死 `"sid"`）—— 客户把名字改成 `PHPSESSID` 时，
+	// 核心仍在找 `sid`，会话身份会静默退化成 TLS 指纹 / IP+UA（口径与适配器也对不上）。
+	sessionCookie string
 }
 
 // Load 解析并校验配置，产出不可变快照。
@@ -243,6 +248,12 @@ func (d *configDoc) buildWhitelist() contract.Whitelist {
 // Shadow 报告是否处于影子模式。消费方是 cmd/core 的装配：
 // 影子时用 ShadowDecider（恒放行），关闭后才用 director 的真实三值（INT-11）。
 func (l *Loader) Shadow() bool { return l.shadow }
+
+// SessionCookieName 返回业务自身的 session cookie 名（`session.cookie_name`）。
+//
+// 消费方是 `cmd/core` 的装配（`session.New(...)`）与适配器侧的 `SHEN_PROXY_SESSION_COOKIE`：
+// **两侧必须是同一个名字**，否则适配器送来的 `session_hint` 会与核心的预期不同源 —— 启动日志会打印它。
+func (l *Loader) SessionCookieName() string { return l.sessionCookie }
 
 // Decoys 返回诱饵资产清单（数据）。消费方是 decoy 模块。
 func (l *Loader) Decoys(context.Context) ([]contract.DecoyAsset, error) {
@@ -818,12 +829,13 @@ func (d *configDoc) build(rules []contract.Rule) (*Loader, error) {
 			Mirage: *d.Thresholds.RouteMirage,
 			Block:  *d.Thresholds.Block,
 		},
-		shadow:    *d.Shadow,
-		ai:        d.buildAI(),
-		decoys:    d.buildDecoys(),
-		honeypots: d.buildHoneypots(),
-		wl:        d.buildWhitelist(),
-		injects:   d.buildInjects(),
+		shadow:        *d.Shadow,
+		sessionCookie: *d.Session.CookieName,
+		ai:            d.buildAI(),
+		decoys:        d.buildDecoys(),
+		honeypots:     d.buildHoneypots(),
+		wl:            d.buildWhitelist(),
+		injects:       d.buildInjects(),
 	}, nil
 }
 

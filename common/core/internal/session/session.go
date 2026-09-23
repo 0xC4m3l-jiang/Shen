@@ -22,8 +22,18 @@ type Extractor struct {
 func New(cookieName string) *Extractor { return &Extractor{CookieName: cookieName} }
 
 // Key 按优先级取会话身份：① 业务 cookie → ② TLS ticket → ③ 指纹（仅首跳）。
+//
+// 优先级**只在这里定义一次**（`INT-19`）：适配器送来的 `SessionHint` 只是「按名字取出的候选值」，
+// 最终用哪一级仍然由本函数说了算。
 func (e *Extractor) Key(_ context.Context, obs contract.Observation) (contract.SessionKey, error) {
 	// ① 业务自身的 session cookie —— 零痕迹（Agent 本来就会带）
+	//
+	// 两个来源（取先有的那个）：
+	//   · `SessionHint`：新适配器按 `session.cookie_name` 取出**并只送这一个值**（推荐，认证材料不跨接缝）；
+	//   · `headers["cookie"]` 里的同名项：旧适配器仍能工作（兼容路径，不删）。
+	if v := strings.TrimSpace(obs.SessionHint); v != "" {
+		return contract.SessionKey{ID: v, Source: contract.SourceBusinessCookie}, nil
+	}
 	if e.CookieName != "" {
 		if v := cookieValue(obs.Headers["cookie"], e.CookieName); v != "" {
 			return contract.SessionKey{ID: v, Source: contract.SourceBusinessCookie}, nil

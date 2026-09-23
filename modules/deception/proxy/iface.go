@@ -83,6 +83,10 @@ type Config struct {
 	// 且只改小页面（大响应原样流式透传）。
 	Injector Injector
 
+	// SessionCookie 是业务自身的 session cookie 名（**必须与核心的 `session.cookie_name` 一致**）。
+	// 空 = 默认 `sid`。适配器用它取出最小会话身份值（`session_hint`），并用于 decision_id 与变体选择。
+	SessionCookie string
+
 	// MirageResponseTimeout 是**引流后端**的响应头超时。0 时用默认值。
 	//
 	// 蜜罐挂死不能拖住客户端（NI-1）—— 超时后回落真实业务。

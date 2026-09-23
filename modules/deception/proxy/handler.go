@@ -54,6 +54,12 @@ type Handler struct {
 	// Window 是 decision_id 的时间窗（ST-10）。
 	Window caddy.Duration `json:"window,omitempty"`
 
+	// SessionCookie 是业务自身的 session cookie 名（**必须与核心的 `session.cookie_name` 一致**）。
+	//
+	// 为什么要它：会话身份的口径必须两端一致 —— 适配器用它取出**最小身份值**（只这一个 cookie 的值），
+	// 既用于 decision_id / 变体选择，也随观测送核心（`session_hint`）。空 = 用默认值 `sid`。
+	SessionCookie string `json:"session_cookie,omitempty"`
+
 	// MirageResponseTimeout 是**引流后端**的响应头超时。0 时用默认值。
 	MirageResponseTimeout caddy.Duration `json:"mirage_response_timeout,omitempty"`
 
@@ -318,7 +324,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	started := time.Now()
 	// decision_id 在**最前面**就派生好：白名单命中也要上报逐判定事件（图上要能看见这条分支），
 	// 而事件 id 就是 decision_id（幂等键，AR-11）。
-	id := decisionID(r, h.TrustXFF, time.Duration(h.Window), h.now())
+	// 会话身份：由适配器按约定的 cookie 名取出**最小身份值**（整段 Cookie 不参与、也不跨接缝）。
+	session := sessionHint(r, h.sessionCookieName())
+	id := decisionID(session, clientIP(r, h.TrustXFF), r.URL.Path, time.Duration(h.Window), h.now())
 	// 本地缓存的键**不是** decision_id：判定还看 method / Host / 查询串 / UA 与策略版本
 	// （ST-10 只约束 decision_id 的派生，与本地缓存键分开 —— 见 cache.go 的 cacheKey）。
 	key := cacheKey(id, r, h.policyRevision())
@@ -378,6 +386,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	executed, derr := h.dispatch(sw, r, next, act, backend)
 	h.reportRoute(r, id, act, routeInfo{executed: executed, backend: backend}, sw, started)
 	return derr
+}
+
+// sessionCookieName 返回生效的 session cookie 名（空 = 默认 `sid`）。
+//
+// 默认值与核心的 `config.example.yaml`（`session.cookie_name: sid`）一致：
+// 两边不一致时，`session_hint` 会取不到值、会话身份静默退化到 TLS/IP 指纹 ——
+// 因此核心启动日志会打印它用的名字，便于对账。
+func (h *Handler) sessionCookieName() string {
+	if v := strings.TrimSpace(h.SessionCookie); v != "" {
+		return v
+	}
+	return DefaultSessionCookie
 }
 
 // matchDecoy 在当前策略的**诱饵路由表**里做最长匹配（段边界 + 归一化，见 decoyroute.go）。
@@ -512,7 +532,7 @@ func (h *Handler) decide(r *http.Request, id string) (judgev1.Action, string, er
 	started := time.Now()
 	resp, err := h.judge.Judge(ctx, &judgev1.JudgeRequest{
 		DecisionId: id,
-		Observed:   observationFrom(r, h.TrustXFF),
+		Observed:   observationFrom(r, h.TrustXFF, h.sessionCookieName()),
 	})
 	if err != nil {
 		// 核心不可达 / 超时 —— 放行（NI-3 / NI-4）。

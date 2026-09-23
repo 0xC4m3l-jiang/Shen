@@ -123,10 +123,12 @@ func variantFor(session string, variants int) int {
 	return int(fnv1a(session) % uint32(variants))
 }
 
-// sessionKeyOf 取会话键：**Cookie 头原值**（与 `decisionID` 的会话分量同义：只读、不解析、不外传）。
+// sessionKeyOf 取会话键：**最小身份值**（与 `decisionID` 的会话分量**同一个来源**）。
 //
 // 空 Cookie 也合法：它只是一个会话值 —— 于是所有「没有 cookie 的请求」落同一个槽位（确定性优先）。
-func sessionKeyOf(r *http.Request) string { return r.Header.Get("Cookie") }
+func (h *Handler) sessionKeyOf(r *http.Request) string {
+	return sessionHint(r, h.sessionCookieName())
+}
 
 // ── 会话钉定（轮换只对新会话生效）────────────────────────────────────────────
 
@@ -265,7 +267,7 @@ func (h *Handler) contentFor(r *http.Request, idx *contentIndex) (contentBody, b
 	if !ok {
 		return contentBody{}, false
 	}
-	body, ok := entry[h.variantOfSession(sessionKeyOf(r), idx)]
+	body, ok := entry[h.variantOfSession(h.sessionKeyOf(r), idx)]
 	if !ok {
 		return contentBody{}, false
 	}

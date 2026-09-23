@@ -117,8 +117,12 @@ func run() error {
 	}
 	printDeception(ctx, surf.surface, surf.pool)
 
-	// CookieName 是业务自身的 session cookie 名（会话身份三级优先级的第 ① 级）。
-	sess := session.New("sid")
+	// 会话身份第 ① 级的 cookie 名**取自配置**（`session.cookie_name`）——
+	// 此前这里写死 `"sid"`，于是配置改了名也不生效、身份会静默退化到 TLS/IP 指纹。
+	// 适配器侧用 `SHEN_PROXY_SESSION_COOKIE` 取同一个名字（不一致时启动日志里能看出对不上）。
+	sessionCookie := loader.SessionCookieName()
+	log.Printf("会话身份：cookie 名=%q（第 ① 级；适配器侧 SHEN_PROXY_SESSION_COOKIE 必须是同一个名字）", sessionCookie)
+	sess := session.New(sessionCookie)
 	// 会话面具的密钥（观测面用；不设也能跑 —— 默认密钥只用于脱敏，不是秘密）。
 	// 为什么要可配：换密钥即切断观测库里的历史会话关联（轮换受控）。
 	sessionMaskKey := os.Getenv("SHEN_SESSION_MASK_KEY")

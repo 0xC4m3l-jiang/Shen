@@ -34,6 +34,16 @@ type Observation struct {
 	Query string
 	// QueryRaw 是客户端**原样发来**的查询串（未解码），供审计与「按编码形态匹配」的规则使用（`AR-31`）。
 	QueryRaw string
+	// SessionHint 是适配器按 `session.cookie_name` 取出的**最小会话身份值**（只有那一个 cookie 的值）。
+	//
+	// 为什么是「一个值」而不是整段 Cookie 头（方案 §5.2 / `FIX-5` 前半）：
+	//   · **隐私**：整段 Cookie 里可能有认证令牌、CSRF、其它应用的会话 —— 不该跨接缝，更不该进证据；
+	//   · **口径**：适配器「哪段 Cookie 算会话」与核心「按名取哪个 cookie」此前是两套，改用同一个值后，
+	//     `decision_id` 的会话分量、变体钉定、核心的会话键三处指的是**同一个东西**。
+	//
+	// 边界：**优先级仍由核心决定**（① 业务 cookie → ② TLS ticket → ③ 指纹兜底，`INT-19`）——
+	// 适配器只负责按约定的名字把候选值取出来（不做判定，`AR-2`）。
+	SessionHint string
 }
 
 // Field 取用于规则匹配的字段值；未知字段返回空串。

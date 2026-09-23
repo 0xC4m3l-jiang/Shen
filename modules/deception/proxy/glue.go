@@ -17,6 +17,9 @@ import (
 // 用一个不可能与引流后端名冲突的值，避免核心给的后端名恰好叫 origin。
 const targetOrigin = "\x00origin"
 
+// DefaultSessionCookie 是业务 session cookie 名的默认值（必须与核心 `session.cookie_name` 一致）。
+const DefaultSessionCookie = "sid"
+
 // maxInjectBytes 是注入缓冲上限：只改写小页面，大响应（下载 / 流式）原样透传。
 const maxInjectBytes = 1 << 20 // 1 MiB
 
@@ -84,21 +87,24 @@ func rawQueryOf(r *http.Request) string { return r.URL.RawQuery }
 //
 // 注意 INT-22：启用**误导处置**需要能读出请求体。那是阶段 2b 的事，
 // 且当前契约没有承载它的字段 —— 已登记为未决项。
-func observationFrom(r *http.Request, trustXFF bool) *judgev1.Observation {
+func observationFrom(r *http.Request, trustXFF bool, cookieName string) *judgev1.Observation {
 	headers := make(map[string]string, len(r.Header))
 	for k, v := range r.Header {
-		if len(v) > 0 {
+		// **Cookie 头不跨接缝**：认证材料留在适配器这一侧（方案 §5.2）。
+		// 核心需要的只是「按约定名字取出的最小身份」，它走 `session_hint`。
+		if len(v) > 0 && !strings.EqualFold(k, "Cookie") {
 			headers[strings.ToLower(k)] = v[0]
 		}
 	}
 	return &judgev1.Observation{
-		SourceIp:  clientIP(r, trustXFF),
-		UserAgent: r.Header.Get("User-Agent"),
-		Method:    r.Method,
-		Path:      r.URL.Path,
-		Query:     queryOf(r),
-		QueryRaw:  rawQueryOf(r),
-		Headers:   headers,
+		SourceIp:    clientIP(r, trustXFF),
+		UserAgent:   r.Header.Get("User-Agent"),
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		Query:       queryOf(r),
+		QueryRaw:    rawQueryOf(r),
+		SessionHint: sessionHint(r, cookieName),
+		Headers:     headers,
 	}
 }
 
@@ -159,18 +165,38 @@ func parsePrefixesFromList(list []string) ([]netip.Prefix, error) {
 // decisionID 按（来源标识, 会话, 路径, 时间窗）派生（ST-10）。
 // 同一组合得到同一 ID，以便核心按这个键做幂等与去重。
 //
-// 「会话」这里取 Cookie 头的原值 —— 只是读，不解析、不外传（INT-20）。
+// 「会话」这里取**最小身份值**（`sessionHint`：按约定的 cookie 名取出的那一个值）——
+// 不是整段 Cookie 头：整段里混着认证令牌与其它应用的会话，既不该进 ID/日志，也不该跨接缝（方案 §5.2）。
 //
 // 形态①的接收端（deception/mirror）有一份**同样语义**的实现。两处刻意不共享代码：
 // 适配器之间必须能各自独立部署（INT-5），而这段逻辑只有十几行且由 ST-10 固定；
 // 改其一时必须同时改另一处。
-func decisionID(r *http.Request, trustXFF bool, window time.Duration, now time.Time) string {
+func decisionID(session, clientIPAddr, path string, window time.Duration, now time.Time) string {
 	key := strings.Join([]string{
-		clientIP(r, trustXFF),
-		r.Header.Get("Cookie"),
-		r.URL.Path,
+		clientIPAddr,
+		session,
+		path,
 		strconv.FormatInt(now.Truncate(window).Unix(), 10),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:16])
+}
+
+// sessionHint 按 `SessionCookie` 取出**最小会话身份值**；没有这个名字的 cookie 时返回空串。
+//
+// 「空」是合法的（无 cookie 的请求）：核心会按 `INT-19` 的优先级退到 TLS 指纹 / IP+UA 指纹，
+// 适配器**不替它决定**（AR-2：判定只在核心）。
+//
+// 解析刻意与核心的 `session.cookieValue` 同口径：`;` 分隔、去空白、只取第一个同名项。
+func sessionHint(r *http.Request, cookieName string) string {
+	if strings.TrimSpace(cookieName) == "" {
+		return ""
+	}
+	for _, part := range strings.Split(r.Header.Get("Cookie"), ";") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && k == cookieName {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

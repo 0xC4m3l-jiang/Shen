@@ -199,6 +199,7 @@ func fromProto(in *judgev1.JudgeRequest) contract.JudgeRequest {
 	req.Observed.Path = obs.GetPath()
 	req.Observed.Query = obs.GetQuery()
 	req.Observed.QueryRaw = obs.GetQueryRaw()
+	req.Observed.SessionHint = obs.GetSessionHint()
 	req.Observed.TLSFingerprint = obs.GetTlsFingerprint()
 	req.Observed.Headers = obs.GetHeaders()
 	return req

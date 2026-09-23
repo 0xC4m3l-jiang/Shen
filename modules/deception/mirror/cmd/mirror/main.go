@@ -47,6 +47,8 @@ func run() error {
 		Judge:    judgev1.NewDeceptionJudgeClient(conn),
 		Report:   telemetryv1.NewDeceptionTelemetryClient(conn),
 		TrustXFF: true,
+		// 会话身份第 ① 级的 cookie 名：必须与核心的 `session.cookie_name` 一致。
+		SessionCookie: env("SHEN_MIRROR_SESSION_COOKIE", mirror.DefaultSessionCookie),
 	}
 
 	srv := &http.Server{

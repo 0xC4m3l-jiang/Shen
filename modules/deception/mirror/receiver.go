@@ -41,17 +41,48 @@ type TelemetryClient interface {
 // 它永远不让调用方失败：镜像形态下我们不在业务路径上，
 // 所以无论内部发生什么，都对镜像源返回 202。
 type Receiver struct {
-	Judge    JudgeClient
-	Report   TelemetryClient
-	Now      func() time.Time // 注入时钟，使 decision_id 可复现、可测
-	Window   time.Duration    // decision_id 的时间窗；同一窗口内同请求得同一 ID
-	TrustXFF bool             // 是否信任 X-Forwarded-For 取客户端 IP
+	Judge  JudgeClient
+	Report TelemetryClient
+	Now    func() time.Time // 注入时钟，使 decision_id 可复现、可测
+	Window time.Duration    // decision_id 的时间窗；同一窗口内同请求得同一 ID
+	// TrustXFF 是否信任 X-Forwarded-For 取客户端 IP。
+	TrustXFF bool
+	// SessionCookie 是业务自身的 session cookie 名（**必须与核心的 `session.cookie_name` 一致**）。
+	// 空 = 默认 `sid`。它决定「最小会话身份」怎么取（见 sessionHint）。
+	SessionCookie string
 }
 
 const (
 	defaultWindow = 60 * time.Second
 	judgeTimeout  = 3 * time.Second
+	// DefaultSessionCookie 是默认的 session cookie 名（与核心 `session.cookie_name` 的示例值一致）。
+	DefaultSessionCookie = "sid"
 )
+
+// sessionCookieName 返回生效的 cookie 名（空 = 默认值）。
+func (r *Receiver) sessionCookieName() string {
+	if v := strings.TrimSpace(r.SessionCookie); v != "" {
+		return v
+	}
+	return DefaultSessionCookie
+}
+
+// sessionHint 按约定的 cookie 名取出**最小会话身份值**（不是整段 Cookie 头，方案 §5.2）。
+//
+// 与形态③④（`deception/proxy`）的 `sessionHint` **同语义、各自实现**（适配器必须能独立部署，`INT-5`）；
+// 解析口径与核心的 `session.cookieValue` 一致（`;` 分隔、取第一个同名项、名字两侧空白不宽容）。
+func sessionHint(cookieHeader, cookieName string) string {
+	if strings.TrimSpace(cookieName) == "" {
+		return ""
+	}
+	for _, part := range strings.Split(cookieHeader, ";") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && k == cookieName {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
 
 func (r *Receiver) now() time.Time {
 	if r.Now != nil {
@@ -101,7 +132,8 @@ func (r *Receiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func (r *Receiver) observationFrom(req *http.Request) *judgev1.Observation {
 	headers := make(map[string]string, len(req.Header))
 	for k, v := range req.Header {
-		if len(v) > 0 {
+		// Cookie 头**不跨接缝**：核心只需要「按约定名字取出的最小身份」（session_hint）。
+		if len(v) > 0 && !strings.EqualFold(k, "Cookie") {
 			headers[lower(k)] = v[0]
 		}
 	}
@@ -111,13 +143,14 @@ func (r *Receiver) observationFrom(req *http.Request) *judgev1.Observation {
 	// 误导处置需要读 body（INT-22）是阶段 2b 的事，届时契约演进顺带加 body 字段。
 
 	return &judgev1.Observation{
-		SourceIp:  r.clientIP(req),
-		UserAgent: req.Header.Get("User-Agent"),
-		Method:    req.Method,
-		Path:      req.URL.Path,
-		Query:     queryOf(req),
-		QueryRaw:  rawQueryOf(req),
-		Headers:   headers,
+		SourceIp:    r.clientIP(req),
+		UserAgent:   req.Header.Get("User-Agent"),
+		Method:      req.Method,
+		Path:        req.URL.Path,
+		Query:       queryOf(req),
+		QueryRaw:    rawQueryOf(req),
+		SessionHint: sessionHint(req.Header.Get("Cookie"), r.sessionCookieName()),
+		Headers:     headers,
 	}
 }
 
@@ -171,11 +204,12 @@ func (r *Receiver) clientIP(req *http.Request) string {
 // decisionID 按（来源标识, 会话, 路径, 时间窗）派生，同一组合得到同一 ID，
 // 以便核心侧按这个键做幂等与去重。
 //
-// 「会话」这里取 Cookie 头的原值 —— 只是读，不是判定。
+// 「会话」这里取**最小身份值**（`session_hint`：按约定的 cookie 名取出的那一个值）——
+// 整段 Cookie 头既不进 ID，也不跨接缝（方案 §5.2）。
 func decisionID(obs *judgev1.Observation, window time.Duration, now time.Time) string {
 	key := strings.Join([]string{
 		obs.GetSourceIp(),
-		obs.GetHeaders()["cookie"],
+		obs.GetSessionHint(),
 		obs.GetPath(),
 		strconv.FormatInt(now.Truncate(window).Unix(), 10),
 	}, "\x00")
@@ -187,7 +221,8 @@ func (r *Receiver) reportEvent(ctx context.Context, req *judgev1.JudgeRequest, r
 	ev := &telemetryv1.TelemetryEvent{
 		EventId:   req.GetDecisionId(),
 		EventType: "request_observed",
-		SessionId: req.GetObserved().GetHeaders()["cookie"],
+		// 会话标识用**最小身份值**：此前这里是整段 Cookie 头，等于把认证材料写进遥测库（方案 §5.2）。
+		SessionId: req.GetObserved().GetSessionHint(),
 		Payload:   payloadBytes(req.GetObserved(), resp),
 		CreatedAt: timestamppb.New(r.now()),
 	}

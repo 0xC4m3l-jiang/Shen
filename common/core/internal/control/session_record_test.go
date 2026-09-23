@@ -58,6 +58,36 @@ func TestJudge_ObservationCarriesMaskedSessionID(t *testing.T) {
 	}
 }
 
+// TestJudge_UsesAdapterSessionHint 断言：适配器送来的**最小身份**（`session_hint`）决定会话，
+// 而 `headers["cookie"]` 里的其它内容不参与 —— 与适配器「按同一个 cookie 名取值」的口径对齐（FIX-5 前半）。
+func TestJudge_UsesAdapterSessionHint(t *testing.T) {
+	sink := &recordingSink{}
+	svc := NewJudgeService(&stubDecider{}, &stubSession{}, WithDecisionRecorder(sink))
+
+	if _, err := svc.Judge(context.Background(), &judgev1.JudgeRequest{
+		DecisionId: "d-hint",
+		Observed: &judgev1.Observation{
+			SourceIp:    "203.0.113.7",
+			Method:      "GET",
+			Path:        "/api/me",
+			SessionHint: "sess-from-adapter",
+			Headers:     map[string]string{"cookie": "sid=unused; auth=SECRET"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// stubSession 只是替身（它不看观测内容），这里断言的是**映射**：值确实进了内部请求。
+	if got := sink.last.DecisionID; got != "d-hint" {
+		t.Fatalf("判定记录应写好：%+v", sink.last)
+	}
+	if sink.last.SessionID == "" {
+		t.Fatal("会话面具必须非空（有 session_hint ⇒ 有身份）")
+	}
+	if strings.Contains(sink.last.SessionID, "SECRET") || strings.Contains(sink.last.SessionID, "sess-from-adapter") {
+		t.Fatalf("观测面不得出现原始身份值，得到 %q", sink.last.SessionID)
+	}
+}
+
 // TestJudge_NoMaskerLeavesSessionEmpty 断言没有 masker 时**宁可留空也不落原值**。
 //
 // 空串在契约里的含义是「身份未识别」（NI-1：不得编造）；把原值写进去才是事故。

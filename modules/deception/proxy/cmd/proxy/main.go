@@ -74,6 +74,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// 会话身份第 ① 级的 cookie 名：必须与核心的 `session.cookie_name` 一致（不一致时身份会退化到指纹）。
+	sessionCookie := env("SHEN_PROXY_SESSION_COOKIE", proxy.DefaultSessionCookie)
+
 	window, err := envDuration("SHEN_PROXY_WINDOW", defaultWindow)
 	if err != nil {
 		return err
@@ -102,6 +105,7 @@ func run() error {
 		DecisionTimeout: caddy.Duration(timeout),
 		CacheTTL:        caddy.Duration(cacheTTL),
 		Window:          caddy.Duration(window),
+		SessionCookie:   sessionCookie,
 		Shadow:          envBool("SHEN_PROXY_SHADOW", true),
 		LogRequests:     envBool("SHEN_PROXY_LOG_REQUESTS", false),
 		TrustXFF:        envBool("SHEN_PROXY_TRUST_XFF", false),
