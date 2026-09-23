@@ -1,4 +1,4 @@
-# Go 服务的**统一**构建：core / proxy / console 共用（用构建参数 SERVICE 指定入口）。
+# Go 服务的**统一**构建：core / proxy / console / web（Web 诱饵后端）共用（用构建参数 SERVICE 指定入口）。
 #
 # 为什么一个文件：三个服务是同一份 Go 模块的三个入口，构建步骤完全一致；
 # 拆成三份只会让「依赖升级」变成三处修改。
@@ -22,6 +22,8 @@ COPY common/api/ ./common/api/
 COPY common/core/ ./common/core/
 COPY modules/deception/ ./modules/deception/
 COPY modules/console/ ./modules/console/
+# 蜜罐层（②）也有 Go 代码（合成 Web 场景包 `modules/honeypot/web/`）—— 它同样按这个统一构建打包。
+COPY modules/honeypot/ ./modules/honeypot/
 COPY scripts/ ./scripts/
 # CGO_ENABLED=0：静态二进制，运行镜像不需要 libc。
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/app "${SERVICE}"

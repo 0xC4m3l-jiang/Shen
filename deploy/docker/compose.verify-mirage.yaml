@@ -16,6 +16,20 @@ services:
       SHEN_BLOCK_ENABLED: "true"
     volumes:
       - ../config/config.verify-mirage.yaml:/etc/shen/config.yaml:ro
+  # 合成 Web 管理台场景包（模块 honeypot-web）：独立后端，只在本档起。
+  # 它**不接生产认证、只用合成素材、不发起出站连接**；由诱饵路由（`decoys` 段）指过来。
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/go.Dockerfile
+      args: {SERVICE: ./modules/honeypot/web/cmd/web}
+    network_mode: service:core
+    depends_on: [core]
+    environment:
+      SHEN_WEB_LISTEN: "127.0.0.1:19090"   # 只监听本机（幻境后端不对宿主机暴露）
+      SHEN_WEB_SCENARIO: "atlas"
+    restart: unless-stopped
+
   proxy:
     environment:
       SHEN_PROXY_SHADOW: "false"      # 关闭影子：把判定真正执行出去（INT-11 只在首次上线要求影子）

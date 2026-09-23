@@ -129,6 +129,22 @@ decoys:
       enabled: true                    # 本档用于**验证诱饵路由**；默认配置里是 false（INT-11）
     # ② 故障不回源：后端指向一个**不可达**地址（127.0.0.1:1）——
     #    期望 502 且**绝不**回落到业务（方案 §9.2 的硬边界）。
+    # ③ 合成 Web 管理台场景包：`/admin` 专属路由 → 诱饵后端 decoy-web（模块 honeypot-web）。
+    #    断言方式：GET /admin/login 应返回**合成**登录页；DAG 上 executed=decoy。
+    - id: "admin-scenario"
+      kind: "bait"
+      path: "/admin"
+      content: "atlas-scenario"
+      backend: "decoy-web"
+      enabled: true
+    # 场景包的 JSON API 走**另一个前缀**（真实管理台就是这样：页面 `/admin`、接口 `/api/v1/admin`）。
+    # 路由归属是**按前缀**的 ⇒ 两个前缀都要显式登记（`/admin` 不覆盖 `/api/v1/admin`）。
+    - id: "admin-api-scenario"
+      kind: "bait"
+      path: "/api/v1/admin"
+      content: "atlas-scenario"
+      backend: "decoy-web"
+      enabled: true
     - id: "no-fallback"
       kind: "bait"
       path: "/portal/dead"
@@ -154,6 +170,11 @@ honeypots:
   - name: "dead-decoy"
     type: "nginx-admin"
     addr: "127.0.0.1:1"
+    enabled: true
+  # 合成 Web 管理台场景包（模块 honeypot-web，监听 19090）：本档的 `/admin` 诱饵路由指向它。
+  - name: "decoy-web"
+    type: "web-clone"
+    addr: "127.0.0.1:19090"
     enabled: true
 #  - name: "mirage"
 #    type: "ssh"

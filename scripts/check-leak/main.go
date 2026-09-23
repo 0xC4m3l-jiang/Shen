@@ -78,6 +78,8 @@ var responseSurfaceModules = map[string]string{
 	"control":        "gRPC 服务面（ST-7 禁止回显的强制点）",
 	"decoy":          "诱饵内容与投放片段（会被投放/上屏）",
 	"honeypot":       "幻境入口与后端池",
+	// 合成 Web 场景包：页面/API/错误页/cookie 名都会出现在对手屏幕上（OH-1 / OH-2 的核心适用面）。
+	"honeypot-web": "合成管理台场景包（页面与 API 直接上屏）",
 }
 
 // minModules 是解析结果的下限：低于它说明文档格式变了，**直接失败**而不是静默少扫。
