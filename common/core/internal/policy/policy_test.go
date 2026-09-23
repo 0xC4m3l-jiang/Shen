@@ -263,6 +263,88 @@ func TestWhitelistExposedToDirector(t *testing.T) {
 	}
 }
 
+// decoysBlock 造一段诱饵配置（方案 C01 的发布校验用）。
+func decoysBlock(assets string) string {
+	return "decoys:\n  assets:\n" + assets
+}
+
+// TestLoadValidatesDecoyPaths 断言诱饵路径的**发布条件**（方案 §9.2 / C01）：
+// 必须以 `/` 开头、必须已是归一化形态、同一路由不得登记两个资产。
+//
+// 为什么这些是发布条件而不是运行期宽容：匹配侧先把请求路径归一化（`path_norm` 同一口径），
+// 资产侧若带着 `..` 或重复斜杠，两边口径就不一致 —— 路由会「有时命中有时不命中」，
+// 而这类不一致在运行期几乎查不出来。
+func TestLoadValidatesDecoyPaths(t *testing.T) {
+	ok := decoysBlock(`    - id: "a"
+      kind: "developer_api"
+      path: "/portal/api/content"
+      enabled: true
+`)
+	l := mustLoad(t, validYAML+ok)
+	assets, err := l.Decoys(context.Background())
+	if err != nil || len(assets) == 0 {
+		t.Fatalf("合法诱饵资产应被装载：%v / %d 条", err, len(assets))
+	}
+
+	cases := []struct {
+		name  string
+		block string
+		want  string
+	}{
+		{
+			name: "路径不以 / 开头",
+			block: decoysBlock(`    - id: "a"
+      kind: "developer_api"
+      path: "portal/api"
+      enabled: true
+`),
+			want: "必须以 / 开头",
+		},
+		{
+			name: "路径未归一化（重复斜杠）",
+			block: decoysBlock(`    - id: "a"
+      kind: "developer_api"
+      path: "/portal//api"
+      enabled: true
+`),
+			want: "不是归一化形态",
+		},
+		{
+			name: "路径未归一化（点段）",
+			block: decoysBlock(`    - id: "a"
+      kind: "developer_api"
+      path: "/portal/../api"
+      enabled: true
+`),
+			want: "不是归一化形态",
+		},
+		{
+			name: "同一路由两个资产（冲突发布必须失败）",
+			block: decoysBlock(`    - id: "a"
+      kind: "developer_api"
+      path: "/portal/api"
+      enabled: true
+    - id: "b"
+      kind: "mcp"
+      path: "/portal/api"
+      enabled: true
+`),
+			want: "冲突",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Load(strings.NewReader(validYAML + c.block))
+			if err == nil {
+				t.Fatalf("应当拒绝，却装载成功")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("报错应指出原因 %q，实际：%v", c.want, err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsInvalidConfig(t *testing.T) {
 	cases := []struct {
 		name string

@@ -360,6 +360,7 @@ func (d *configDoc) validateDecoys() error {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(*d.Decoys.Assets))
+	assetPaths := make(map[string]string, len(*d.Decoys.Assets)) // 归一化路径 -> 资产 id
 	for i := range *d.Decoys.Assets {
 		a := (*d.Decoys.Assets)[i]
 		p := fmt.Sprintf("decoys.assets[%d]", i)
@@ -379,6 +380,19 @@ func (d *configDoc) validateDecoys() error {
 		if a.Path == nil || *a.Path == "" {
 			return fmt.Errorf("policy: %s.path 不能为空", p)
 		}
+		if !strings.HasPrefix(*a.Path, "/") {
+			return fmt.Errorf("policy: %s.path=%q 必须以 / 开头（诱饵路由是绝对路径）", p, *a.Path)
+		}
+		// 归一化形态是**发布条件**：匹配侧先归一化请求路径（方案 §9.2），
+		// 资产侧若带着 `..` / 重复斜杠，两边口径就不一致，路由会时灵时不灵。
+		if norm := contract.NormalizePath(*a.Path); norm != *a.Path {
+			return fmt.Errorf("policy: %s.path=%q 不是归一化形态（应写作 %q）", p, *a.Path, norm)
+		}
+		// 冲突发布**失败**：同一路由只能有一个资产（方案 C01 的验收判据）。
+		if prev, dup := assetPaths[*a.Path]; dup {
+			return fmt.Errorf("policy: %s.path=%q 与 assets[%s] 冲突 —— 同一路由只能登记一个资产", p, *a.Path, prev)
+		}
+		assetPaths[*a.Path] = *a.ID
 		if a.Enabled == nil {
 			return missing(p + ".enabled")
 		}

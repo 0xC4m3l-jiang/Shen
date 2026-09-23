@@ -26,6 +26,34 @@ func TestNormalizePath(t *testing.T) {
 	}
 }
 
+// TestPathSegmentPrefix 断言路径段边界的判定（规则匹配与诱饵路由共用这一份定义）。
+//
+// 这是「前缀」类规则最容易错的地方：纯字符串前缀会把 `/.gitignore` 当成 `/.git` 之下。
+func TestPathSegmentPrefix(t *testing.T) {
+	cases := []struct {
+		got, want string
+		ok        bool
+	}{
+		{"/.git", "/.git", true},
+		{"/.git/config", "/.git", true},
+		{"/.gitignore", "/.git", false}, // 典型误伤
+		{"/.gitlab/ci.yml", "/.git", false},
+		{"/admin", "/admin", true},
+		{"/admin/login", "/admin", true},
+		{"/administrator", "/admin", false}, // 典型误伤
+		{"/admin/", "/admin", true},         // want 带尾斜杠：同一段
+		{"/adminx", "/admin/", false},
+		{"/", "/", true},
+		{"", "/", true}, // 根之下：空路径也当根（与 path.Clean 的语义一致）
+		{"/anything", "", false},
+	}
+	for _, c := range cases {
+		if got := PathSegmentPrefix(c.got, c.want); got != c.ok {
+			t.Errorf("PathSegmentPrefix(%q, %q) = %v，期望 %v", c.got, c.want, got, c.ok)
+		}
+	}
+}
+
 // TestFieldPathNormIsDerivedNotStored 断言 `path_norm` 是**派生**字段：它跟着 Path 走，不是另一份状态。
 func TestFieldPathNormIsDerivedNotStored(t *testing.T) {
 	o := Observation{Path: "/static/../.git/config"}

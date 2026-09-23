@@ -160,7 +160,8 @@ func TestDeceptionChainEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造诱饵面失败：%v", err)
 	}
-	hit, ok, err := surface.Match(ctx, "/portal/api/content?ticket=abc")
+	// 只传**路径**：查询串不属于路径（`Match` 对含 `?` 的输入会显式报错，见 decoy 的单测）。
+	hit, ok, err := surface.Match(ctx, "/portal/api/content")
 	if err != nil {
 		t.Fatalf("匹配诱饵失败：%v", err)
 	}

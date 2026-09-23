@@ -149,6 +149,66 @@ func TestVariantRejectsEmptySession(t *testing.T) {
 	}
 }
 
+// TestMatchUsesSegmentBoundaryAndNormalization 断言诱饵匹配的两条硬要求（方案 §9.2）：
+//
+//	· 路径段边界：`/.git` **不**命中 `/.gitignore`；`/admin` **不**命中 `/administrator`；
+//	· 归一化：`/static/../.git/config` 也命中 `/.git`（加一层无害前缀绕不开）。
+func TestMatchUsesSegmentBoundaryAndNormalization(t *testing.T) {
+	ctx := context.Background()
+	e := mustEngine(t, newStub(asset("git", contract.DecoyDeveloperAPI, "/.git", true)))
+
+	hit := []string{"/.git", "/.git/config", "/.git/objects/pack/x.pack", "/static/../.git/config"}
+	for _, p := range hit {
+		if _, ok, err := e.Match(ctx, p); err != nil || !ok {
+			t.Errorf("%q 应命中 /.git 诱饵（err=%v ok=%v）", p, err, ok)
+		}
+	}
+	miss := []string{"/.gitignore", "/.gitlab/ci.yml", "/administrator", "/"}
+	for _, p := range miss {
+		if got, ok, _ := e.Match(ctx, p); ok {
+			t.Errorf("%q **不得**命中诱饵，却命中了 %q", p, got.ID)
+		}
+	}
+	if _, ok, _ := e.Match(ctx, ""); ok {
+		t.Error("空路径不得命中任何诱饵")
+	}
+}
+
+// TestMatchRejectsRequestTarget 断言 `Match` 只接受**路径**：
+// 传进「路径 + 查询串」时**报错**，而不是自行截断（方案 §9.2 禁止静默解释匹配歧义）。
+//
+// 为什么这条要有：调用方很容易顺手把请求目标整串传进来（集成测试就这么干过），
+// 自行截断会让「按路径匹配」这条契约在实现里变成「按路径 + 有时候按别的」。
+func TestMatchRejectsRequestTarget(t *testing.T) {
+	ctx := context.Background()
+	e := mustEngine(t, newStub(asset("a", contract.DecoyDeveloperAPI, "/portal/api/content", true)))
+
+	if _, ok, err := e.Match(ctx, "/portal/api/content?ticket=abc"); err == nil || ok {
+		t.Fatalf("含查询串的输入必须报错（不得静默匹配），得到 ok=%v err=%v", ok, err)
+	}
+	if _, ok, err := e.Match(ctx, "/portal/api/content"); err != nil || !ok {
+		t.Fatalf("纯路径应正常命中：ok=%v err=%v", ok, err)
+	}
+}
+
+// TestMatchPrefersLongestSegment 断言嵌套资产按最长匹配优先（`/.git/config` 胜过 `/.git`）。
+func TestMatchPrefersLongestSegment(t *testing.T) {
+	e := mustEngine(t, newStub(
+		asset("git", contract.DecoyDeveloperAPI, "/.git", true),
+		asset("git-config", contract.DecoyBait, "/.git/config", true),
+	))
+	got, ok, err := e.Match(context.Background(), "/.git/config")
+	if err != nil || !ok {
+		t.Fatalf("应命中：%v / %v", ok, err)
+	}
+	if got.ID != "git-config" {
+		t.Fatalf("最长匹配应胜出（期望 git-config），得到 %q", got.ID)
+	}
+	if other, ok, _ := e.Match(context.Background(), "/.git/HEAD"); !ok || other.ID != "git" {
+		t.Fatalf("非重叠路径应回到较短的资产，得到 %q（ok=%v）", other.ID, ok)
+	}
+}
+
 // ── 投放片段 ───────────────────────────────────────────────────────────────
 
 func TestPlacementsPerKind(t *testing.T) {

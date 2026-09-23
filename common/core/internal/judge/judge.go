@@ -66,7 +66,7 @@ func match(o contract.Observation, m contract.Match) bool {
 	case "prefix":
 		return strings.HasPrefix(got, m.Value)
 	case "path_prefix":
-		return pathSegmentPrefix(got, m.Value)
+		return contract.PathSegmentPrefix(got, m.Value)
 	case "contains":
 		return strings.Contains(got, m.Value)
 	default:
@@ -74,19 +74,6 @@ func match(o contract.Observation, m contract.Match) bool {
 	}
 }
 
-// pathSegmentPrefix 判断 got 是否位于路径段 m 之下：`got == m` 或 `got` 以 `m + "/"` 开头。
-//
-// 尾斜杠要归一：`/admin/` 与 `/admin` 是同一段（否则“带尾斜杠的配置值”会静默永不命中）。
-// 值为空时一律不命中 —— 空路径前缀等于“什么都命中”，那不是规则，是漏洞。
-func pathSegmentPrefix(got, m string) bool {
-	if m == "" {
-		return false
-	}
-	seg := strings.TrimSuffix(m, "/")
-	if seg == "" { // 值就是 "/"：只命中根
-		return got == "/" || got == ""
-	}
-	return got == seg || strings.HasPrefix(got, seg+"/")
-}
+// 路径段边界的判定在 `contract.PathSegmentPrefix`（规则匹配与诱饵路由共用一份定义）。
 
 var _ Judge = (*Engine)(nil)

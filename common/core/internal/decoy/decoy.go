@@ -41,23 +41,42 @@ func (e *Engine) Enabled(ctx context.Context) ([]contract.DecoyAsset, error) {
 	return out, nil
 }
 
-// Match 按最长前缀匹配诱饵路径。
+// Match 按**归一化路径上的路径段边界**做最长匹配（方案 §9.2）。
+//
+// 两条硬要求（都是踩过的边界）：
+//   - **归一化**：请求路径先 `path.Clean`（与规则侧的 `path_norm` 同一口径）——
+//     否则 `/static/../.git/config` 这类「加一层无害前缀」会绕开诱饵路由；
+//   - **路径段边界**：`/.git` 命中 `/.git` 与 `/.git/config`，**不**命中 `/.gitignore`；
+//     `/admin` 不命中 `/administrator`（纯字符串前缀会把它们混在一起）。
+//
+// 嵌套资产按最长匹配优先（`/.git` 与 `/.git/config` 同时登记时后者胜出）。
 func (e *Engine) Match(ctx context.Context, path string) (contract.DecoyAsset, bool, error) {
 	assets, err := e.Enabled(ctx)
 	if err != nil {
 		return contract.DecoyAsset{}, false, err
 	}
+	// 只接受**路径**：查询串是另一件事（与规则侧的 `path` / `query` 分家同一口径）。
+	// 混在一起时**报错**而不是自行截断 —— 自行截断就是「静默解释匹配歧义」（方案 §9.2 禁止）。
+	if strings.Contains(path, "?") {
+		return contract.DecoyAsset{}, false, fmt.Errorf(
+			"decoy: Match 只接受路径（%q 含查询串）—— 请传 path，查询串走 query 字段", path)
+	}
+	req := contract.NormalizePath(path)
+	if req == "" {
+		return contract.DecoyAsset{}, false, nil
+	}
 	var best contract.DecoyAsset
-	found := false
+	bestLen := -1
 	for _, a := range assets {
-		if a.Path == "" || !strings.HasPrefix(path, a.Path) {
+		ap := contract.NormalizePath(a.Path)
+		if ap == "" || !contract.PathSegmentPrefix(req, ap) {
 			continue
 		}
-		if !found || len(a.Path) > len(best.Path) {
-			best, found = a, true
+		if len(ap) > bestLen {
+			best, bestLen = a, len(ap)
 		}
 	}
-	return best, found, nil
+	return best, bestLen >= 0, nil
 }
 
 // Variant 由会话键派生（纯函数）：同会话恒同变体，不同会话可不同。

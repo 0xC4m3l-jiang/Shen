@@ -17,6 +17,8 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"google.golang.org/grpc"
 
+	"github.com/caddyserver/caddy/v2"
+
 	judgev1 "shen/common/api/judge/v1"
 	telemetryv1 "shen/common/api/telemetry/v1"
 )
@@ -103,6 +105,21 @@ var noopNext caddyhttp.Handler = caddyhttp.HandlerFunc(func(http.ResponseWriter,
 
 // newTestHandler 用 Config（transport-agnostic 视图）+ 替身构造一个 Handler，
 // 后端用 fakeBackend（不依赖真实 reverse_proxy / 核心）。
+// prefixStrings 把 netip.Prefix 列表转成 Handler 的 JSON 形态（`whitelist` 字段是 []string）。
+//
+// 为什么两份都要设：`whitelist` 是解析后的匹配用副本，`Whitelist` 是「配置原样」——
+// helper 只设一份时，`Validate()` 之类的自检就会看到与生产不同的配置。
+func prefixStrings(list []netip.Prefix) []string {
+	if list == nil {
+		return nil
+	}
+	out := make([]string, 0, len(list))
+	for _, p := range list {
+		out = append(out, p.String())
+	}
+	return out
+}
+
 func newTestHandler(t *testing.T, cfg Config, judge JudgeClient, report TelemetryClient) *Handler {
 	t.Helper()
 	if judge == nil {
@@ -130,9 +147,23 @@ func newTestHandler(t *testing.T, cfg Config, judge JudgeClient, report Telemetr
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// ⚠️ 这里必须把 Config 的每一项都透传进 Handler（方案 §11.2 的「先修 helper」）。
+	// 曾经漏掉 `DecisionTimeout` / `Window`：于是单测里 `context.WithTimeout(ctx, 0)`（死线已过）
+	// 与 `Truncate(0)`（时间窗形同不存在）—— 用例看着通过，跑的却不是被测参数。
+	// 回归用例：`TestHandlerHarnessPropagatesConfig`。
 	h := &Handler{
-		Shadow:    cfg.Shadow,
-		TrustXFF:  cfg.TrustXFF,
+		Upstream:              cfg.Upstream,
+		Mirage:                cfg.Mirage,
+		Whitelist:             prefixStrings(cfg.Whitelist),
+		DecisionTimeout:       caddy.Duration(cfg.DecisionTimeout),
+		CacheTTL:              caddy.Duration(cfg.CacheTTL),
+		Window:                caddy.Duration(cfg.Window),
+		MirageResponseTimeout: caddy.Duration(cfg.MirageResponseTimeout),
+		Shadow:                cfg.Shadow,
+		TrustXFF:              cfg.TrustXFF,
+		ReportQueue:           cfg.ReportQueue,
+		CacheMaxEntries:       cacheCap,
+
 		whitelist: cfg.Whitelist,
 		judge:     judge,
 		report:    report,

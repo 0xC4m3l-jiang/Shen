@@ -14,7 +14,7 @@ from analysis.telemetry import (
     TelemetryUnavailable,
     WireEvent,
 )
-from analysis.worker import Checkpoint, EvidenceCache, run_once
+from analysis.worker import RULES_GENERATOR, Checkpoint, EvidenceCache, run_once
 
 
 def decision(
@@ -191,6 +191,52 @@ def test_worker_checkpoint_does_not_advance_on_failure() -> None:
     run = run_once(FailingPort(), checkpoint=checkpoint)
     assert run.errors, "遥测不可达必须如实记录"
     assert checkpoint.since == "2026-09-19T09:00:00+08:00", "失败的一轮不得推进游标"
+
+
+class CountingModelClient:
+    """最小模型替身：**只数调用**（返回一段固定 JSON，接受与否不影响计数）。
+
+    为什么用它做预算断言：预算关心的是「调用了几次」，不是「模型答得好不好」。
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def complete(self, prompt: str, *, session_id: str, timeout: float) -> str:
+        del prompt, timeout
+        self.calls.append(session_id)
+        return json.dumps(
+            {"category": "reconnaissance", "confidence": 0.5, "evidence_ids": [], "stages": []}
+        )
+
+
+def test_worker_bounds_model_calls_per_session() -> None:
+    """模型调用预算（方案 T23）：每个会话**三步各至多一次**，且调用归到各自会话。
+
+    为什么这条重要：模型路径失败在近线链路里是**设计内的降级**（回落规则版）。
+    任何「失败后重试」「为了更准再问一次」都会把一个会话的调用量变成不可预测 ——
+    而预算不可预测就意味着成本与延迟不可预测（近线同样是生产资源）。
+    """
+    port = InMemoryTelemetry(
+        [
+            decision("e-1", "/.git/config", session="s-1"),
+            decision("e-2", "/.git/config", session="s-2", at="2026-09-19T10:00:01+08:00"),
+        ]
+    )
+    client = CountingModelClient()
+    run = run_once(port, now="2026-09-19T10:00:30+08:00", client=client)
+
+    assert len(run.sessions) == 2
+    assert len(client.calls) == len(run.sessions) * 3, (
+        f"每个会话至多三次模型调用（意图/链/策略），实际 {len(client.calls)} 次"
+    )
+    assert set(client.calls) == {s.session_id for s in run.sessions}, (
+        "每次调用都必须归到某个会话（否则无法按会话核算成本）"
+    )
+    # 结论一定由**某一条路**产出，且如实标注 —— 不管模型那一路是否被接受（AR-15）。
+    for session in run.sessions:
+        assert session.intent_generator in (RULES_GENERATOR, "model-v1")
+        assert session.intent is not None, "意图结论不得为空（回落也必须产出规则版）"
 
 
 def test_worker_reports_window_gap() -> None:

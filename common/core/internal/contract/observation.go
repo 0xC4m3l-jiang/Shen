@@ -3,6 +3,7 @@ package contract
 import (
 	"net/netip"
 	"path"
+	"strings"
 )
 
 // JudgeRequest 是适配器经接缝 S1（适配器 ↔ 核心的 gRPC）送入核心的判定请求。
@@ -62,6 +63,24 @@ func (o Observation) Field(name string) string {
 	default:
 		return ""
 	}
+}
+
+// PathSegmentPrefix 判断 got 是否位于路径段 want 之下：`got == want` 或 `got` 以 `want + "/"` 开头。
+//
+// 为什么要有它（而不只是 `strings.HasPrefix`）：纯字符串前缀会把 `/.gitignore` 当成 `/.git` 之下，
+// 也会把 `/administrator` 当成 `/admin` 之下 —— 规则匹配与诱饵路由都踩过这类边界（方案 §9.2 明确要求“前缀必须是路径段边界”）。
+//
+// 两条边界：尾斜杠先归一（`/admin/` 与 `/admin` 是同一段）；空值一律不命中
+// （空前缀等于「什么都命中」，那不是规则，是漏洞）。
+func PathSegmentPrefix(got, want string) bool {
+	if want == "" {
+		return false
+	}
+	seg := strings.TrimSuffix(want, "/")
+	if seg == "" { // want 就是 "/"：只命中根
+		return got == "/" || got == ""
+	}
+	return got == seg || strings.HasPrefix(got, seg+"/")
 }
 
 // NormalizePath 把路径归一化成**匹配视图**：去点段（`.` / `..`）、合并重复斜杠、去掉尾斜杠。
