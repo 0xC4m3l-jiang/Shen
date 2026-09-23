@@ -92,4 +92,31 @@ type Config struct {
 	// 蜜罐挂死不能拖住客户端（NI-1）—— 超时后回落真实业务。
 	// 业务侧**不设**此超时：慢接口是业务自己的行为。
 	MirageResponseTimeout time.Duration
+
+	// ── 以下与第二轮检验的加固项一一对应（N2 / N6 / W4 / 后端健康）──────────────
+	//
+	// 它们都是**单测能观察到的行为参数**，因此必须进 Config 并由 helper 透传 ——
+	// 否则用例只能靠直接赋 Handler 字段绕过脚手架，`TestHandlerHarnessPropagatesConfig`
+	// 也就盯不住"新增字段忘了接线"这一类缺陷（FIX/N9 的教训）。
+
+	// DegradedCacheTTL 是**判定失败**时降级缓存的独立短预算（N2）。0 = 默认 1s（且不超过 CacheTTL）。
+	DegradedCacheTTL time.Duration
+
+	// DecoyLease 是诱饵路由撤销后的**搜索碑租约**（N6）。0 = 默认 24h；**负数 = 永久**。
+	DecoyLease time.Duration
+
+	// ForwardCredentials 为真时把认证材料原样转发给幻境。默认 false（剥离，W4）。
+	ForwardCredentials bool
+
+	// BackendHealthInterval 是幻境后端健康探针的间隔。0 = 没配 ⇒ 默认 30s；**负数 = 显式关闭**。
+	BackendHealthInterval time.Duration
+
+	// BackendHealthTimeout 是单次探测超时。0 = 默认 1s。
+	BackendHealthTimeout time.Duration
+
+	// LogRequests 打开**逐请求**定位日志（默认关：观测面已经记录每一次判定）。
+	LogRequests bool
+
+	// InjectContent 是 AI 欺骗内容的**本地兜底开关**（与策略面的 inject_enabled 取与，默认 false）。
+	InjectContent bool
 }

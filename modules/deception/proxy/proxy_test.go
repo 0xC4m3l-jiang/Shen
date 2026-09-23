@@ -164,6 +164,15 @@ func newTestHandler(t *testing.T, cfg Config, judge JudgeClient, report Telemetr
 		TrustXFF:              cfg.TrustXFF,
 		ReportQueue:           cfg.ReportQueue,
 		CacheMaxEntries:       cacheCap,
+		LogRequests:           cfg.LogRequests,
+		InjectContent:         cfg.InjectContent,
+
+		// 第二轮检验新增的行为参数（N2 / N6 / W4 / 后端健康）：
+		DegradedCacheTTL:      caddy.Duration(cfg.DegradedCacheTTL),
+		DecoyLease:            caddy.Duration(cfg.DecoyLease),
+		ForwardCredentials:    cfg.ForwardCredentials,
+		BackendHealthInterval: caddy.Duration(cfg.BackendHealthInterval),
+		BackendHealthTimeout:  caddy.Duration(cfg.BackendHealthTimeout),
 
 		whitelist: cfg.Whitelist,
 		judge:     judge,
