@@ -29,9 +29,11 @@ type recordingSource struct {
 	lastBodyLn int
 }
 
-func (s *recordingSource) currentInjector() Injector { return s.inj }
+func (s *recordingSource) currentInjector(*remoteState) Injector { return s.inj }
 
-func (s *recordingSource) contentInjectionReady() (bool, *contentIndex) { return s.ready, s.idx }
+func (s *recordingSource) contentInjectionReady(*remoteState) (bool, *contentIndex) {
+	return s.ready, s.idx
+}
 
 func (s *recordingSource) injectContent(_ *http.Request, _ *contentIndex, contentType string, body []byte) ([]byte, string, bool) {
 	s.callCount++

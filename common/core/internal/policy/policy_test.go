@@ -264,6 +264,164 @@ func TestWhitelistExposedToDirector(t *testing.T) {
 }
 
 // decoysBlock 造一段诱饵配置（方案 C01 的发布校验用）。
+// ── W7：诱饵路由的**归属声明**（hosts）─────────────────────────────────────
+//
+// 为什么路径归属必须带主机名：只按 Path 的话，「我拥有 /admin」这句话对**所有**主机成立 ——
+// 真实站点本来就有 /admin 时，我们会在没有任何声明的情况下把它的路径接走。
+func TestLoadRequiresHostsForEnabledDecoys(t *testing.T) {
+	missing := decoysBlock(`    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      backend: "mirage"
+      enabled: true
+`) + `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	if _, err := Load(strings.NewReader(validYAML + missing)); err == nil {
+		t.Fatal("启用中的诱饵缺 hosts 必须装载失败（W7：路径归属要有主体）")
+	} else if !strings.Contains(err.Error(), "hosts") {
+		t.Fatalf("报错应指向 hosts 字段，实际：%v", err)
+	}
+
+	// 单级主机名（`localhost` / 内网短名）是合法声明：内网部署里最常见的形态。
+	single := decoysBlock(`    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      hosts: ["localhost"]
+      backend: "mirage"
+      enabled: true
+`) + `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	mustLoad(t, validYAML+single)
+
+	// 未启用时允许留空（影子期先登记路径，等归属确认再打开）。
+	disabled := decoysBlock(`    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      enabled: false
+`)
+	mustLoad(t, validYAML+disabled)
+}
+
+func TestLoadRejectsUnscopedHostPatterns(t *testing.T) {
+	cases := []struct {
+		name  string
+		hosts string
+	}{
+		{"裸通配", `["*"]`},
+		{"只有通配前缀", `["*."]`},
+		{"通配过宽（顶层域）", `["*.com"]`},
+		{"带空格或非法字符", `["bad host"]`},
+		{"重复声明", `["a.example", "A.example"]`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			block := decoysBlock(`    - id: "d1"
+      kind: "developer_api"
+      path: "/portal/api"
+      hosts: `+c.hosts+`
+      backend: "mirage"
+      enabled: true
+`) + `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+			if _, err := Load(strings.NewReader(validYAML + block)); err == nil {
+				t.Fatalf("hosts=%s 必须被拒绝（归属声明不能是模糊的）", c.hosts)
+			}
+		})
+	}
+}
+
+// TestLoadRejectsNestedOwnershipOnSameHost：同一主机上的归属不得互相包含 ——
+// `/admin` 与 `/admin/users` 同时登记时，最长匹配会一直赢，但"谁该接管"没有明确答案，属于配置错误。
+func TestLoadRejectsNestedOwnershipOnSameHost(t *testing.T) {
+	nested := decoysBlock(`    - id: "outer"
+      kind: "bait"
+      path: "/admin"
+      hosts: ["console.example"]
+      backend: "mirage"
+      enabled: true
+    - id: "inner"
+      kind: "bait"
+      path: "/admin/users"
+      hosts: ["console.example"]
+      backend: "mirage"
+      enabled: true
+`) + `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	if _, err := Load(strings.NewReader(validYAML + nested)); err == nil {
+		t.Fatal("同主机上的嵌套归属必须装载失败")
+	} else if !strings.Contains(err.Error(), "嵌套") {
+		t.Fatalf("报错应说明是嵌套归属，实际：%v", err)
+	}
+
+	// 不同主机上的同名/嵌套路径是**合法**的（多站点各归各的）——正样本，证明上面的拒绝不是"任何两条都拒"。
+	distinct := decoysBlock(`    - id: "a-site"
+      kind: "bait"
+      path: "/admin"
+      hosts: ["a.example"]
+      backend: "mirage"
+      enabled: true
+    - id: "b-site"
+      kind: "bait"
+      path: "/admin"
+      hosts: ["b.example"]
+      backend: "mirage"
+      enabled: true
+`) + `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	mustLoad(t, validYAML+distinct)
+}
+
+// TestDecoyHostsAreNormalized：大小写 / 端口 / 尾点统一，通配保留。
+func TestDecoyHostsAreNormalized(t *testing.T) {
+	block := decoysBlock(`    - id: "d1"
+      kind: "bait"
+      path: "/admin"
+      hosts: ["Console.Example:8443", "*.Portal.Example.", "127.0.0.1"]
+      backend: "mirage"
+      enabled: true
+`) + `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	l := mustLoad(t, validYAML+block)
+	assets, err := l.Decoys(context.Background())
+	if err != nil || len(assets) != 1 {
+		t.Fatalf("载入失败：%v / %d", err, len(assets))
+	}
+	want := []string{"*.portal.example", "127.0.0.1", "console.example"}
+	got := assets[0].Hosts
+	if len(got) != len(want) {
+		t.Fatalf("hosts 条数应为 %d，实际 %v", len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hosts 应归一化并排序：want %v got %v", want, got)
+		}
+	}
+}
+
 func decoysBlock(assets string) string {
 	return "decoys:\n  assets:\n" + assets
 }
@@ -278,6 +436,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 	ok := decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal/api/content"
+      hosts: ["svc.example"]
       backend: "mirage"
       enabled: true
 `)
@@ -302,6 +461,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "portal/api"
+      hosts: ["svc.example"]
       backend: "mirage"
       enabled: true
 `),
@@ -312,6 +472,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal//api"
+      hosts: ["svc.example"]
       backend: "mirage"
       enabled: true
 `),
@@ -322,6 +483,7 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal/../api"
+      hosts: ["svc.example"]
       backend: "mirage"
       enabled: true
 `),
@@ -332,11 +494,13 @@ func TestLoadValidatesDecoyPaths(t *testing.T) {
 			block: decoysBlock(`    - id: "a"
       kind: "developer_api"
       path: "/portal/api"
+      hosts: ["svc.example"]
       backend: "mirage"
       enabled: true
     - id: "b"
       kind: "mcp"
       path: "/portal/api"
+      hosts: ["svc.example"]
       backend: "mirage"
       enabled: true
 `),

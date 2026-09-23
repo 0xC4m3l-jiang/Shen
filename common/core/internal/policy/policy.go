@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -117,12 +118,14 @@ type decoysDoc struct {
 }
 
 type decoyAssetDoc struct {
-	ID      *string `yaml:"id"`
-	Kind    *string `yaml:"kind"`
-	Path    *string `yaml:"path"`
-	Content *string `yaml:"content"`
-	Backend *string `yaml:"backend"`
-	Enabled *bool   `yaml:"enabled"`
+	ID   *string `yaml:"id"`
+	Kind *string `yaml:"kind"`
+	Path *string `yaml:"path"`
+	// Hosts 是归属声明（`W7`）：启用中的资产必须至少声明一条主机名。
+	Hosts   *[]string `yaml:"hosts"`
+	Content *string   `yaml:"content"`
+	Backend *string   `yaml:"backend"`
+	Enabled *bool     `yaml:"enabled"`
 }
 
 // honeypotDoc 是幻境后端池的一项（逻辑名 → 具体蜜罐实例）。
@@ -378,6 +381,80 @@ func (d *configDoc) validateDecoyBackends() error {
 	return nil
 }
 
+// decoyHosts 校验并归一化资产的归属声明（`W7`）。
+//
+// 规则（简单到能被审计）：
+//   - 启用中的资产**必须**至少一条；未启用的可以留空（影子期只登记路径）；
+//   - 形态只允许两种：精确主机名，或 `*.` 开头的前缀通配（禁止裸 `*` —— 那等于对所有主机宣示所有权）；
+//   - 只允许字母/数字/连字符/点，长度 ≤ 253；统一小写，去掉尾点与端口。
+func decoyHosts(prefix string, a decoyAssetDoc) ([]string, error) {
+	enabled := a.Enabled != nil && *a.Enabled
+	if a.Hosts == nil || len(*a.Hosts) == 0 {
+		if enabled {
+			return nil, fmt.Errorf(
+				"policy: %s.hosts 不能为空 —— 启用中的诱饵资产必须声明它**拥有的主机名**（W7：路径归属要有主体，否则等于对所有主机宣示所有权）",
+				prefix)
+		}
+		return nil, nil
+	}
+	out := make([]string, 0, len(*a.Hosts))
+	seen := map[string]struct{}{}
+	for i, raw := range *a.Hosts {
+		h, err := normalizeHostPattern(raw)
+		if err != nil {
+			return nil, fmt.Errorf("policy: %s.hosts[%d]=%q %w", prefix, i, raw, err)
+		}
+		if _, dup := seen[h]; dup {
+			return nil, fmt.Errorf("policy: %s.hosts[%d]=%q 重复", prefix, i, raw)
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// normalizeHostPattern 归一化一条主机声明（导出给适配器侧同一口径使用不必要 —— 那里只做匹配）。
+func normalizeHostPattern(raw string) (string, error) {
+	h := strings.ToLower(strings.TrimSpace(raw))
+	h = strings.TrimSuffix(h, ".")
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host // 允许写法里带端口，匹配时不看端口
+	}
+	if h == "" {
+		return "", errors.New("为空")
+	}
+	if h == "*" {
+		return "", errors.New("裸 * 不被接受（那是对所有主机宣示所有权）—— 用精确主机名或 *.domain 形态")
+	}
+	body := strings.TrimPrefix(h, "*.")
+	if body == "" {
+		return "", errors.New("通配缺少域名（应为 *.example.com）")
+	}
+	if strings.HasPrefix(h, "*.") {
+		// 通配必须至少覆盖两级（`*.example.com` ✓ / `*.com` ✗）：后者等于宣告一个顶级域下的一切主机。
+		if labels := strings.Count(body, "."); labels < 1 {
+			return "", fmt.Errorf("通配过宽：%q 至少要写成 *.example.com（顶层域的一切主机不能归一个资产所有）", h)
+		}
+	}
+	// 单级主机名（`localhost` / 内网短名）是**合法**的：它们正是内网部署里最常见的形态，
+	// 而"归属声明"的价值在于**明确**，不在于层级多少 —— 过宽的形态由上面的通配规则挡住。
+	if body == "" {
+		return "", errors.New("空主机名")
+	}
+	if len(h) > 253 {
+		return "", errors.New("过长（>253）")
+	}
+	for _, r := range h {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.', r == '*':
+		default:
+			return "", fmt.Errorf("含非法字符 %q（只允许字母/数字/连字符/点，以及开头的 *.）", r)
+		}
+	}
+	return h, nil
+}
+
 // validateInjects 校验响应改写规则段。该段**可选**（nil = 未配置）。
 //
 // 只查必填项与分类登记：片段不能为空、分类若写了必须是登记值。
@@ -408,7 +485,10 @@ func (d *configDoc) validateDecoys() error {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(*d.Decoys.Assets))
-	assetPaths := make(map[string]string, len(*d.Decoys.Assets)) // 归一化路径 -> 资产 id
+	// 归属表：主机名（或通配后缀）-> 归一化路径 -> 资产 id。
+	// 为什么按主机分区：同一条路径在**不同主机**上可以各归各的资产（多站点部署），
+	// 但在同一主机上出现嵌套/重复归属就是配置错误 —— 匹配时谁赢取决于排序，那种"看运气"的语义不能要。
+	owned := make(map[string]map[string]string, len(*d.Decoys.Assets))
 	for i := range *d.Decoys.Assets {
 		a := (*d.Decoys.Assets)[i]
 		p := fmt.Sprintf("decoys.assets[%d]", i)
@@ -436,13 +516,34 @@ func (d *configDoc) validateDecoys() error {
 		if norm := contract.NormalizePath(*a.Path); norm != *a.Path {
 			return fmt.Errorf("policy: %s.path=%q 不是归一化形态（应写作 %q）", p, *a.Path, norm)
 		}
-		// 冲突发布**失败**：同一路由只能有一个资产（方案 C01 的验收判据）。
-		if prev, dup := assetPaths[*a.Path]; dup {
-			return fmt.Errorf("policy: %s.path=%q 与 assets[%s] 冲突 —— 同一路由只能登记一个资产", p, *a.Path, prev)
-		}
-		assetPaths[*a.Path] = *a.ID
 		if a.Enabled == nil {
 			return missing(p + ".enabled")
+		}
+		// 归属声明（`W7`）：启用中的资产**必须**声明主机名。
+		hosts, err := decoyHosts(p, a)
+		if err != nil {
+			return err
+		}
+		for _, h := range hosts {
+			byPath, ok := owned[h]
+			if !ok {
+				byPath = map[string]string{}
+				owned[h] = byPath
+			}
+			// 冲突发布**失败**：同一主机上的同一路由只能有一个资产（方案 C01 的验收判据），
+			// 且不允许**嵌套归属**（`/admin` 与 `/admin/users` 同主机）—— 谁接管谁没有明确答案。
+			for prevPath, prevID := range byPath {
+				if prevPath == *a.Path {
+					return fmt.Errorf("policy: %s.path=%q 在主机 %q 上与 assets[%s] 冲突 —— 同一路由只能登记一个资产",
+						p, *a.Path, h, prevID)
+				}
+				if contract.PathSegmentPrefix(*a.Path, prevPath) || contract.PathSegmentPrefix(prevPath, *a.Path) {
+					return fmt.Errorf(
+						"policy: %s.path=%q 在主机 %q 上与 assets[%s] 的 %q 嵌套 —— 同一主机上的归属不得互相包含（匹配谁赢会变得不可预期）",
+						p, *a.Path, h, prevID, prevPath)
+				}
+			}
+			byPath[*a.Path] = *a.ID
 		}
 		// 「部署未就绪不投放线索」（C01 验收）：启用中的资产**必须**有后端。
 		// 未启用时允许留空 —— 影子期先登记路径与内容，等后端就绪再打开（INT-11 的阶梯）。
@@ -521,8 +622,10 @@ func (d *configDoc) buildDecoys() []contract.DecoyAsset {
 		if a.Backend != nil {
 			backend = strings.TrimSpace(*a.Backend)
 		}
+		hosts, _ := decoyHosts("", a) // validate 已保证形态合法
 		out = append(out, contract.DecoyAsset{
-			ID: *a.ID, Kind: kind, Path: *a.Path, Content: content, Backend: backend, Enabled: *a.Enabled,
+			ID: *a.ID, Kind: kind, Path: *a.Path, Content: content, Backend: backend,
+			Hosts: hosts, Enabled: *a.Enabled,
 		})
 	}
 	return out

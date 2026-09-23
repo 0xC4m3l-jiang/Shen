@@ -22,11 +22,31 @@ import (
 
 // ── 响应注入判据 ────────────────────────────────────────────────────────────
 
-// injectable 报告该响应能否注入，并返回它的内容类型。
+// injectable 报告该响应能否注入，并返回它的内容类型（N10）。
 //
-// 三条「不注入」的理由集中在这里：非 HTML、带压缩编码（注入会直接损坏编码）、
-// 超过缓冲上限（大响应 / 下载应当流式透传）。
+// 不注入的情形集中在这里，每一类都有具体的错误代价：
+//
+//	① 非 HTML —— 改它会使响应体的声明类型与实际内容不符；
+//	② 压缩 / 任何非 identity 编码 —— 改字节会直接破坏编码；
+//	③ 超过缓冲上限 —— 大响应 / 下载应当流式透传；
+//	④ **无正文的方法与状态**（HEAD / 1xx / 204 / 304）—— 它们本来就没有体，
+//	   不能因为“注入成功”就凭空造一个体出来（会与声明的 Content-Length 矛皾）；
+//	⑤ **部分响应**（206 / 带 Content-Range）—— 改写单段会破坏范围语义；
+//	⑥ **`Cache-Control: no-transform`** —— 上游明确禁止中介改写内容（HTTP 语义约定）。
 func injectable(resp *http.Response) (contentType string, ok bool) {
+	if resp.Request != nil && resp.Request.Method == http.MethodHead {
+		return "", false
+	}
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified ||
+		(resp.StatusCode >= 100 && resp.StatusCode < 200) {
+		return "", false
+	}
+	if resp.StatusCode == http.StatusPartialContent || resp.Header.Get("Content-Range") != "" {
+		return "", false
+	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Cache-Control")), "no-transform") {
+		return "", false
+	}
 	ct := resp.Header.Get("Content-Type")
 	if !strings.Contains(strings.ToLower(ct), "text/html") {
 		return "", false
@@ -49,10 +69,10 @@ func injectable(resp *http.Response) (contentType string, ok bool) {
 //   - 改写逻辑可以脱离 Handler 单测（塞一个替身即可，见 transform_test.go）；
 //   - 读代码的人一眼看到改写的依赖面 —— 不会以为它还会去调核心或写遥测。
 type injectionSource interface {
-	// currentInjector 返回当前静态注入器（本地 env 或策略面下发），可为 nil。
-	currentInjector() Injector
-	// contentInjectionReady 报告此刻能否注入 AI 内容（本地兜底开关 ∧ 下发开关 ∧ 有清单）。
-	contentInjectionReady() (bool, *contentIndex)
+	// currentInjector 返回该快照的静态注入器（本地 env 或策略面下发），可为 nil。
+	currentInjector(st *remoteState) Injector
+	// contentInjectionReady 报告该快照下能否注入 AI 内容（本地兜底开关 ∧ 下发开关 ∧ 有清单）。
+	contentInjectionReady(st *remoteState) (bool, *contentIndex)
 	// injectContent 把命中的内容片段改写进响应体，返回 (新体, 内容标识, 是否改写)。
 	injectContent(r *http.Request, idx *contentIndex, contentType string, body []byte) ([]byte, string, bool)
 }
@@ -73,6 +93,18 @@ type injectingTransport struct {
 	// 而 transport 是建后端的时刻就挂上的 —— 持注入器会把规则钉死在当时那一份。
 	src  injectionSource
 	base http.RoundTripper
+	// snapshotOf 取本请求钉定的策略快照（N1）。nil 时回落当前生效值 ——
+	// 单测直接调 transport 没有 ServeHTTP 铺好的上下文。
+	snapshotOf func(*http.Request) *remoteState
+}
+
+// policySnapshotFrom 是取快照的缺省方式：从请求上下文里取（ServeHTTP 钉好的那一份），取不到返回 nil。
+func policySnapshotFrom(req *http.Request) *remoteState {
+	if req == nil {
+		return nil
+	}
+	st, _ := req.Context().Value(policySnapshotKey{}).(*remoteState)
+	return st
 }
 
 func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -87,9 +119,20 @@ func (t *injectingTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// 注入结果的槽（没有槽时静默丢弃 —— 比如单测里直接调 transport）。
 	outcome, _ := req.Context().Value(injectOutcomeKey{}).(*injectOutcome)
 
-	// 每请求取一次当前状态：本地 env 或策略面下发的（后者可热变更）。
-	inj := t.src.currentInjector()
-	contentReady, idx := t.src.contentInjectionReady()
+	// 每请求取一次**本请求钉定的快照**（N1）：注入规则与内容清单必须与本次路由/后端同一版本。
+	// 快照由 ServeHTTP 放进请求上下文；单测直接调 transport 时回落到当前值。
+	st := policySnapshotFrom(req)
+	if st == nil {
+		// 请求上没钉快照（单测直接调 transport / 非 ServeHTTP 路径）⇒ 用 src 当前生效的那份。
+		if h, ok := t.src.(*Handler); ok {
+			st = h.remotePolicy()
+		}
+	}
+	if t.snapshotOf != nil {
+		st = t.snapshotOf(req)
+	}
+	inj := t.src.currentInjector(st)
+	contentReady, idx := t.src.contentInjectionReady(st)
 	if !contentReady && outcome != nil {
 		// 到了改道侧但内容注入被关 ⇒ 如实上报「开关关闭」（不是"没内容"）。
 		outcome.set(InjectDisabled, "")

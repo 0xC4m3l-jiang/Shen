@@ -353,7 +353,7 @@ func TestApplyEdgePolicyParsesAIContent(t *testing.T) {
 	                  "body": "<b>x</b>", "marker": "</body>"}]}]
 	  }
 	}`
-	if err := h.applyEdgePolicy(context.Background(), []byte(payload)); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), []byte(payload), ""); err != nil {
 		t.Fatalf("应用载荷失败：%v", err)
 	}
 	st := h.remotePolicy()
@@ -373,7 +373,7 @@ func TestApplyEdgePolicyWithoutContentKeepsDefaults(t *testing.T) {
 	h := &Handler{}
 	payload := `{"schema_version": 1, "policy_id": "core-rules", "version": 4,
 	  "backends": [], "whitelist": {"source_cidrs": []}}`
-	if err := h.applyEdgePolicy(context.Background(), []byte(payload)); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), []byte(payload), ""); err != nil {
 		t.Fatalf("应用载荷失败：%v", err)
 	}
 	st := h.remotePolicy()

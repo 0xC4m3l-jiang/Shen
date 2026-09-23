@@ -159,6 +159,10 @@ decoys:
     - id: "dev-api"
       kind: "developer_api"
       path: "/portal/api/content"
+      # hosts 是**归属声明**（W7）：这条路径属于哪些主机名。
+      # 形态：精确主机名，或 `*.` 前缀通配；**禁止**裸 `*`（那是对所有主机宣示所有权）。
+      # 启用（enabled: true）时**必填** —— 路径归属必须带主体，否则真实站点已有的同名路径会被接走。
+      hosts: ["console.example"]
       content: "site-developer-api"   # 内容模板标识（模板随代码分发，ST-22）
       enabled: false                   # 默认关：先影子观察，再逐级放开（INT-11 / INT-12）
 

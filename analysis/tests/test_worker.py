@@ -155,17 +155,20 @@ def test_worker_checkpoint_stops_rereading_the_whole_window() -> None:
     注意：worker 自己上报的结论事件也在同一个窗口里（`event_type` 过滤掉），
     所以「取到的条数」不等于「判定事件数」；游标也**只按判定事件**推进（否则会被自己的写入时间推过头）。
     """
+    # 会话数**不超过** `MAX_SESSIONS_PER_RUN`：截断会让游标停在未分析事件之前（另有专测），
+    # 这里要钉的是纯游标机制本身。
     events = [
         decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
-        for n in range(10)
+        for n in range(8)
     ]
     port = RecordingTelemetry(events)
     checkpoint = Checkpoint()
 
     first = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:10:00+08:00")
-    assert first.fetched == 10, "首轮（无游标）看整个窗口的判定事件"
+    assert first.fetched == 8, "首轮（无游标）看整个窗口的判定事件"
     assert first.cursor == "", "首轮没有游标"
-    assert checkpoint.since == "2026-09-19T10:08:59+08:00", "游标 = 最新判定 - 回看重叠（1s）"
+    assert first.committed_cursor == "2026-09-19T10:06:59+08:00", "游标 = 最新判定 - 回看重叠（1s）"
+    assert checkpoint.since == first.committed_cursor
 
     second = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:10:30+08:00")
     assert port.list_calls[1] is not None, "第二轮必须把游标作为 since 传给遥测面"
@@ -175,8 +178,11 @@ def test_worker_checkpoint_stops_rereading_the_whole_window() -> None:
     ]
     ids = [e.event_id for e in replayed]
     assert len(replayed) == 1, f"游标之后只剩回看重叠内的那条判定，实际 {ids}"
-    assert second.reported == 0, "重取到的那条由幂等吞掉：不得重复写入结论（AR-11）"
-    assert second.duplicated > 0, "重复的结论事件应计为 duplicated（可见，不是静默丢弃）"
+    assert second.reported == 0, "重取到的那条不得重复写入结论（AR-11 兜底）"
+    # `N8` 之后重叠部分在**本地**就被压掉了（去重状态随游标一起提交）：
+    # 不再靠“报了再被核心幂等吞”那种白干活的方式去重（也就不再需要模型调用）。
+    assert second.suppressed > 0, "重叠部分应由**跨轮复用的去重状态**压掉（N8）"
+    assert second.admitted == 0, "没有新态势 ⇒ 不产出结论（AR-15）"
 
 
 def test_worker_checkpoint_does_not_advance_on_failure() -> None:
@@ -239,20 +245,55 @@ def test_worker_bounds_model_calls_per_session() -> None:
         assert session.intent is not None, "意图结论不得为空（回落也必须产出规则版）"
 
 
-def test_worker_reports_window_gap() -> None:
-    """取满 limit 条且最早一条仍晚于游标 ⇒ 中间有事件没取到，必须可见（丢事件不得静默）。"""
+def test_worker_widens_fetch_until_contiguity_is_proven() -> None:
+    """`limit` 只是**起点**：取满就加倍重取，直到取不满。
+
+    ⇒ 这就**证明**了游标与这批之间没有别的判定事件（`N7`）。
+
+    为什么不是「取满就报缺口」：`since` 语义是「该时刻之后」，一次取不满就等价于「取尽了」。
+    取满时**不放大**会把本可拿到的事件报成缺口（旧行为），放大后这一段可以被完整分析（新行为）。
+    """
     events = [
         decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
         for n in range(5)
     ]
     port = RecordingTelemetry(events)
-    # 游标故意设得很早（模拟「worker 停了很久」）：本轮取满 limit 条，仍看不到游标与它们之间的那段。
     checkpoint = Checkpoint(since="2020-01-01T00:00:00+08:00")
     run = run_once(port, limit=2, checkpoint=checkpoint, now="2026-09-19T10:10:00+08:00")
 
-    assert run.fetched == 2, "取满 limit"
-    assert run.window_gap, "应报告窗口缺口（游标之后的事件多于本轮能取的条数）"
-    assert "2020-01-01" in run.window_gap and "limit" in run.window_gap
+    assert run.fetched == 5, "取满 limit=2 后应放大重取，最终拿到全部 5 条"
+    assert run.contiguous is True and not run.window_gap, "取不满 ⇒ 连续性被证明，没有缺口"
+    assert run.completeness == "complete"
+    assert checkpoint.since == "2026-09-19T10:03:59+08:00", "证明连续后游标必须前进"
+
+
+def test_worker_reports_gap_when_contiguity_cannot_be_proven() -> None:
+    """证明不了连续（顶到硬顶仍取满）⇒ 如实报「完整性未知」且**不提交游标**（`N7`）。"""
+
+    class AlwaysFullTelemetry(InMemoryTelemetry):
+        """永远返回**刚好** limit 条：模拟「窗口里的事件比硬顶还多」。"""
+
+        def list_events(self, *, limit: int = 200, since: str | None = None, event_type: str = ""):
+            events = super().list_events(limit=limit, since=since, event_type=event_type)
+            return list(events)[:limit]
+
+    from analysis.worker import CURSOR_MAX_LIMIT
+
+    events = [
+        decision(
+            f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n % 60:02d}:00+08:00"
+        )
+        for n in range(CURSOR_MAX_LIMIT)
+    ]
+    port = AlwaysFullTelemetry(events)
+    checkpoint = Checkpoint(since="2020-01-01T00:00:00+08:00")
+    run = run_once(port, limit=8, checkpoint=checkpoint, now="2026-09-19T10:10:00+08:00")
+
+    assert run.contiguous is False
+    assert run.window_gap, "证明不了连续必须可见"
+    assert run.completeness == "unknown", "完整性未知时不得声称“不丢事件”"
+    assert run.advance_blocked, "取不尽时**不得提交游标**（否则缺口会被永久跨过）"
+    assert checkpoint.since == "2020-01-01T00:00:00+08:00", "游标必须原样不动"
 
 
 def test_worker_truncates_sessions_visibly() -> None:
@@ -384,3 +425,112 @@ def test_ar12_evidence_cache_uses_payload_decision_id() -> None:
     assert run.errors == [], f"不应因证据 ID 命名空间不一致而作废：{run.errors}"
     assert run.chain is not None and run.chain.stages, "链应成形"
     assert run.chain.stages[0].evidence_ids == ("devcheck-样本名",)
+
+
+# ── N3 / N7 / N8：游标与恢复契约 ────────────────────────────────────────────
+
+
+def test_n3_cursor_is_committed_only_after_reporting() -> None:
+    """上报失败 ⇒ **不提交游标**（`N3`：原缺陷是“最早推进、最晚失败”= 永久丢事件）。"""
+
+    class ReportFailsTelemetry(InMemoryTelemetry):
+        def report(self, _event: WireEvent) -> tuple[int, int]:
+            raise TelemetryUnavailable("模拟核心写侧不可用")
+
+    events = [decision("e-1", "/.git/config")]
+    port = ReportFailsTelemetry(events)
+    checkpoint = Checkpoint(since="2026-09-19T09:00:00+08:00")
+    run = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:00:30+08:00")
+
+    assert run.errors, "上报失败必须如实记录"
+    assert checkpoint.since == "2026-09-19T09:00:00+08:00", "没上报成功就不得推进游标"
+    assert run.advance_blocked, "为什么没提交必须可见（不是静默不动）"
+    assert not run.committed_cursor
+
+
+def test_n3_truncation_stops_cursor_before_unanalyzed_events() -> None:
+    """会话上限截断 ⇒ 游标停在**未分析事件的最早一条之前**（不越过、也不停摆）。"""
+    from analysis.worker import MAX_SESSIONS_PER_RUN
+
+    total = MAX_SESSIONS_PER_RUN + 2
+    events = [
+        decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
+        for n in range(total)
+    ]
+    port = InMemoryTelemetry(events)
+    checkpoint = Checkpoint()
+    run = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:30:00+08:00")
+
+    assert run.truncated_sessions == 2
+    # 新到旧排序 ⇒ 被留下的是**最新**的 8 个会话（s-9 … s-2），被截断的是最旧的 s-1、s-0 ——
+    # 其中最早的事件是 10:00:00；游标只能停在它之前（09:59:59），否则那两条永远不会被分析。
+    assert checkpoint.since == "2026-09-19T09:59:59+08:00", (
+        f"游标必须停在最早未分析事件之前，实际 {checkpoint.since}"
+    )
+    assert not run.known_loss, "能部分推进时不算“已知丢弃”"
+    assert run.completeness == "complete", "提交的那一段确实处理干净了"
+
+
+def test_n3_known_loss_is_recorded_when_progress_is_impossible() -> None:
+    """截断且天花板给不出前进量 ⇒ 只能跨过，但**必须显式记为已知丢弃**（不是静默丢）。"""
+    from analysis.worker import MAX_SESSIONS_PER_RUN
+
+    total = MAX_SESSIONS_PER_RUN + 2
+    events = [
+        decision(f"e-{n}", "/.git/config", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
+        for n in range(total)
+    ]
+    port = InMemoryTelemetry(events)
+    # 游标已经停在 09:59:59（上一轮按天花板停下的位置）⇒ 天花板（10:00:00）给不出前进量。
+    checkpoint = Checkpoint(since="2026-09-19T09:59:59+08:00")
+    run = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:30:00+08:00")
+
+    assert run.truncated_sessions == 2
+    assert run.known_loss, "跨过未分析事件必须留痕（已知丢弃）"
+    assert run.completeness == "unknown", "已知丢弃 ⇒ 完整性未知"
+    assert checkpoint.since > "2026-09-19T09:59:59+08:00", "但不能因此永远停摆"
+
+
+def test_n8_dedupe_state_is_reused_across_rounds() -> None:
+    """去重状态随游标提交（`N8`）：重叠窗口不再重新调模型、也不再重复产出结论。"""
+
+    class CountingClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def complete(self, _prompt: str, *, session_id: str, timeout: float) -> str:
+            del timeout
+            self.calls.append(session_id)
+            return json.dumps(
+                {"category": "reconnaissance", "confidence": 0.5, "evidence_ids": [], "stages": []}
+            )
+
+    events = [decision("e-1", "/.git/config", session="s-1", at="2026-09-19T10:00:00+08:00")]
+    port = InMemoryTelemetry(events)
+    checkpoint = Checkpoint()
+    client = CountingClient()
+
+    first = run_once(port, checkpoint=checkpoint, client=client, now="2026-09-19T10:00:30+08:00")
+    calls_after_first = len(client.calls)
+    assert calls_after_first > 0 and first.admitted == 1
+
+    # 第二轮：游标回看会**重叠**取到同一条态势。
+    second = run_once(port, checkpoint=checkpoint, client=client, now="2026-09-19T10:00:40+08:00")
+    assert second.suppressed > 0, "重叠部分应由跨轮复用的去重状态压掉"
+    assert second.admitted == 0 and not second.conclusions
+    assert len(client.calls) == calls_after_first, "被压掉的态势不得再调模型（N8）"
+
+
+def test_n7_bad_events_are_counted_not_silently_dropped() -> None:
+    """解析不出 `event_id` 的坏事件要计数（`N7`：坏事件与“没事件”不是一回事）。"""
+    good = decision("e-1", "/.git/config")
+    bad = WireEvent(
+        event_id="e-bad",
+        event_type="decision",
+        session_id="s-1",
+        payload=json.dumps({"path": "/admin"}).encode("utf-8"),  # 没有 event_id 字段
+        created_at="2026-09-19T10:00:01+08:00",
+    )
+    run = run_once(InMemoryTelemetry([good, bad]), now="2026-09-19T10:00:30+08:00")
+    assert run.fetched == 2
+    assert run.dropped_events == 1, "坏事件必须可见"

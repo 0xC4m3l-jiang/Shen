@@ -24,9 +24,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"shen/modules/honeypot/web"
@@ -50,6 +52,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("web: %v", err)
 	}
+	loginBurst, err := envInt("SHEN_WEB_LOGIN_BURST", defaultLoginBurst)
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
+	loginWindow, err := envDuration("SHEN_WEB_LOGIN_WINDOW", defaultLoginWindow)
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
+	eventQueue, err := envInt("SHEN_WEB_EVENT_QUEUE", defaultEventQueue)
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
 
 	// 场景包（可选）：`SHEN_WEB_SCENARIOS` 指向 JSON 文件（格式见 docs/spec/decoy-scenario.md）。
 	// 文件存在即**必须**合法：坏素材宁可启动失败，也不带出去（见 pack.go 的三条设计要点）。
@@ -60,8 +74,14 @@ func main() {
 		Packs:        packs,
 		MaxBodyBytes: maxBody,
 		SessionTTL:   ttl,
+		CookieSecure: envBool("SHEN_WEB_COOKIE_SECURE", false),
+		LoginBurst:   loginBurst,
+		LoginWindow:  loginWindow,
+		EventQueue:   eventQueue,
+		RequestLog:   envBool("SHEN_WEB_REQUEST_LOG", false),
 		Events:       eventLogger{},
 	})
+	defer h.Close()
 	sc := h.Scenario()
 
 	srv := &http.Server{
@@ -77,9 +97,25 @@ func main() {
 	log.Printf("web 诱饵后端已启动：监听 %s（场景 %s · %s · 账号 %d · 配置 %d · 审计 %d · 登录语义 %s）",
 		listen, sc.ID, sc.Org, len(sc.Users), len(sc.Config), len(sc.Audit), sc.Outcome)
 
+	// 优雅退出（`W6`）：收到 SIGINT/SIGTERM 后先停收新请求，再等在途请求收尾。
+	// 为什么需要它：诱饵后端重启时被硬切断的合成会话与半截响应，都是对手可见的异常。
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-stop
+		log.Printf("web: 收到 %s ⇒ 停止接收新请求（最多等 %s）", sig, shutdownGrace)
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("web: 优雅退出超时，强制关闭：%v", err)
+			_ = srv.Close()
+		}
+	}()
+
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("web: 监听失败：%v", err)
 	}
+	log.Printf("web: 已停止（丢弃事件 %d 条 · 投递失败 %d 次）", h.DroppedEvents(), h.EventFailures())
 }
 
 // eventLogger 把合成交互事件打一行到 stdout（运维面；不含请求体、不含凭据）。
@@ -119,7 +155,45 @@ func loadScenarioPacks(path, scenarioID string) map[string]web.Scenario {
 	return packs
 }
 
+// 登录配额与事件队列的默认值（与库内默认一致：库默认用于**直接 new** 的场景，这里给入口用）。
+const (
+	defaultLoginBurst  = 10
+	defaultLoginWindow = time.Minute
+	defaultEventQueue  = 256
+	// shutdownGrace 是优雅退出时等待在途请求的上限。
+	shutdownGrace = 5 * time.Second
+)
+
 // ── env 解析（与其它适配器同一套写法：写错即启动失败，不悄悄回落）──────────────
+
+// envBool 解析布尔型开关：只认 1/true/yes/on 与 0/false/no/off，其余**启动失败**。
+func envBool(key string, fallback bool) bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch raw {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		log.Fatalf("web: %s 取值 %q 不是布尔（用 1/0、true/false、yes/no、on/off）", key, raw)
+		return fallback
+	}
+}
+
+// envInt 解析正整数环境变量（<= 0 视为写错 ⇒ 启动失败，不悄悄回落）。
+func envInt(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0, errors.New(key + " 必须是正整数")
+	}
+	return n, nil
+}
 
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {

@@ -124,6 +124,9 @@ decoys:
     - id: "dev-api"
       kind: "developer_api"
       path: "/portal/api/content"
+      # 归属声明（W7）：本档一律经 http://127.0.0.1:18080 访问 ⇒ 只声明回环主机。
+      # 真实部署要写**你自己的**主机名（例如 console.example），不要照抄这一行。
+      hosts: ["127.0.0.1", "localhost"]
       content: "site-developer-api"   # 内容模板标识（模板随代码分发，ST-22）
       backend: "mirage"                # 投递目标（幻境后端逻辑名；启用时必填）
       enabled: true                    # 本档用于**验证诱饵路由**；默认配置里是 false（INT-11）
@@ -134,6 +137,7 @@ decoys:
     - id: "admin-scenario"
       kind: "bait"
       path: "/admin"
+      hosts: ["127.0.0.1", "localhost"]
       content: "atlas-scenario"
       backend: "decoy-web"
       enabled: true
@@ -142,12 +146,14 @@ decoys:
     - id: "admin-api-scenario"
       kind: "bait"
       path: "/api/v1/admin"
+      hosts: ["127.0.0.1", "localhost"]
       content: "atlas-scenario"
       backend: "decoy-web"
       enabled: true
     - id: "no-fallback"
       kind: "bait"
       path: "/portal/dead"
+      hosts: ["127.0.0.1", "localhost"]
       content: "site-developer-api"
       backend: "dead-decoy"
       enabled: true

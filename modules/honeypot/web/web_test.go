@@ -35,6 +35,31 @@ func (s *recordingSink) all() []Event {
 	return out
 }
 
+// wait 等事件到达（有界等待，最多 2s）。
+//
+// 为什么必须等：事件出口是**异步有界**的（`W5`）—— 请求返回 ≠ 事件已投递。
+// 直接断言切片会让「事件丢了」和「还没送到」看起来一样（真正的丢事件反而测不出来）。
+func (s *recordingSink) wait(t *testing.T, want int) []Event {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := s.all(); len(got) >= want {
+			return got
+		}
+		time.Sleep(time.Millisecond)
+	}
+	got := s.all()
+	t.Fatalf("等待 %d 条事件超时（实际 %d）", want, len(got))
+	return got
+}
+
+// count 返回当前已投递的事件数（不做等待）。
+func (s *recordingSink) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.events)
+}
+
 // fixedRand 让会话 id 可预期（测试里不依赖随机数）。
 type fixedRand struct{ b byte }
 
@@ -220,7 +245,7 @@ func TestLoginNeverValidatesCredentials(t *testing.T) {
 	if strings.Contains(cookie, "password") || strings.Contains(cookie, "definitely") {
 		t.Fatalf("会话 cookie 不得由提交的凭据派生，得到 %q", cookie)
 	}
-	events := sink.all()
+	events := sink.wait(t, 1)
 	if len(events) != 1 || events[0].Kind != EventLoginAttempt {
 		t.Fatalf("应记一条 login_attempt 事件，得到 %+v", events)
 	}
@@ -259,7 +284,7 @@ func TestPasswordNeverRetained(t *testing.T) {
 			t.Fatalf("%s 的响应里出现了提交的密码", path)
 		}
 	}
-	for _, ev := range sink.all() {
+	for _, ev := range sink.wait(t, 1) {
 		blob := fmt.Sprintf("%+v", ev)
 		if strings.Contains(blob, secret) {
 			t.Fatalf("事件里出现了提交的密码：%+v", ev)

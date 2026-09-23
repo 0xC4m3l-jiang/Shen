@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 
 	judgev1 "shen/common/api/judge/v1"
@@ -59,7 +61,7 @@ func decoyHandler(t *testing.T, cfg Config, judge JudgeClient, routes []policyDe
 	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
 	origin := &countingBackend{name: "origin"}
 	h.origin = origin
-	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, routes)); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, routes), ""); err != nil {
 		t.Fatalf("应用诱饵路由失败：%v", err)
 	}
 	return h, origin
@@ -87,12 +89,12 @@ func TestDecoyRouteMatchSemantics(t *testing.T) {
 		{"", "", false},
 	}
 	for _, c := range cases {
-		got, ok := matchDecoyRoute(routes, c.path)
+		got, ok := matchDecoyRoute(routes, c.path, "")
 		if ok != c.wantMatched || got.id != c.wantID {
 			t.Errorf("matchDecoyRoute(%q) = (%q, %v)，期望 (%q, %v)", c.path, got.id, ok, c.wantID, c.wantMatched)
 		}
 	}
-	if _, ok := matchDecoyRoute(nil, "/x"); ok {
+	if _, ok := matchDecoyRoute(nil, "/x", ""); ok {
 		t.Error("空路由表不得命中")
 	}
 }
@@ -107,7 +109,7 @@ func TestDecoyRouteDeliversWithoutCallingCore(t *testing.T) {
 	h.origin = origin
 	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1,
 		[]policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}},
-		[]policyDecoy{{ID: "dev-api", Path: "/portal/api/content", Backend: "hp"}})); err != nil {
+		[]policyDecoy{{ID: "dev-api", Path: "/portal/api/content", Backend: "hp"}}), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +162,10 @@ func TestDecoyRouteSkippedInShadow(t *testing.T) {
 	}
 }
 
-// TestDecoyRouteRevokedByPolicy 断言「载荷里没有这条路由」= 撤销生效（不需要额外回执语义）。
+// TestDecoyRouteRevokedByPolicy 断言撤销语义（N6）：载荷里没有这条路由 ≠ 归属立刻还给业务。
+//
+// 一条诱饵路径一旦对外出现过，旧链接 / 爬虫 / 对手笔记会继续用它。撤销后在**租约期内**
+// 边缘仍用固定 502 结束它（不回生产、不进判定），到期才真正释放归属（见下一个测试）。
 func TestDecoyRouteRevokedByPolicy(t *testing.T) {
 	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
 	report := &stubReporter{}
@@ -171,19 +176,169 @@ func TestDecoyRouteRevokedByPolicy(t *testing.T) {
 
 	backends := []policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}
 	route := []policyDecoy{{ID: "dev-api", Path: "/portal/api/content", Backend: "hp"}}
-	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, route)); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, route), ""); err != nil {
 		t.Fatal(err)
 	}
-	// 再下发一版：诱饵段为空 ⇒ 路由被撤销。
-	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 2, backends, nil)); err != nil {
+	// 再下发一版：诱饵段为空 ⇒ 路由被撤销，但进入租约期。
+	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 2, backends, nil), ""); err != nil {
 		t.Fatal(err)
 	}
 
 	w := do(h, http.MethodGet, "http://svc.example/portal/api/content", "", nil)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("租约期内该路径应返回固定 502（不回生产），实际 %d", w.Code)
+	}
+	if got := w.Header().Get("X-Backend"); got != "" {
+		t.Fatalf("租约期内不得投递任何后端，实际落点 %q", got)
+	}
+	if n := origin.calls.Load(); n != 0 {
+		t.Fatalf("租约期内不得回业务源站，实际 %d 次", n)
+	}
+	if n := judge.callCount(); n != 0 {
+		t.Fatalf("诱饵路径不进判定链路，实际调核心 %d 次", n)
+	}
+}
+
+// TestDecoyTombstoneLeaseExpires 断言租约到期后归属**真的**还给业务（否则就成了永久劫持）。
+func TestDecoyTombstoneLeaseExpires(t *testing.T) {
+	base := time.Now()
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
+	report := &stubReporter{}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, report)
+	h.DecoyLease = caddy.Duration(time.Hour)
+	h.now = func() time.Time { return base }
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+
+	backends := []policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}
+	route := []policyDecoy{{ID: "dev-api", Path: "/portal/api/content", Backend: "hp"}}
+	must := func(version uint64, routes []policyDecoy) {
+		t.Helper()
+		if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, version, backends, routes), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(1, route)
+	must(2, nil) // 撤销 ⇒ 进租约
+	if len(h.remotePolicy().tombstones) != 1 {
+		t.Fatalf("撤销后应有 1 条搜索碑，实际 %d", len(h.remotePolicy().tombstones))
+	}
+
+	// 租约未到期：仍受保护。
+	if w := do(h, http.MethodGet, "http://svc.example/portal/api/content", "", nil); w.Code != http.StatusBadGateway {
+		t.Fatalf("租约内应 502，实际 %d", w.Code)
+	}
+
+	// 时间推进过租约，再下发一版（策略应用时才重算碑）⇒ 碑被清掉，归属还给业务。
+	h.now = func() time.Time { return base.Add(2 * time.Hour) }
+	must(3, nil)
+	if n := len(h.remotePolicy().tombstones); n != 0 {
+		t.Fatalf("租约到期后不应留碑，实际 %d", n)
+	}
+	w := do(h, http.MethodGet, "http://svc.example/portal/api/content", "", nil)
 	if got := w.Header().Get("X-Backend"); got != "origin" {
-		t.Fatalf("撤销后该路径应回到业务源站（不再投递），实际 %q", got)
+		t.Fatalf("租约到期后该路径应回到业务源站，实际 %q（状态 %d）", got, w.Code)
 	}
 	if n := judge.callCount(); n != 1 {
-		t.Fatalf("撤销后应恢复常规判定链路，实际调核心 %d 次", n)
+		t.Fatalf("租约到期后应恢复常规判定链路，实际调核心 %d 次", n)
+	}
+}
+
+// TestDecoyTombstoneRevivedByReRegistration 断言“重新登记”就撤销搜索碑（路径又有主了）。
+func TestDecoyTombstoneRevivedByReRegistration(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, &stubReporter{})
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+	backends := []policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}
+	route := []policyDecoy{{ID: "dev-api", Path: "/portal/api/content", Backend: "hp"}}
+	steps := []struct {
+		version uint64
+		routes  []policyDecoy
+	}{{1, route}, {2, nil}, {3, route}}
+	for _, step := range steps {
+		if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, step.version, backends, step.routes), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(h.remotePolicy().tombstones); n != 0 {
+		t.Fatalf("重新登记后不应再有碑，实际 %d", n)
+	}
+	if w := do(h, http.MethodGet, "http://svc.example/portal/api/content", "", nil); w.Header().Get("X-Backend") != "hp" {
+		t.Fatalf("重新登记后应重新投递诱饵后端，实际 %q", w.Header().Get("X-Backend"))
+	}
+}
+
+// ── W7：归属声明（hosts）参与匹配 ───────────────────────────────────────────
+//
+// 语义三条：
+//
+//	① 声明了主机 ⇒ 只有 Host 命中才接管这条路径（别的站点上的同名路径照常走判定）；
+//	② 未声明（旧载荷没有这个字段）⇒ 任何主机都匹配，行为与从前一致（不悄悄"谁都不接管"）；
+//	③ `*.example.com` 只覆盖子域，**不含**根域本身。
+func TestDecoyRouteRespectsHostOwnership(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
+	report := &stubReporter{}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, report)
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+
+	backends := []policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}
+	routes := []policyDecoy{
+		{ID: "owned", Path: "/admin", Hosts: []string{"console.example", "*.corp.example"}, Backend: "hp"},
+		{ID: "unscoped", Path: "/legacy", Backend: "hp"},
+	}
+	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, routes), ""); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		host      string
+		path      string
+		wantRoute string
+	}{
+		{"console.example", "/admin/users", "hp"},      // 精确声明
+		{"CONSOLE.EXAMPLE:8443", "/admin/users", "hp"}, // 大小写 + 端口不影响
+		{"team.corp.example", "/admin", "hp"},          // 通配命中子域
+		{"corp.example", "/admin", "origin"},           // ⚠️ 通配**不含**根域
+		{"other.example", "/admin/users", "origin"},    // 未声明的主机 ⇒ 不接管
+		{"other.example", "/legacy", "hp"},             // 未声明主机 + 未声明归属 ⇒ 照旧接管
+	}
+	for _, c := range cases {
+		w := do(h, http.MethodGet, "http://"+c.host+c.path, "", nil)
+		if got := w.Header().Get("X-Backend"); got != c.wantRoute {
+			t.Errorf("host=%s path=%s：期望落点 %q，实际 %q（状态 %d）", c.host, c.path, c.wantRoute, got, w.Code)
+		}
+	}
+	// 未命中归属的请求要走**判定链路**（不是被固定 502）：它只是"别人的路径"。
+	if n := judge.callCount(); n == 0 {
+		t.Fatal("未命中归属的请求必须照常判定（W7：不接管 ≠ 拒绝服务）")
+	}
+}
+
+func TestHostMatchesSemantics(t *testing.T) {
+	cases := []struct {
+		hosts []string
+		host  string
+		want  bool
+	}{
+		{nil, "anything.example", true},                      // 未声明 ⇒ 任何主机
+		{[]string{}, "anything.example", true},               // 空声明同上
+		{[]string{"a.example"}, "a.example:8443", true},      // 端口剥离
+		{[]string{"a.example"}, "A.EXAMPLE", true},           // 大小写不敏感
+		{[]string{"a.example"}, "b.example", false},          // 不命中
+		{[]string{"*.example"}, "x.example", true},           // 通配子域
+		{[]string{"*.example"}, "example", false},            // 根域不算命中
+		{[]string{"*.example"}, "x.example.evil.com", false}, // 后缀必须完整对齐
+		{[]string{"*.a.example"}, "x.a.example", true},
+		{[]string{"*.a.example"}, "a.example", false},
+	}
+	for _, c := range cases {
+		if got := hostMatches(c.hosts, c.host); got != c.want {
+			t.Errorf("hostMatches(%v, %q) = %v，期望 %v", c.hosts, c.host, got, c.want)
+		}
 	}
 }

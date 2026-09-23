@@ -133,10 +133,10 @@ func TestApplyEdgePolicyInjectSemantics(t *testing.T) {
 		h := remoteTestHandler(t, Config{})
 		h.injector = local
 		_, raw := policyFixtureWithInjects(t, 20, "")
-		if err := h.applyEdgePolicy(ctx, raw); err != nil {
+		if err := h.applyEdgePolicy(ctx, raw, ""); err != nil {
 			t.Fatal(err)
 		}
-		if h.currentInjector() != Injector(local) {
+		if h.currentInjector(h.remotePolicy()) != Injector(local) {
 			t.Error("未下发 inject_rules 时，本地 env 规则必须继续生效")
 		}
 	})
@@ -145,10 +145,10 @@ func TestApplyEdgePolicyInjectSemantics(t *testing.T) {
 		h := remoteTestHandler(t, Config{})
 		h.injector = local
 		_, raw := policyFixtureWithInjects(t, 21, "[]")
-		if err := h.applyEdgePolicy(ctx, raw); err != nil {
+		if err := h.applyEdgePolicy(ctx, raw, ""); err != nil {
 			t.Fatal(err)
 		}
-		if h.currentInjector() != nil {
+		if h.currentInjector(h.remotePolicy()) != nil {
 			t.Error("显式空数组应当关掉注入（运营要有主动关闭的手段）")
 		}
 	})
@@ -157,10 +157,10 @@ func TestApplyEdgePolicyInjectSemantics(t *testing.T) {
 		h := remoteTestHandler(t, Config{})
 		h.injector = local
 		_, raw := policyFixtureWithInjects(t, 22, `[{"kind":"developer_api","snippet":"<!--REMOTE-->"}]`)
-		if err := h.applyEdgePolicy(ctx, raw); err != nil {
+		if err := h.applyEdgePolicy(ctx, raw, ""); err != nil {
 			t.Fatal(err)
 		}
-		inj := h.currentInjector()
+		inj := h.currentInjector(h.remotePolicy())
 		if inj == nil || inj == Injector(local) {
 			t.Fatal("下发非空规则时必须改用远端规则")
 		}
@@ -194,7 +194,7 @@ func TestRemoteInjectRuleRewritesDivertedResponse(t *testing.T) {
 
 	// 显式空数组：运营主动关掉注入。
 	_, raw := policyFixtureWithInjects(t, 30, "[]")
-	if err := h.applyEdgePolicy(ctx, raw); err != nil {
+	if err := h.applyEdgePolicy(ctx, raw, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := get(); strings.Contains(got, "<!--LOCAL-->") || strings.Contains(got, "<!--REMOTE-->") {
@@ -203,7 +203,7 @@ func TestRemoteInjectRuleRewritesDivertedResponse(t *testing.T) {
 
 	// 远端规则接管：本地规则不再生效。
 	_, raw = policyFixtureWithInjects(t, 31, `[{"snippet":"<!--REMOTE-->","marker":"</body>"}]`)
-	if err := h.applyEdgePolicy(ctx, raw); err != nil {
+	if err := h.applyEdgePolicy(ctx, raw, ""); err != nil {
 		t.Fatal(err)
 	}
 	got := get()
@@ -223,17 +223,17 @@ func TestApplyEdgePolicyOverlaysBackends(t *testing.T) {
 		{Name: "hp-a", Address: "http://127.0.0.1:2222", Enabled: true},
 		{Name: "hp-off", Address: "http://127.0.0.1:3333", Enabled: false},
 	}, nil)
-	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), raw, ""); err != nil {
 		t.Fatalf("应用策略应当成功：%v", err)
 	}
 
-	if _, ok := h.mirageHandler("hp-a"); !ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "hp-a"); !ok {
 		t.Error("远端启用的后端应当可用")
 	}
-	if _, ok := h.mirageHandler("hp-off"); ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "hp-off"); ok {
 		t.Error("enabled=false 的后端不得入表")
 	}
-	if _, ok := h.mirageHandler("local-only"); !ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "local-only"); !ok {
 		t.Error("本地独有的后端必须保留（策略面拉不到时的兜底）")
 	}
 	if got := h.remoteVersion(); got != 7 {
@@ -255,14 +255,14 @@ func TestRemoteRevocationBeatsLocalFallback(t *testing.T) {
 	_, raw := policyFixture(t, 8, []policyBackend{
 		{Name: "hp", Address: "http://127.0.0.1:3333", Enabled: false}, // 撤销
 	}, nil)
-	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), raw, ""); err != nil {
 		t.Fatalf("应用策略应当成功：%v", err)
 	}
 
-	if _, ok := h.mirageHandler("hp"); ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "hp"); ok {
 		t.Error("被远端撤销的名字**禁止**回落到本地同名项（撤销优先于本地兜底）")
 	}
-	if _, ok := h.mirageHandler("local-only"); !ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "local-only"); !ok {
 		t.Error("远端没谈及的名字仍应走本地兜底（ADR-0018 的既定语义）")
 	}
 }
@@ -282,7 +282,7 @@ func TestRevokedBackendFallsBackToOriginByRouting(t *testing.T) {
 	_, raw := policyFixture(t, 9, []policyBackend{
 		{Name: "hp", Address: "http://127.0.0.1:3333", Enabled: false},
 	}, nil)
-	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), raw, ""); err != nil {
 		t.Fatalf("应用策略应当成功：%v", err)
 	}
 
@@ -324,11 +324,11 @@ func executedOf(t *testing.T, r *stubReporter) string {
 func TestApplyEdgePolicyRejectsBadInput(t *testing.T) {
 	h := remoteTestHandler(t, Config{})
 
-	if err := h.applyEdgePolicy(context.Background(), []byte("{not json")); err == nil {
+	if err := h.applyEdgePolicy(context.Background(), []byte("{not json"), ""); err == nil {
 		t.Error("非法 JSON 应当报错")
 	}
 	future := []byte(`{"schema_version":99,"policy_id":"x","version":1,"backends":[],"whitelist":{"source_cidrs":[]}}`)
-	if err := h.applyEdgePolicy(context.Background(), future); err == nil {
+	if err := h.applyEdgePolicy(context.Background(), future, ""); err == nil {
 		t.Error("读不懂的 schema 版本应当报错（禁止猜着应用）")
 	}
 	if h.remoteVersion() != 0 {
@@ -339,13 +339,13 @@ func TestApplyEdgePolicyRejectsBadInput(t *testing.T) {
 		{Name: "bad", Address: "127.0.0.1:2222", Enabled: true}, // 缺 scheme
 		{Name: "good", Address: "http://127.0.0.1:2222", Enabled: true},
 	}, nil)
-	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), raw, ""); err != nil {
 		t.Fatalf("坏地址不应让整份策略作废：%v", err)
 	}
-	if _, ok := h.mirageHandler("bad"); ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "bad"); ok {
 		t.Error("非法地址的后端不得入表")
 	}
-	if _, ok := h.mirageHandler("good"); !ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "good"); !ok {
 		t.Error("合法后端应当入表")
 	}
 }
@@ -355,13 +355,13 @@ func TestRemoteWhitelistIsAdditive(t *testing.T) {
 	h := remoteTestHandler(t, Config{Whitelist: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}})
 
 	_, raw := policyFixture(t, 9, nil, []string{"192.168.0.0/16"})
-	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), raw, ""); err != nil {
 		t.Fatal(err)
 	}
-	if !h.remoteWhitelisted("192.168.5.5") {
+	if !h.remoteWhitelisted(h.remotePolicy(), "192.168.5.5") {
 		t.Error("远端白名单应当生效")
 	}
-	if h.remoteWhitelisted("203.0.113.9") {
+	if h.remoteWhitelisted(h.remotePolicy(), "203.0.113.9") {
 		t.Error("不在名单里的地址不得命中")
 	}
 	if !whitelisted("10.1.2.3", h.whitelist) {
@@ -384,7 +384,7 @@ func TestRemoteBackendIsUsedByRequestPath(t *testing.T) {
 	_, raw := policyFixture(t, 10, []policyBackend{
 		{Name: "remote-hp", Address: "http://127.0.0.1:2222", Enabled: true},
 	}, nil)
-	if err := h.applyEdgePolicy(context.Background(), raw); err != nil {
+	if err := h.applyEdgePolicy(context.Background(), raw, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -409,7 +409,7 @@ func TestPullFailureKeepsCurrentPolicy(t *testing.T) {
 	if h.remoteVersion() != 0 {
 		t.Error("拉取失败时不得改变已生效策略")
 	}
-	if _, ok := h.mirageHandler("local"); !ok {
+	if _, ok := h.mirageHandler(h.remotePolicy(), "local"); !ok {
 		t.Error("拉取失败时本地后端必须仍然可用")
 	}
 	if n := len(stub.ackList()); n != 0 {

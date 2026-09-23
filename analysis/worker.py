@@ -150,12 +150,125 @@ class Checkpoint:
     rounds: int = 0
     """已成功推进的轮数（观测用；不参与逻辑）。"""
 
+    dedupe: SituationDedupe | None = None
+    """跨轮复用的**态势去重状态**（`N8`）。
+
+    为什么必须跟着游标一起提交：只按 `since` 回看会**重叠**取到上一轮看到的同一条态势；
+    去重状态每轮新建 ⇒ 重叠部分被重新判为“新态势”⇒ 重复调模型（白花钱、结论还被幂等吞掉）。
+    提交条件与游标**完全相同**（见 `_commit`）：这一轮没处理干净时不提交 ——
+    宁可下一轮重算（去重状态仍是上一次成功提交的），也不要让“没上报成功的态势”被永久压掉。
+    """
+
     def advance(self, newest_created_at: str) -> None:
         """把游标推到最新事件的**回看重叠**处。"""
         if not newest_created_at:
             return
         self.since = _shift_iso(newest_created_at, -CURSOR_OVERLAP_S)
         self.rounds += 1
+
+
+# CURSOR_MAX_LIMIT 是「证明连续性」时允许把单次读取上限放大到的硬顶（`N7`）。
+# 为什么需要放大而不是直接接受缺口：`since` 语义是「该时刻之后」且返回 newest-first，
+# 只要某次返回**少于**上限，就说明游标与这批之间**没有别的判定事件** —— 位置连续、可提交。
+# 顶到上限就加倍重取；顶到硬顶仍取不尽 ⇒ 缺口是**事实**，如实记进 `window_gap` 且不提交游标。
+CURSOR_MAX_LIMIT = 5000
+
+
+def _fetch_contiguous(
+    port: TelemetryPort, *, limit: int, since: str
+) -> tuple[list[WireEvent], bool, str]:
+    """按游标抓取，并**尽量证明**这批事件与游标之间没有缺口（`N7`）。
+
+    返回 `(事件列表, 是否连续, 缺口说明)`。
+
+    - 一次就取不满 ⇒ 连续（最常见路径，代价与从前完全一样）；
+    - 取满 ⇒ 用更大上限重取（返回的是超集，最后一次为准），直到取不满或到达 `CURSOR_MAX_LIMIT`；
+    - 到硬顶仍取满 ⇒ `连续=False` + 说明（**不提交游标**，见 `_commit`）。
+    """
+    want = max(1, limit)
+    while True:
+        fetched = port.list_events(limit=want, since=since or None, event_type="decision")
+        if len(fetched) < want:
+            return fetched, True, ""
+        if want >= CURSOR_MAX_LIMIT:
+            return (
+                fetched,
+                False,
+                f"游标 {since or '(起点)'} 之后的事件多于 {CURSOR_MAX_LIMIT} 条："
+                "无法证明这一段连续（完整性未知）—— 本轮不提交游标，建议缩短轮询间隔",
+            )
+        want = min(want * 4, CURSOR_MAX_LIMIT)
+
+
+def _at_of(obs: Observation) -> str:
+    """取观测的时间戳（空串 = 没有）—— 只用于「位置天花板」比较。"""
+    return str(getattr(obs, "at", "") or "")
+
+
+def _commit(
+    checkpoint: Checkpoint | None,
+    run: AnalysisRun,
+    decisions: Sequence[WireEvent],
+    dedupe: SituationDedupe,
+    ceiling: str = "",
+) -> None:
+    """提交位置与去重状态 —— **只有整批被完整处理时**才允许（`N3` / `N8`）。
+
+    `N3` 的原始缺陷：游标在**分析/上报之前**就推进了。只要随后任何一步失败，
+    那段事件就再也不会被读回来（“最早推进，最晚失败”= 永久丢事件）。
+
+    提交条件（任一不满足 ⇒ 不提交，并把原因写进 `run.advance_blocked`）：
+
+    | 条件 | 为什么 |
+    | --- | --- |
+    | 本轮无 `errors` | 结论可能没上报成功；重算比漏算便宜（幂等吞重复） |
+    | 抓取证明连续（`contiguous`） | 取不尽时游标与这批之间可能有缺口，位置不敢说“到这儿” |
+    | 每条判定事件都有 `created_at` | 缺时间戳就没有可比较的位置，游标无法表达“处理到哪” |
+    | 批次非空 | 空批次没有可推进的位置 |
+
+    `ceiling`（非空）是本轮**未分析事件的最早时间**（会话上限截断时才有）：
+
+    - 提交位置取 `min(最新已处理事件, ceiling)` ⇒ **不越过**未分析事件（不丢）；
+    - 于是下一轮的 `since` 落在它们之前，它们会被重新读到并分析（不停摆）；
+    - 若连天花板也给不出前进量（`≤ 当前游标`）⇒ 不提交并记原因（此时确实只能重算）。
+
+    提交时**同时**写回去重状态（`N8`）：否则下一轮的重叠部分会被当成新态势再调一次模型。
+    """
+    if checkpoint is None:
+        return
+    if not decisions:
+        return
+    reasons: list[str] = []
+    if run.errors:
+        reasons.append(f"本轮有 {len(run.errors)} 条错误（结论可能未上报）")
+    if not run.contiguous:
+        run.completeness = "unknown"
+        reasons.append("未能证明抓取连续（游标与这批之间可能有缺口）")
+    if any(not event.created_at for event in decisions):
+        run.completeness = "unknown"
+        reasons.append("批次里有判定事件缺 created_at（无法表达位置）")
+    if reasons:
+        run.advance_blocked = "；".join(reasons)
+        return
+    newest = max(event.created_at for event in decisions)
+    if ceiling:
+        newest = min(newest, ceiling)
+    if _shift_iso(newest, -CURSOR_OVERLAP_S) <= (checkpoint.since or ""):
+        if not ceiling:
+            # 没有截断，只是位置没前进（游标已经落在最新事件之后）⇒ 下一轮重算同一段。
+            run.advance_blocked = "位置没有前进量（游标已在最新事件之后）"
+            return
+        # 截断 + 天花板给不出前进量：只能跨过未分析的事件 —— 但**必须留痕**：
+        # 这不是静默丢弃（`N3` 的原始缺陷），而是「已知丢了哪一类东西」。
+        run.completeness = "unknown"
+        run.known_loss = (
+            f"会话上限截断（{run.truncated_sessions} 个会话本轮未分析）"
+            "且游标无法停在它们之前：这些会话的事件**被跳过**（已知丢弃）"
+        )
+        newest = max(event.created_at for event in decisions)
+    checkpoint.advance(newest)
+    checkpoint.dedupe = dedupe
+    run.committed_cursor = checkpoint.since
 
 
 def _shift_iso(stamp: str, delta_s: float) -> str:
@@ -208,13 +321,28 @@ class AnalysisRun:
     truncated_sessions: int = 0
     """因超出 `MAX_SESSIONS_PER_RUN` 而**本轮未分析**的会话数（不是错误，但必须可见）。"""
     window_gap: str = ""
-    """窗口缺口提示：非空表示「游标之后的事件多于本轮能取的条数」⇒ 中间有一段没被取到。
+    """窗口缺口提示：非空表示本轮**没能取尽**游标之后的事件 ⇒ 中间可能有一段没被取到。
 
     为什么要显式写出来：丢事件会让效果口径（进入率等）**偏低**而看不出来 ——
     与「过载丢包不可隐藏成低攻击率」同一条纪律。
     """
+    contiguous: bool = True
+    """本轮抓取是否**证明**了连续性（不足上限 ⇒ 游标与这批之间没有别的判定事件）。"""
+    completeness: str = "complete"
+    """本轮的完整性口径（`N7`）：`complete` / `unknown`。
+    `unknown` 时**不得**声称“不丢事件”——缺口是事实，只是我们还不知道它有多大。"""
+    advance_blocked: str = ""
+    """本轮**为什么没有提交游标**（`N3`）。空 = 已提交。下一轮会重算这一段（幂等吞掉重复）。"""
+    dropped_events: int = 0
+    """解析出来**没有 `event_id`** 因而被丢弃的判定事件数（`N7` 的“坏事件”）。"""
+    known_loss: str = ""
+    """**已知丢弃**（`N3`）：非空 = 本轮确实跨过了未分析的事件。区分两种情形：
+    「游标停住重算」（`advance_blocked`，没有丢）与「只能前进、但已知丢了哪些」（这里）。
+    两者都必须可见 —— 静默丢弃等于让效果口径偏低还看不出来。"""
     cursor: str = ""
     """本轮实际使用的 `since`（空串 = 没有游标）。留档用：能回答「这一轮看了哪一段」。"""
+    committed_cursor: str = ""
+    """提交后的游标（空 = 本轮**未提交**，见 `advance_blocked`）。"""
     conclusions: list[dict[str, object]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     intent: Envelope | None = None
@@ -252,6 +380,11 @@ class AnalysisRun:
             + (f"（另有 {self.truncated_sessions} 个未分析）" if self.truncated_sessions else "")
             + f" · 结论 {len(self.conclusions)} 条（新 {self.reported} / 重复 {self.duplicated}）"
             + (f" · 游标 {self.cursor}" if self.cursor else "")
+            + (f" · 游标已提交至 {self.committed_cursor}" if self.committed_cursor else "")
+            + (f" · 游标未提交：{self.advance_blocked}" if self.advance_blocked else "")
+            + (f" · 完整性 {self.completeness}" if self.completeness != "complete" else "")
+            + (f" · 已知丢弃：{self.known_loss}" if self.known_loss else "")
+            + (f" · 丢弃坏事件 {self.dropped_events} 条" if self.dropped_events else "")
             + (f" · 窗口缺口：{self.window_gap}" if self.window_gap else "")
             + (f" · 模型回落 {self.rejected} 步" if self.rejected else "")
             + (f" · 错误 {self.errors}" if self.errors else "")
@@ -276,8 +409,14 @@ def run_once(
     传入时三步各自「模型优先、失败回落」（模型失败**不影响整轮**：结论仍由规则版产出）。
 
     `checkpoint`：增量游标。传同一个对象跨轮复用 ⇒ 只取游标之后的事件（`FIX-6`）：
-    游标**只在一轮跑完且没有致命错误时**推进；本轮取到的条数顶到 `limit` 且最早一条仍在游标之后
-    ⇒ 说明中间有一段没取到，记进 `run.window_gap`（丢事件必须可见）。
+    **整批处理完（分析 + 上报 + 连续抓取）之后才提交**（`N3`），提交时**同时**写回去重状态（`N8`）；
+    提交不了就把原因写进 `run.advance_blocked`，并把完整性标成 `unknown`（`N7`）。
+
+    **仍不承诺 exactly-once**（如实写在这里，别让人以为它可靠）：
+      ① 进程重启 ⇒ 游标丢失，重读一个窗口（结论靠 `AR-11` 幂等，代价是少量重算）；
+      ② 上报成功但提交前崩溃 ⇒ 下一轮重复上报（幂等吞掉）；
+      ③ `created_at` 早于游标的迟到事件（时钟偏差）不会被再读 —— 这是时间戳游标的固有窗口；
+      ④ 抓取取不尽时缺口大小**未知**，只能标 `completeness=unknown`。
     """
     run = AnalysisRun()
     evidence = cache if cache is not None else EvidenceCache()
@@ -287,32 +426,28 @@ def run_once(
         # 只拉**判定事件**（`event_type`）：本链路只分析判定，而 worker 自己上报的结论事件
         # 也在同一个窗口里、时间戳是本机当前时间 —— 不筛掉的话它们会挤占读取配额，
         # 还会让「取到多少条」与「要看多少判定」不再是同一个数（缺口判断会失真）。
-        fetched = port.list_events(limit=limit, since=cursor or None, event_type="decision")
+        #
+        # 连续抓取（`N7`）：能取尽就**证明**游标与这批之间没有别的判定事件
+        # （见 `_fetch_contiguous`）。
+        fetched, contiguous, fetch_note = _fetch_contiguous(port, limit=limit, since=cursor)
     except TelemetryUnavailable as exc:
         run.errors.append(f"遥测不可达：{exc}")
         return run
 
     run.fetched = len(fetched)
-    # 窗口缺口：取满了 limit 条，且**最早**那条仍晚于游标 ⇒ 游标与它之间的事件没被返回。
-    # （遥测面按 newest-first 返回；没有「复合位置」契约，这是当前能做的最强判断。）
-    if checkpoint is not None and len(fetched) >= limit and cursor:
-        oldest = min((event.created_at for event in fetched if event.created_at), default="")
-        if oldest and oldest > cursor:
-            run.window_gap = (
-                f"游标 {cursor} 与本次最早事件 {oldest} 之间的事件未取到"
-                f"（本轮取满 {limit} 条）—— 建议调大 --limit 或缩短轮询间隔"
-            )
-    # 推进只在**这一轮没有致命错误**之后：游标跳过一轮失败，那段就再也追不回来了
-    # （宁可重算，不可漏算 —— 重算由幂等吞掉，漏算没有补救）。
-    #
-    # 只按**判定事件**推进（不是「本批任意事件」）：worker 自己上报的结论事件也落在同一个窗口里，
-    # 它们的 `created_at` 是**本机当前时间**，可能比判定事件还新 —— 用它推进会把游标推到判定之前，
-    # 于是「时钟略慢的适配器」随后写入的判定会被静默跳过。只按我们真正处理的那类事件推进才安全。
-    decisions_in_batch = [event for event in fetched if event.event_type == "decision"]
-    if checkpoint is not None and decisions_in_batch and not run.errors:
-        checkpoint.advance(
-            max(event.created_at for event in decisions_in_batch if event.created_at)
-        )
+    run.contiguous = contiguous
+    run.window_gap = fetch_note
+    # 去重状态跨轮复用（`N8`）：**只有提交成功时**才会被写回 checkpoint（见下面的 `_commit`）。
+    dedupe = (
+        checkpoint.dedupe
+        if checkpoint is not None and checkpoint.dedupe is not None
+        else SituationDedupe(window_seconds=window_seconds)
+    )
+    suppressed_before = dedupe.suppressed
+    # 位置的**天花板**（`N3`）：非空 = 本轮有「已取到但没分析」的事件，游标不得越过其中最早一条。
+    # 默认空（没有截断就没有上限）。
+    ceiling = ""
+    # 推进**不在**这里做：只有整批被完整处理（分析 + 上报）之后才提交游标（`N3`，见 `_commit`）。
     # 证据缓存要装「L4 会引用的 ID」：判定事件的**载荷里**是 `decision_id`（与契约、控制台一致），
     # 而遥测事件 ID 是 `decision:<decision_id>`（外层幂等键）。两者都装 ——
     # 只装后者曾导致 AR-12 误判「引用的证据不存在」，整条攻击链被作废（make dev 抓到的真 bug）。
@@ -322,8 +457,10 @@ def run_once(
     # 读取侧已按 `event_type=decision` 收窄；这里保留同一过滤（防御：换实现时语义不悄悄变宽）。
     decisions = [event for event in fetched if event.event_type == "decision"]
     observations = parse_all([event.json_payload() for event in decisions])
+    # 坏事件（解析出来没有 event_id）不能静默消失：计数进 `run.dropped_events`（`N7`）。
+    parsed = len(observations)
     observations = [obs for obs in observations if obs.event_id]
-    dedupe = SituationDedupe(window_seconds=window_seconds)
+    run.dropped_events = parsed - len(observations)
     admitted: list[Observation] = []
     for obs in observations:
         key = dedupe.key(
@@ -332,8 +469,11 @@ def run_once(
         if dedupe.admit(key, at=_epoch(obs.at)):
             admitted.append(obs)
     run.admitted = len(admitted)
-    run.suppressed = dedupe.suppressed
+    # 去重状态跨轮复用时 `suppressed` 是累计值 ⇒ 只报**本轮增量**（否则数字会一直涨）。
+    run.suppressed = dedupe.suppressed - suppressed_before
     if not admitted:
+        # 没有新态势也要提交位置（这一段确实处理完了），否则每轮都重读同一批。
+        _commit(checkpoint, run, decisions, dedupe, ceiling)
         return run  # 无新态势：不猜、不产出结论（AR-15）
 
     # ── 按会话分组（FIX-5/FIX-6）────────────────────────────────────────────
@@ -342,6 +482,16 @@ def run_once(
     # 跨会话串链，引用看似真实、语义却是错的。现在每个会话各产一份。
     groups, truncated = _group_by_session(admitted, MAX_SESSIONS_PER_RUN)
     run.truncated_sessions = truncated
+    # 位置的**天花板**（`N3`）：若本轮因会话上限少分析了若干会话，游标就不能越过这些事件里
+    # **最早**的那条 —— 越过它 = 那些事件永远不会被分析（原缺陷正是如此）。
+    # 取最早 ⇒ 下一轮的 `since` 一定落在它们之前，于是它们会被重新读到并分析；最终收敛。
+    if truncated:
+        analyzed = {group[0].session_id for group in groups if group}
+        dropped_stamps = [
+            at for obs in admitted if obs.session_id not in analyzed and (at := _at_of(obs))
+        ]
+        if dropped_stamps:
+            ceiling = min(dropped_stamps)
 
     for index, group in enumerate(groups):
         session = _analyze_session(
@@ -389,6 +539,9 @@ def run_once(
                 continue
             run.reported += accepted
             run.duplicated += duplicated
+
+    # 整批处理完才提交位置与去重状态（`N3` / `N8`）。
+    _commit(checkpoint, run, decisions, dedupe, ceiling)
     return run
 
 

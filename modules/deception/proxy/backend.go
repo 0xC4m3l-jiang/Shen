@@ -67,7 +67,7 @@ func (h *Handler) buildBackend(ctx caddy.Context, target string, isMirage bool, 
 		// 两种规则都没有时它仍会被调用，但会立即原样返回（不读 body、不改写）。
 		//
 		// 依赖的是 `injectionSource`（三个方法），不是整个 Handler —— 见 transform.go。
-		rt = &injectingTransport{src: h, base: tr}
+		rt = &injectingTransport{src: h, base: tr, snapshotOf: h.policySnapshotOf}
 	}
 
 	rp := &reverseproxy.Handler{

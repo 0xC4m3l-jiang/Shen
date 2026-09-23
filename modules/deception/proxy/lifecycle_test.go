@@ -56,8 +56,8 @@ type stubSource struct {
 	inj Injector
 }
 
-func (s stubSource) currentInjector() Injector { return s.inj }
-func (stubSource) contentInjectionReady() (bool, *contentIndex) {
+func (s stubSource) currentInjector(*remoteState) Injector { return s.inj }
+func (stubSource) contentInjectionReady(*remoteState) (bool, *contentIndex) {
 	return false, nil
 }
 func (stubSource) injectContent(_ *http.Request, _ *contentIndex, _ string, _ []byte) ([]byte, string, bool) {

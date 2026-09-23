@@ -57,9 +57,12 @@ type edgeDoc struct {
 
 // edgeDecoy 是诱饵路由表的一行：归一化路径 → 幻境后端逻辑名。
 type edgeDecoy struct {
-	ID      string `json:"id"`
-	Path    string `json:"path"`
-	Backend string `json:"backend"`
+	ID   string `json:"id"`
+	Path string `json:"path"`
+	// Hosts 是归属声明（`W7`）：适配器只在请求的 Host 命中这些声明时才接管这条路径。
+	// 空 = 未声明（旧载荷的形态）⇒ 任何主机都匹配；新核心一律填。
+	Hosts   []string `json:"hosts,omitempty"`
+	Backend string   `json:"backend"`
 }
 
 // edgeBackendURL 把后端地址规范化成**适配器能用的 URL**。
@@ -256,11 +259,19 @@ func (s *Server) edgePayload(ctx context.Context, snap contract.PolicySnapshot) 
 		if !a.Enabled || a.Backend == "" {
 			continue
 		}
+		hosts := make([]string, len(a.Hosts))
+		copy(hosts, a.Hosts)
+		sort.Strings(hosts) // 排序：让「同内容必得同一校验和」继续成立（AR-30 精神）
 		doc.Decoys = append(doc.Decoys, edgeDecoy{
-			ID: a.ID, Path: contract.NormalizePath(a.Path), Backend: a.Backend,
+			ID: a.ID, Path: contract.NormalizePath(a.Path), Hosts: hosts, Backend: a.Backend,
 		})
 	}
-	sort.Slice(doc.Decoys, func(i, j int) bool { return doc.Decoys[i].Path < doc.Decoys[j].Path })
+	sort.Slice(doc.Decoys, func(i, j int) bool {
+		if doc.Decoys[i].Path != doc.Decoys[j].Path {
+			return doc.Decoys[i].Path < doc.Decoys[j].Path
+		}
+		return doc.Decoys[i].ID < doc.Decoys[j].ID
+	})
 	for _, b := range backends {
 		doc.Backends = append(doc.Backends, edgeBackend{
 			Name: b.Name, Address: edgeBackendURL(b.Addr), Enabled: b.Enabled,

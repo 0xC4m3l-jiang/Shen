@@ -50,7 +50,11 @@ func routeSegmentPrefix(got, want string) bool {
 // 表仍按长度降序（`applyEdgePolicy` 排的）：同长度时取表序靠前者 ⇒ 结果确定（`AR-30`）。
 //
 // routes 为空、路径为空、或没有命中 ⇒ ok=false（调用方照常走判定/白名单/兜底）。
-func matchDecoyRoute(routes []policyDecoyRoute, reqPath string) (policyDecoyRoute, bool) {
+// matchDecoyRoute 取最长命中；`host` 必须同时落在该路由的归属声明内（`W7`）。
+//
+// 最长匹配之外的第二维是归属：同一条路径可能被不同主机分别声明（多站点），
+// 只按路径匹配会让 A 站点的声明接管 B 站点的同名路径。
+func matchDecoyRoute(routes []policyDecoyRoute, reqPath, host string) (policyDecoyRoute, bool) {
 	if len(routes) == 0 {
 		return policyDecoyRoute{}, false
 	}
@@ -62,6 +66,9 @@ func matchDecoyRoute(routes []policyDecoyRoute, reqPath string) (policyDecoyRout
 	found := false
 	for _, r := range routes {
 		if !routeSegmentPrefix(req, r.path) {
+			continue
+		}
+		if !hostMatches(r.hosts, host) {
 			continue
 		}
 		if !found || len(r.path) > len(best.path) {

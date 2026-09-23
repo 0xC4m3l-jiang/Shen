@@ -247,11 +247,10 @@ func injectResultOf(r *http.Request) (string, string) {
 //	① 适配器的**本地兜底开关**（`SHEN_PROXY_INJECT_CONTENT`，默认 false）；
 //	② 策略载荷的**下发级开关** `inject_enabled`（核心配置 `ai.enabled` 的投影）；
 //	③ 有**可用的清单**（策略面给过、且结构可索引）。
-func (h *Handler) contentInjectionReady() (bool, *contentIndex) {
+func (h *Handler) contentInjectionReady(st *remoteState) (bool, *contentIndex) {
 	if !h.InjectContent {
 		return false, nil
 	}
-	st := h.remotePolicy()
 	if st == nil || !st.injectEnabled || st.content == nil {
 		return false, nil
 	}

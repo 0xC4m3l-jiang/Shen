@@ -83,11 +83,21 @@ var tmplList = template.Must(template.New("list").Parse(pageHead + `
 <footer>{{.Org}} internal systems</footer></body></html>`))
 
 // tmplError 是合成错误页：中性措辞、无栈信息、无实现指纹。
+//
+// 它与其他页共用同一个公共头（`W3`）：错误页突然换一套外观 / 丢掉组织名，本身就是破绽。
 var tmplError = template.Must(template.New("err").Parse(pageHead + `
-<header><b>Console</b></header>
+<header><b>{{.Product}}</b><span class="muted">{{.Org}}</span></header>
 <main>
   <h2 class="err">{{.Title}}</h2>
   <p class="muted">{{.Detail}}</p>
   <p class="muted">Reference: {{.Code}}</p>
 </main>
-<footer>internal systems</footer></body></html>`))
+<footer>{{.Org}} internal systems</footer></body></html>`))
+
+// fallbackErrorPage 是**不依赖模板**的兜底页：模板自身坏掉时仍然给出一个完整、中性的页面。
+//
+// 它必须是常量字面量（不读任何上下文）：这条路径出现时，我们对“模板里到底哪里坏了”一无所知，
+// 唯一能保证的就是「不要再拼一次模板」。
+const fallbackErrorPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Console</title></head>
+<body><h2>Unavailable</h2><p>The console is temporarily unavailable.</p></body></html>`

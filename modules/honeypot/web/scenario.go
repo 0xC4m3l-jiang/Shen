@@ -191,6 +191,13 @@ type Page[T any] struct {
 }
 
 // paginate 按 (page, pageSize) 切片；pageSize 超过场景上限就**夹到上限**（配额而非报错）。
+//
+// 两条边界纪律（`W2`）：
+//
+//	① **先与总页数比较，再算偏移**：`(page-1)*pageSize` 在极端页号下会溢出成负数，
+//	   负数切片直接 panic（远端可触发 ⇒ 这是可用性问题，不只是数字难看）；
+//	② 空页固定返回**空数组**（不是 nil/`null`）：`items: null` 会让读取方（脚本/前端）
+//	   在「没有这条资源」与「这一页为空」之间分不清。
 func paginate[T any](items []T, page, pageSize, maxPageSize int) Page[T] {
 	if pageSize <= 0 {
 		pageSize = 3
@@ -202,11 +209,15 @@ func paginate[T any](items []T, page, pageSize, maxPageSize int) Page[T] {
 	if page < 1 {
 		page = 1
 	}
-	start := (page - 1) * pageSize
-	out := Page[T]{Page: page, PageSize: pageSize, Total: total}
-	if start >= total {
-		return out
+	pages := 0
+	if total > 0 {
+		pages = (total + pageSize - 1) / pageSize
 	}
+	out := Page[T]{Items: []T{}, Page: page, PageSize: pageSize, Total: total}
+	if page > pages {
+		return out // 越界页：空数组 + 无 next_page（不计算偏移 ⇒ 不可能溢出）
+	}
+	start := (page - 1) * pageSize
 	end := start + pageSize
 	if end > total {
 		end = total

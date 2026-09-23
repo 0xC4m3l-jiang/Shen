@@ -151,6 +151,11 @@ func (e *Engine) Decide(ctx context.Context, req contract.JudgeRequest) (contrac
 // whitelisted 报告该观测是否属于免判定来源（INT-25）。
 //
 // 三项**任一**命中即可：源网段 / UA / 路径前缀。空项一律跳过（空串不该匹配一切）。
+//
+// 路径前缀用 **归一化 + 路径段边界**（`N5`），与适配器的诱饵路由同一口径：
+// 原来的裸 `strings.HasPrefix` 会让配置的 `/admin` 命中 `/administrator`、`/admin.html` ——
+// 那是把**运维探针误判成内部来源**，也就是把判定面整块让给了一个同样以前缀开头的陌生路径。
+// 这个方向只会**收紧**（命中的更少），不会扩大白名单（`INT-25` 的护栏只增不减是针对策略下发说的）。
 func (e *Engine) whitelisted(o contract.Observation) bool {
 	for _, p := range e.whitelist.SourceCIDRs {
 		if p.IsValid() && p.Contains(o.SourceIP) {
@@ -162,8 +167,12 @@ func (e *Engine) whitelisted(o contract.Observation) bool {
 			return true
 		}
 	}
+	path := contract.NormalizePath(o.Path)
 	for _, pfx := range e.whitelist.PathPrefixes {
-		if pfx != "" && strings.HasPrefix(o.Path, pfx) {
+		if pfx == "" {
+			continue
+		}
+		if contract.PathSegmentPrefix(path, contract.NormalizePath(pfx)) {
 			return true
 		}
 	}
@@ -192,8 +201,11 @@ func (e *Engine) classify(score float64, th contract.Thresholds, path string) (c
 // （单一事实源，见 cmd/core 的 decoyPrefixes），本函数是该不变量的执行点；
 // 「诱饵面永不 block」由 director_test 与 cmd/core 的集成测试断言。
 func (e *Engine) onDecoy(path string) bool {
+	got := contract.NormalizePath(path)
 	for _, p := range e.decoyPrefixes {
-		if strings.HasPrefix(path, p) {
+		// 与白名单、与适配器的诱饵路由**同一个判据**（`N5`）：归一化 + 路径段边界。
+		// 三者口径不一致时，同一路径会在核心与边缘得到不同归类（"幻境面永不 block" 也会漏）。
+		if contract.PathSegmentPrefix(got, contract.NormalizePath(p)) {
 			return true
 		}
 	}

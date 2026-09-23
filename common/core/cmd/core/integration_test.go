@@ -62,6 +62,7 @@ decoys:
     - id: "dev-api"
       kind: "developer_api"
       path: "/portal/api/content"
+      hosts: ["127.0.0.1", "localhost"]   # 归属声明（W7）：本档经回环访问
       content: "site-developer-api"
       backend: "mirage"     # 启用中的诱饵必须指向已启用的幻境后端（C01）
       enabled: true

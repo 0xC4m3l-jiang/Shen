@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -47,6 +48,24 @@ type Handler struct {
 
 	// DecisionTimeout 是对核心调用的硬超时（NI-4）。超时即放行。
 	DecisionTimeout caddy.Duration `json:"decision_timeout,omitempty"`
+
+	// DegradedCacheTTL 是**判定失败**时的降级缓存预算（N2），0 = 默认（1s，且不超过 CacheTTL）。
+	//
+	// 为什么需要它：核心不可用时，若把失败也按正常 TTL 缓存，同键请求在故障恢复后还会
+	// 继续用降级结果；若完全不缓存，则**每条请求**都要白等满判定预算（无界重试）。
+	// 因此故障只给一个**独立的短预算**，并且命中它时事件照实记「降级来源」。
+	DegradedCacheTTL caddy.Duration `json:"degraded_cache_ttl,omitempty"`
+
+	// DecoyLease 是**诱饵路由撤销之后的墓碑租约**（N6），0 = 默认（24h）；负数 = 永久。
+	//
+	// 为什么需要它：一条诱饵路径一旦对外出现过，旧链接 / 爬虫 / 对手笔记都会继续用它。
+	// 若「路由被删除」就立刻把归属还给业务，那些残留请求会**直接打到生产**上；
+	// 租约期内在边缘继续用固定错误结束这些路径（不回生产），租约到期才释放归属。
+	DecoyLease caddy.Duration `json:"decoy_lease,omitempty"`
+
+	// ForwardCredentials 为真时把请求的认证材料（Authorization / 业务会话 Cookie）**原样**
+	// 转发给幻境后端。默认 **false**（剥离）—— 幻境不是业务，不该收到生产认证材料（W4）。
+	ForwardCredentials bool `json:"forward_credentials,omitempty"`
 
 	// CacheTTL 是本地判定缓存的存活时间。
 	CacheTTL caddy.Duration `json:"cache_ttl,omitempty"`
@@ -202,6 +221,12 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		cacheCap = defaultCacheMaxEntries
 	}
 	h.cache = newDecisionCache(time.Duration(h.CacheTTL), cacheCap, now)
+	// 降级缓存预算（N2）：默认 1s，可配；显式负数视为 0 → 退化为不缓存降级结果。
+	if h.DegradedCacheTTL == 0 {
+		h.cache.degradedTTL = defaultDegradedCacheTTL
+	} else if h.DegradedCacheTTL > 0 {
+		h.cache.degradedTTL = time.Duration(h.DegradedCacheTTL)
+	}
 	// 会话钉定的 TTL 与判定缓存同窗：两者都是「可丢失的缓存」，过期重算得到同一结果（确定性）。
 	h.pins = newVariantPins(time.Duration(h.CacheTTL), cacheCap, now)
 
@@ -322,6 +347,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	sw := &headerSanitizer{ResponseWriter: w}
 	r.Header.Del("Via") // 也不让上游 / 幻境后端看到我们的栈指纹
 	started := time.Now()
+	// **本请求固定使用的策略快照**（N1）：白名单 / 诱饵路由 / 后端表 / 注入规则全部取自同一份。
+	//
+	// 为什么必须在最前面取一次：策略面每 interval 换一次快照，若各个判断各自原子读，
+	// 一个请求可能「白名单是旧的、后端表是新的」—— 这类撕裂在故障排查里几乎无法重现。
+	st := h.remotePolicy()
+	r = r.WithContext(withPolicySnapshot(r.Context(), st))
 	// decision_id 在**最前面**就派生好：白名单命中也要上报逐判定事件（图上要能看见这条分支），
 	// 而事件 id 就是 decision_id（幂等键，AR-11）。
 	// 会话身份：由适配器按约定的 cookie 名取出**最小身份值**（整段 Cookie 不参与、也不跨接缝）。
@@ -329,7 +360,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	id := decisionID(session, clientIP(r, h.TrustXFF), r.URL.Path, time.Duration(h.Window), h.now())
 	// 本地缓存的键**不是** decision_id：判定还看 method / Host / 查询串 / UA 与策略版本
 	// （ST-10 只约束 decision_id 的派生，与本地缓存键分开 —— 见 cache.go 的 cacheKey）。
-	key := cacheKey(id, r, h.policyRevision())
+	key := cacheKey(id, r, h.policyRevision(st))
 
 	// 注入结果的槽挂在请求上下文上：改写发生在 transport 里（改道侧），
 	// 而上报发生在这里 —— 中间隔着 Caddy 的转发链，上下文是唯一不被它包一层的传递面。
@@ -342,14 +373,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// （§9.2 原话）—— 否则内部探针打到诱饵路径时会看到真站。
 	// 影子模式下**不投递**（INT-11：只观测不处置），请求照常走后面的判定/白名单链路。
 	if !h.Shadow {
-		if route, ok := h.matchDecoy(r.URL.Path); ok {
-			executed, derr := h.deliverDecoy(sw, r, next, route)
+		if route, ok := h.matchDecoy(st, r); ok {
+			result, derr := h.deliverDecoy(st, sw, r, next, route)
 			h.reportRoute(r, id, judgev1.Action_ACTION_MIRAGE,
-				routeInfo{executed: executed, backend: route.backend}, sw, started)
+				routeInfo{executed: executedDecoy, backend: route.backend, decoyResult: result, cause: derr}, sw, started)
 			return derr
 		}
-	} else if h.LogRequests && len(h.currentDecoyRoutes()) > 0 {
-		if route, ok := h.matchDecoy(r.URL.Path); ok {
+	} else if h.LogRequests && len(decoyRoutesOf(st)) > 0 {
+		if route, ok := h.matchDecoy(st, r); ok {
 			log.Printf("proxy: 诱饵路由命中 %s（资产 %s）但当前是**影子模式** ⇒ 不投递（INT-11），照常走判定",
 				r.URL.Path, route.id)
 		}
@@ -358,32 +389,44 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// ① 白名单先于改道判定（INT-25）—— 命中则不调核心，直接透传。
 	// 本地白名单（env）与远端白名单（策略面）取**并集**：护栏只增不减（见 applyEdgePolicy）。
 	ip := clientIP(r, h.TrustXFF)
-	if whitelisted(ip, h.whitelist) || h.remoteWhitelisted(ip) {
-		ferr := h.forward(sw, r, next, targetOrigin)
+	if whitelisted(ip, h.whitelist) || h.remoteWhitelisted(st, ip) {
+		ferr := h.forward(st, sw, r, next, targetOrigin)
 		h.reportRoute(r, id, judgev1.Action_ACTION_ORIGIN, routeInfo{executed: executedWhitelist}, sw, started)
 		return ferr
 	}
 
 	// ② 本地判定缓存（AR-6 第 2 件事）：命中则不调核心，按缓存结果处置。
-	if act, backend, ok := h.cache.get(key); ok {
-		executed, derr := h.dispatch(sw, r, next, act, backend)
+	if ent, ok := h.cache.lookup(key); ok {
+		if ent.degraded {
+			// **降级缓存命中**（N2）：上一轮判定失败过，这里仍然是「引擎没能判定」。
+			// 照实记 failopen + 降级来源 —— 不能因为缓存命中就伪装成一次正常判定。
+			ferr := h.forward(st, sw, r, next, targetOrigin)
+			h.reportRoute(r, id, ent.action,
+				routeInfo{executed: executedFailOpen, cause: errDegradedCache}, sw, started)
+			return ferr
+		}
+		executed, derr := h.dispatch(st, sw, r, next, ent.action, ent.backend)
 		// 落点记 `cache`（“未重新判定”）；图按 action/backend 归到意图分支上。
-		h.reportRoute(r, id, act, routeInfo{executed: executedCache, backend: backend, dispatched: executed}, sw, started)
+		h.reportRoute(r, id, ent.action, routeInfo{executed: executedCache, backend: ent.backend, dispatched: executed}, sw, started)
 		return derr
 	}
 
 	// ③ 调核心判定。任何失败都已折叠成「放行」（NI-3 / NI-4 / NI-5）。
 	act, backend, err := h.decide(r, id)
-	h.cache.put(key, act, backend)
 
 	// ④ 按结果路由 → 再异步上报（AR-6 第 3 / 4 件事）。
 	if err != nil {
 		// 判定失败：放行到业务（NI-3），落点记 failopen —— 这是“为什么没判”在图上的唯一痕迹。
-		ferr := h.forward(sw, r, next, targetOrigin)
+		//
+		// **不写正常缓存**（N2）：降级结果有独立的短预算，到期后同键请求会重新调核心
+		// （恢复重判）；正常 TTL 会让故障期的旧结果在核心恢复后继续生效。
+		h.cache.putDegraded(key, act, backend)
+		ferr := h.forward(st, sw, r, next, targetOrigin)
 		h.reportRoute(r, id, act, routeInfo{executed: executedFailOpen, cause: err}, sw, started)
 		return ferr
 	}
-	executed, derr := h.dispatch(sw, r, next, act, backend)
+	h.cache.put(key, act, backend)
+	executed, derr := h.dispatch(st, sw, r, next, act, backend)
 	h.reportRoute(r, id, act, routeInfo{executed: executed, backend: backend}, sw, started)
 	return derr
 }
@@ -400,56 +443,134 @@ func (h *Handler) sessionCookieName() string {
 	return DefaultSessionCookie
 }
 
-// matchDecoy 在当前策略的**诱饵路由表**里做最长匹配（段边界 + 归一化，见 decoyroute.go）。
-func (h *Handler) matchDecoy(reqPath string) (policyDecoyRoute, bool) {
-	return matchDecoyRoute(h.currentDecoyRoutes(), reqPath)
+// matchDecoy 在**该快照的**诱饵路由表里做最长匹配（段边界 + 归一化，见 decoyroute.go）。
+//
+// 匹配范围包含**活路由与搜索碑**（N6）：搜索碑路径在租约期内仍不属于业务。
+func (h *Handler) matchDecoy(st *remoteState, r *http.Request) (policyDecoyRoute, bool) {
+	return matchDecoyRoute(decoyRoutesOf(st), r.URL.Path, r.Host)
 }
 
-// currentDecoyRoutes 取当前生效的诱饵路由表（未接过策略面时为空）。
-func (h *Handler) currentDecoyRoutes() []policyDecoyRoute {
-	if st := h.remotePolicy(); st != nil {
+// decoyRoutesOf 是匹配用的路由表：活路由 + 未被覆盖的搜索碑（活路由优先，见 applyEdgePolicy）。
+func decoyRoutesOf(st *remoteState) []policyDecoyRoute {
+	if st == nil {
+		return nil
+	}
+	if len(st.tombstones) == 0 {
 		return st.decoys
 	}
-	return nil
+	all := make([]policyDecoyRoute, 0, len(st.decoys)+len(st.tombstones))
+	all = append(all, st.decoys...)
+	all = append(all, st.tombstones...)
+	return all
 }
 
-// deliverDecoy 把请求投递到诱饵后端。
+// withPolicySnapshot 把「本请求固定使用的策略快照」放进请求上下文（N1）。
+//
+// 改写发生在 transport 里（Caddy 转发链内部），它拿不到 ServeHTTP 的局部变量，
+// 因此快照必须能经请求上下文抵达 —— 否则注入规则可能与路由/后端来自不同版本。
+func withPolicySnapshot(ctx context.Context, st *remoteState) context.Context {
+	return context.WithValue(ctx, policySnapshotKey{}, st)
+}
+
+// policySnapshotOf 取请求上钉定的快照；没有（单测直接调 transport / 非请求路径）时回落到当前值。
+func (h *Handler) policySnapshotOf(r *http.Request) *remoteState {
+	if r != nil {
+		if st, ok := r.Context().Value(policySnapshotKey{}).(*remoteState); ok {
+			return st
+		}
+	}
+	return h.remotePolicy()
+}
+
+// policySnapshotKey 是请求上下文里的键（未导出类型：只有本包能写）。
+type policySnapshotKey struct{}
+
+// deliverDecoy 把请求投递到诱饵后端，并回答「投递发生了什么」（W8）。
 //
 // **故障绝不回生产**（方案 §9.2）：后端不可用/已撤销时返回固定 502，而不是回落到业务 ——
 // 已登记为诱饵的请求回源，既会让对手看见真站，也可能把非幂等操作重复执行。
 // 它同时是「专属诱饵路由上的非幂等重放」这个 P0 边界的落地点（Q2 的中间路线）。
-func (h *Handler) deliverDecoy(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, route policyDecoyRoute) (string, error) {
-	rp, ok := h.mirageHandler(route.backend)
+//
+// 返回的 result 是事件里的 `delivery_result`：`matched`/`delivered`/`backend_unavailable`/
+// `delivery_failed`/`tombstoned`。只看 `executed=decoy` 分不出「投出去了」与「后端没了」。
+func (h *Handler) deliverDecoy(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, route policyDecoyRoute) (string, error) {
+	if route.revoked {
+		// 搜索碑（N6）：这条路径曾被登记为诱饵，现已撤销但租约未到期。
+		// 它仍**不属于业务** —— 残留链接 / 扫描器继续拿到固定错误，而不是突然看到真站。
+		log.Printf("proxy: 诱饵 %s（路径 %s）已撤销，租约内按固定 502 结束（不到业务）", route.id, r.URL.Path)
+		w.WriteHeader(http.StatusBadGateway)
+		return decoyRevoked, nil
+	}
+	rp, ok := h.mirageHandler(st, route.backend)
 	if !ok {
 		// 后端未登记 / 未启用 / 已被撤销：固定错误（不回生产）。
 		log.Printf("proxy: 诱饵 %s（路径 %s）的后端 %q 不可用 ⇒ 固定 502，不回生产（§9.2）",
 			route.id, r.URL.Path, route.backend)
 		w.WriteHeader(http.StatusBadGateway)
-		return executedDecoy, nil
+		return decoyBackendUnavailable, nil
 	}
+	// 凭证边界（W4）：幻境不是业务，默认**不把**生产认证材料带过去（Authorization / 业务会话 Cookie）。
+	h.stripCredentials(r)
 	if err := rp.ServeHTTP(w, r, next); err != nil {
 		// 后端中途失败也**不回生产**：调用方按错误处理（Caddy 错误路由），客户端看到 5xx。
 		log.Printf("proxy: 诱饵 %s 的后端 %q 投递失败：%v（不回生产，§9.2）", route.id, route.backend, err)
-		return executedDecoy, err
+		return decoyDeliveryFailed, err
 	}
-	return executedDecoy, nil
+	return decoyDelivered, nil
+}
+
+// stripCredentials 在投递到幻境之前剥离**生产认证材料**（W4）。
+//
+// 剔哪些：`Authorization` / `Proxy-Authorization` 与**业务会话 cookie**（按配置的 cookie 名）。
+// 不剔什么：其余 Cookie 要留着 —— 幻境自己的会话 cookie（如 `atlas_session`）是诱饵体验的一部分。
+// `ForwardCredentials` 为真时不剔（默认关闭：幻境不是业务，不该拿到能冒充用户的材料）。
+func (h *Handler) stripCredentials(r *http.Request) {
+	if h.ForwardCredentials {
+		return
+	}
+	r.Header.Del("Authorization")
+	r.Header.Del("Proxy-Authorization")
+	name := h.sessionCookieName()
+	if name == "" {
+		return
+	}
+	cookies := r.Cookies()
+	if len(cookies) == 0 {
+		return
+	}
+	kept := cookies[:0]
+	stripped := 0
+	for _, c := range cookies {
+		if c.Name == name {
+			stripped++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if stripped == 0 {
+		return
+	}
+	r.Header.Del("Cookie")
+	for _, c := range kept {
+		r.AddCookie(c) // 逐个加回（AddCookie 会自己拼 Cookie 头）
+	}
 }
 
 // dispatch 按决策结果选择路径。
 //
 // Shadow 为真时**永不改道、永不拦截**（INT-11：首次上线必须影子模式）；
 // 决策照算、照上报，只是不执行。
-func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, act judgev1.Action, backend string) (string, error) {
+func (h *Handler) dispatch(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, act judgev1.Action, backend string) (string, error) {
 	if h.Shadow {
-		return executedFor(true, act, false, false), h.forward(w, r, next, targetOrigin)
+		return executedFor(true, act, false, false), h.forward(st, w, r, next, targetOrigin)
 	}
 	switch act {
 	case judgev1.Action_ACTION_MIRAGE:
 		// 后端名查不到一律回落业务（NI-5）—— 宁可漏改道，不可断业务。
-		if _, ok := h.mirageHandler(backend); !ok {
-			return executedFor(false, act, false, false), h.forward(w, r, next, targetOrigin)
+		if _, ok := h.mirageHandler(st, backend); !ok {
+			return executedFor(false, act, false, false), h.forward(st, w, r, next, targetOrigin)
 		}
-		fellBack, err := h.forwardMirage(w, r, next, backend)
+		fellBack, err := h.forwardMirage(st, w, r, next, backend)
 		return executedFor(false, act, true, fellBack), err
 	case judgev1.Action_ACTION_BLOCK:
 		// 403 是对手可见的处置 —— 这是**已承认的设计**（ADR-0002：引擎是欺骗调度器，
@@ -459,17 +580,18 @@ func (h *Handler) dispatch(w http.ResponseWriter, r *http.Request, next caddyhtt
 		return executedFor(false, act, false, false), nil
 	default:
 		// ACTION_ORIGIN 与任何未识别取值都放行。
-		return executedFor(false, act, false, false), h.forward(w, r, next, targetOrigin)
+		return executedFor(false, act, false, false), h.forward(st, w, r, next, targetOrigin)
 	}
 }
 
 // forward 把请求交给指定后端的 Caddy reverse_proxy。
-func (h *Handler) forward(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, target string) error {
+func (h *Handler) forward(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, target string) error {
 	if target != targetOrigin {
-		rp, ok := h.mirageHandler(target)
+		rp, ok := h.mirageHandler(st, target)
 		if !ok {
-			return h.forward(w, r, next, targetOrigin)
+			return h.forward(st, w, r, next, targetOrigin)
 		}
+		h.stripCredentials(r) // W4：幻境默认拿不到生产认证材料
 		return rp.ServeHTTP(w, r, next)
 	}
 	return h.origin.ServeHTTP(w, r, next)
@@ -479,8 +601,8 @@ func (h *Handler) forward(w http.ResponseWriter, r *http.Request, next caddyhttp
 //
 // 远端优先：策略面是 ST-24（策略是数据）的正式通路；
 // 本地兜底：策略面拉不到时边缘照常工作（NI-1）。
-func (h *Handler) mirageHandler(name string) (caddyhttp.MiddlewareHandler, bool) {
-	if st := h.remotePolicy(); st != nil {
+func (h *Handler) mirageHandler(st *remoteState, name string) (caddyhttp.MiddlewareHandler, bool) {
+	if st != nil {
 		if rp, ok := st.backends[name]; ok {
 			return rp, true
 		}
@@ -503,8 +625,8 @@ func (h *Handler) mirageHandler(name string) (caddyhttp.MiddlewareHandler, bool)
 //
 // 用 trackingWriter 记录「是否已写出字节」：没写过 → 可安全重放到业务；
 // 写过 → 只能把错误如实抛出（由 Caddy 错误路由处理），否则会输出半截响应。
-func (h *Handler) forwardMirage(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (bool, error) {
-	rp, ok := h.mirageHandler(backend)
+func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (bool, error) {
+	rp, ok := h.mirageHandler(st, backend)
 	if !ok {
 		// 理论上到不了这里（dispatch 已查过表）；真到了就回落业务，不报 500。
 		return true, h.origin.ServeHTTP(w, r, next)
@@ -580,8 +702,23 @@ const (
 	executedFallback  = "origin_fallback" // route_mirage 但后端不可用 ⇒ 回落源站（NI-5）
 	executedMirage    = "mirage"          // route_mirage 且成功转发到幻境后端
 	executedBlock     = "block"           // block，返回 403
-	executedDecoy     = "decoy"           // 专属诱饵路由命中并投递（未调核心；§9.2）
+	executedDecoy     = "decoy"           // 专属诱饵路由命中（未调核心；§9.2）
 )
+
+// `delivery_result` 的取值：把「匹配到诱饵路由」与「真的投递出去了」分开（W8）。
+//
+// 为什么需要：`executed=decoy` 在「后端不可用 ⇒ 固定 502」与「成功投递」时**取值相同**，
+// 只看它会把失败当成投递成功（图上分不出「诱饵在服务」与「诱饵早坏了」）。
+const (
+	decoyDelivered          = "delivered"           // 已交给诱饵后端（最终状态看 status）
+	decoyBackendUnavailable = "backend_unavailable" // 后端未登记 / 未启用 / 已撤销 ⇒ 固定 502
+	decoyDeliveryFailed     = "delivery_failed"     // 后端中途失败（不回生产）
+	decoyRevoked            = "tombstoned"          // 路由已撤销，租约内固定 502（N6）
+)
+
+// errDegradedCache 是「命中降级缓存」的原因。它必须与真正的判定失败区分开：
+// 前者是「上一轮失败过，这一轮没再调核心」，后者是「这一轮调了，失败了」。
+var errDegradedCache = errors.New("命中判定降级缓存（上一轮判定失败，未重新调用核心）")
 
 // executedFor 决定「实际落点」的取值 —— 这是图上区分「核心判成什么」与「实际走了哪」的唯一依据。
 //
@@ -614,6 +751,9 @@ type routeInfo struct {
 	cause      error   // 判定失败原因（非 nil 时必记 warn 日志）
 	inject     string  // 注入结果（见 Inject* 常量；空 = 未涉及）
 	contentID  string  // 实际注入的内容标识（空 = 未注入）
+	// decoyResult 仅专属诱饵路由使用（W8）：`delivered` / `backend_unavailable` /
+	// `delivery_failed` / `tombstoned`。空 = 本请求不是诱饵路由请求。
+	decoyResult string
 }
 
 // reportRoute 收尾：补全响应观测 → 记日志（失败必记；逐请求按开关）→ 异步上报逐判定事件。
@@ -680,6 +820,8 @@ func (h *Handler) judgedEventPayload(id string, r *http.Request, act judgev1.Act
 		"status":      info.status,
 		"bytes":       info.bytes,
 		"duration_ms": info.durationMs,
+		// 诱饵投递结果（W8）。降级来源不另开键：它已经在 `decision_error` 里（N2）。
+		"delivery_result": info.decoyResult,
 		// AI 欺骗内容的注入结果（`ADR-0023`）：
 		"inject":     inject,
 		"content_id": contentID,

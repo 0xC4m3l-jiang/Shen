@@ -340,6 +340,64 @@ func TestEmptyWhitelistEntriesDoNotMatchEverything(t *testing.T) {
 	}
 }
 
+// ── N5：路径口径必须统一（归一化 + 路径段边界）───────────────────────────────
+//
+// 原来白名单与"诱饵面"判定都用裸 `strings.HasPrefix`：配置 `/admin` 会命中 `/administrator`。
+// 两处方向相反但同样有害：
+//
+//	· 白名单多命中 ⇒ 陌生路径被放行（护栏失效）；
+//	· 诱饵面多命中 ⇒ 该 block 的路径不再 block（MD-25 的保护也跟着失效）。
+func TestPathPrefixUsesSegmentBoundary(t *testing.T) {
+	e := newWhitelistEngine(t, contract.Whitelist{PathPrefixes: []string{"/healthz"}})
+	cases := []struct {
+		path string
+		want contract.Action
+	}{
+		{"/healthz", contract.ActionOrigin},       // 前缀自身
+		{"/healthz/ready", contract.ActionOrigin}, // 段边界内
+		{"/healthz/", contract.ActionOrigin},      // 尾斜杠
+		// 以下三条**不得**命中白名单 ⇒ 走正常判定。这个 engine 开了 block（分数 1.0 ≥ 阈值），
+		// 所以“被判定”在这里表现为 block —— 断言的就是「没有走白名单那条旁路」。
+		{"/healthzz", contract.ActionBlock}, // ⚠️ 裸前缀会误命中这里（旧行为）
+		{"/healthz2/ready", contract.ActionBlock},
+		{"/healthz.html", contract.ActionBlock},
+	}
+	for _, c := range cases {
+		d, _ := e.Decide(context.Background(), contract.JudgeRequest{
+			DecisionID: "seg-" + c.path,
+			Observed:   contract.Observation{Path: c.path},
+		})
+		if d.Action != c.want {
+			t.Errorf("%s：期望 %s，得到 %s（N5：前缀必须按路径段边界匹配）", c.path, c.want, d.Action)
+		}
+	}
+}
+
+// TestPathPrefixIsNormalized 归一化口径与适配器一致（去点段、合并斜杠、去尾斜杠）。
+func TestPathPrefixIsNormalized(t *testing.T) {
+	e := newWhitelistEngine(t, contract.Whitelist{PathPrefixes: []string{"/healthz"}})
+	for _, p := range []string{"//healthz/ready", "/healthz/./ready", "/healthz/ready/"} {
+		d, _ := e.Decide(context.Background(), contract.JudgeRequest{
+			DecisionID: "norm-" + p,
+			Observed:   contract.Observation{Path: p},
+		})
+		if d.Action != contract.ActionOrigin {
+			t.Errorf("%s：归一化后应命中白名单，得到 %s", p, d.Action)
+		}
+	}
+}
+
+// TestDecoyPrefixUsesSegmentBoundary：诱饵面前缀同样按段边界（否则相邻路径会"被属于"诱饵面）。
+func TestDecoyPrefixUsesSegmentBoundary(t *testing.T) {
+	e := newDecoyEngine(t, 1.0, []string{"/portal"})
+	if got := decidePath(t, e, "/portal/thing").Action; got != contract.ActionMirage {
+		t.Errorf("诱饵面内应改道，得到 %s", got)
+	}
+	if got := decidePath(t, e, "/portal-admin/dump").Action; got != contract.ActionBlock {
+		t.Errorf("相似前缀**不属于**诱饵面（N5），应照常 block，得到 %s", got)
+	}
+}
+
 // ── 构造校验 ───────────────────────────────────────────────────────────────
 
 func TestNewRejectsNil(t *testing.T) {

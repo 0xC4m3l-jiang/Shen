@@ -22,13 +22,20 @@ const (
 // 两条硬约束（方案 §5.2）：
 //
 //	① **禁止**携带请求体 —— 尤其是密码：误填的真实凭据默认丢弃正文，不进事件；
-//	② 只放**场景内**的标识（用户名/路径/结果），不放原始认证材料。
+//	② 只放**场景内**的标识（用户名/路径/结果），不放原始认证材料；
+//	③ 会话只能以 `Session`（**脱敏后的可关联标识**）出现，禁止写 cookie 原值。
+//
+// 字段要求（`W5`）：`At` 与 `Path` 必须由 handler 补齐（不再允许"声明了但没人填"），
+// 会话关联必须脱敏 —— 否则事件读起来方便，代价是把一份凭据抄进了观测面。
 type Event struct {
 	Kind    EventKind
-	At      time.Time
-	Path    string
-	User    string // 合成登录里提交的用户名（可为空）
-	Outcome string // 合成结果：demo / fail / view …
+	At      time.Time // 事件时刻（handler 用注入的时钟补齐）
+	Path    string    // 合成资源路径（如 /admin/users）
+	User    string    // 合成登录里提交的用户名（可为空）
+	Outcome string    // 合成结果：demo / fail / throttled / page / dashboard / api …
+	// Session 是**脱敏后的**会话标识（哈希前缀）：同一次会话的事件能对上，
+	// 但拿到它无法冒充那次会话（`scrubSession`）。
+	Session string
 }
 
 // EventSink 是事件出口（**由消费方定义**：装配层接上自己的观测面，测试接替身）。

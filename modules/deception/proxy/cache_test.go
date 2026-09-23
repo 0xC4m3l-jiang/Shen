@@ -101,15 +101,15 @@ func TestHandlerRejudgesWhenMethodChanges(t *testing.T) {
 // 而这里要锁的是「版本进了键」这件事本身。
 func TestPolicyRevisionInvalidatesCache(t *testing.T) {
 	h := &Handler{}
-	if got := h.policyRevision(); got != "" {
+	if got := h.policyRevision(h.remotePolicy()); got != "" {
 		t.Fatalf("未接过策略面时应为空串，得到 %q", got)
 	}
 	h.remote.Store(&remoteState{version: 7, checksum: "abc"})
-	if got := h.policyRevision(); got != "abc" {
+	if got := h.policyRevision(h.remotePolicy()); got != "abc" {
 		t.Fatalf("有 checksum 时应用 checksum，得到 %q", got)
 	}
 	h.remote.Store(&remoteState{version: 7})
-	if got := h.policyRevision(); got != "v7" {
+	if got := h.policyRevision(h.remotePolicy()); got != "v7" {
 		t.Fatalf("无 checksum 时应用版本号，得到 %q", got)
 	}
 

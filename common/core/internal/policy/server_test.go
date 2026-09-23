@@ -21,11 +21,13 @@ const serverYAML = validYAML + `decoys:
     - id: "decoy-on"
       kind: "developer_api"
       path: "/portal/api/content"
+      hosts: ["svc.example", "*.portal.example"]
       backend: "hp-b"
       enabled: true
     - id: "decoy-off"
       kind: "mcp"
       path: "/portal/mcp"
+      hosts: ["svc.example"]
       backend: "hp-b"
       enabled: false
 honeypots:
@@ -163,6 +165,7 @@ func TestLoadRejectsEnabledDecoyWithoutBackend(t *testing.T) {
     - id: "d1"
       kind: "developer_api"
       path: "/portal/api"
+      hosts: ["svc.example"]
       enabled: true
 `
 	if _, err := Load(strings.NewReader(validYAML + block)); err == nil {
@@ -177,6 +180,7 @@ func TestLoadRejectsEnabledDecoyWithoutBackend(t *testing.T) {
     - id: "d1"
       kind: "developer_api"
       path: "/portal/api"
+      hosts: ["svc.example"]
       enabled: false
 `
 	mustLoad(t, validYAML+ok)
@@ -187,6 +191,7 @@ func TestLoadRejectsEnabledDecoyWithoutBackend(t *testing.T) {
     - id: "d1"
       kind: "developer_api"
       path: "/portal/api"
+      hosts: ["svc.example"]
       backend: "nope"
       enabled: true
 `
@@ -402,5 +407,44 @@ func TestPullEmitsExplicitEmptyInjectRules(t *testing.T) {
 	}
 	if !strings.Contains(string(got.GetPayload()), `"inject_rules":[]`) {
 		t.Errorf("显式空数组必须原样下发，实际：%s", got.GetPayload())
+	}
+}
+
+// TestPullProjectsDecoyHosts 断言归属声明**随载荷下发**（`W7`）：
+// 边缘没有 hosts 就只能按路径接管 —— 那正是"真实站点的同名路径被接走"的来源。
+func TestPullProjectsDecoyHosts(t *testing.T) {
+	srv, _ := newServerFixture(t)
+	snap, err := srv.Pull(context.Background(), &policyv1.PolicyPullRequest{})
+	if err != nil {
+		t.Fatalf("Pull 失败：%v", err)
+	}
+	var doc struct {
+		Decoys []struct {
+			ID    string   `json:"id"`
+			Path  string   `json:"path"`
+			Hosts []string `json:"hosts"`
+		} `json:"decoys"`
+	}
+	if err := json.Unmarshal(snap.GetPayload(), &doc); err != nil {
+		t.Fatalf("载荷不是合法 JSON：%v", err)
+	}
+	found := false
+	for _, d := range doc.Decoys {
+		if d.ID != "decoy-on" {
+			continue
+		}
+		found = true
+		want := []string{"*.portal.example", "svc.example"} // 已排序 ⇒ 同内容必得同一 checksum
+		if len(d.Hosts) != len(want) {
+			t.Fatalf("hosts 应随载荷下发，期望 %v，实际 %v", want, d.Hosts)
+		}
+		for i := range want {
+			if d.Hosts[i] != want[i] {
+				t.Fatalf("hosts 应归一化并排序：want %v got %v", want, d.Hosts)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("启用中的资产必须出现在载荷里")
 	}
 }

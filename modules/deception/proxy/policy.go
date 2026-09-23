@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -63,9 +64,12 @@ type edgePolicy struct {
 
 // policyDecoy 是诱饵路由表的一行（与核心侧 `policy.edgeDecoy` 手工对齐）。
 type policyDecoy struct {
-	ID      string `json:"id"`
-	Path    string `json:"path"`
-	Backend string `json:"backend"`
+	ID   string `json:"id"`
+	Path string `json:"path"`
+	// Hosts 是**归属声明**（`W7`）：空 = 未声明 ⇒ 任何主机都匹配（旧载荷的形态）；
+	// 非空 ⇒ 只有 Host 命中其中之一才接管这条路径。
+	Hosts   []string `json:"hosts,omitempty"`
+	Backend string   `json:"backend"`
 }
 
 // policyInjectRule 是一条响应改写规则（与核心侧手工对齐，见 docs/spec/policy-payload.md）。
@@ -114,6 +118,12 @@ type remoteState struct {
 	// 它与 `backends` 分开：后端表是「能去哪」，路由表是「什么路径该去哪」。
 	// 空 = 没有诱饵路由（此时请求照常走判定 / 白名单 / 兜底）。
 	decoys []policyDecoyRoute
+	// tombstones 是**已撤销但仍未过租约的诱饵路径**（N6）。
+	//
+	// 一条诱饵路径一旦对外出现过，旧链接 / 爬虫 / 对手笔记都会继续用它。若路由一被删除
+	// 就立刻把归属还给业务，那些残留请求会**直接打到生产**；租约期内在边缘继续用固定
+	// 错误结束它们（不回生产），到期才真正释放归属。
+	tombstones []policyDecoyRoute
 }
 
 // policyDecoyRoute 是一条已归一化的诱饵路由。
@@ -121,6 +131,12 @@ type policyDecoyRoute struct {
 	path    string // 归一化路径（`contract.NormalizePath` 同一口径 —— 适配器侧用同一份语义）
 	id      string // 资产 id（日志与事件用）
 	backend string // 幻境后端逻辑名
+	// hosts 是归属声明（已小写；`*.` 前缀表示后缀通配）；空 = 声明缺失 ⇒ 任何主机都匹配。
+	hosts []string
+	// revoked 为真 = 这是一条**搜索碑**（路由已撤销、租约未到期）：不投递、不回业务，固定 502。
+	revoked bool
+	// leaseUntil 是搜索碑的到期时刻（仅 revoked 时有意义）；零值 = 永久（不过期）。
+	leaseUntil time.Time
 }
 
 // remotePolicy 返回当前生效的远端策略；未应用过时为 nil。
@@ -131,8 +147,9 @@ func (h *Handler) remotePolicy() *remoteState { return h.remote.Load() }
 // 为何要它：策略换代后旧动作可能已不成立（改道后端表、白名单、注入规则都变了），
 // 缓存必须随之失效；否则新策略下发后，同键请求会继续沿用旧动作直到 TTL 到期。
 // 优先用 checksum（内容决定标识）；无 checksum 时退到版本号；未接过策略面则空串。
-func (h *Handler) policyRevision() string {
-	st := h.remotePolicy()
+//
+// st 由调用方传入而不是在这里原子读：一个请求必须用**同一份快照**（N1）。
+func (h *Handler) policyRevision(st *remoteState) string {
 	if st == nil {
 		return ""
 	}
@@ -146,13 +163,16 @@ func (h *Handler) policyRevision() string {
 //
 // 校验顺序（任一不通过都**不应用**，调用方据此回执 `applied=false`）：
 //  1. JSON 能解析；2. `schema_version` 本端读得懂；3. 载荷非空且版本与 checksum 自洽；
+//
+// **checksum 参数**是 N1 的收口：快照必须**一次构造完再发布**，不得先 Store 再原地补字段 ——
+// 原地写会让并发请求读到「一半的新快照」（例如空 checksum ⇒ 缓存键失去策略维度）。
 //  4. 后端地址是合法 URL —— 一个坏后端**不能**把整张表带下水，只在表里去掉它并记账。
 //
 // 合并语义（`ADR-0018`）：
 //   - **后端表**：按逻辑名覆盖 —— 远端定义的同名项覆盖本地，本地独有的项保留（兜底）；
 //   - **白名单**：**并集** —— 本地项永远保留。白名单是防误伤的护栏（`INT-25`），
 //     缩小它会把运维探针判成攻击者，因此远端只能增加，不能删。
-func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
+func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte, checksum string) error {
 	var doc edgePolicy
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return fmt.Errorf("载荷不是合法 JSON：%w", err)
@@ -226,7 +246,13 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 			// 空路径 = 什么都命中（那不是路由，是漏洞）；空后端 = 送不到任何地方。
 			continue
 		}
-		decoys = append(decoys, policyDecoyRoute{path: path, id: d.ID, backend: d.Backend})
+		hosts := make([]string, 0, len(d.Hosts))
+		for _, h := range d.Hosts {
+			if norm := normalizeHostPattern(h); norm != "" {
+				hosts = append(hosts, norm)
+			}
+		}
+		decoys = append(decoys, policyDecoyRoute{path: path, id: d.ID, backend: d.Backend, hosts: hosts})
 	}
 	sort.Slice(decoys, func(i, j int) bool {
 		if len(decoys[i].path) != len(decoys[j].path) {
@@ -235,9 +261,13 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 		return decoys[i].path < decoys[j].path // 同长度按字典序，保证确定性（AR-30）
 	})
 
+	// 搜索碑（N6）：上一份快照里有、本份里没有的路径 ⇒ 进入租约期，期内仍不属于业务。
+	// 重新登记的路径从碑里移除（它又有主了）；过期碑被清理，归属真正还给业务。
+	tombstones := h.nextTombstones(decoys)
+
 	h.remote.Store(&remoteState{
 		version:             doc.Version,
-		checksum:            "",
+		checksum:            checksum,
 		backends:            backends,
 		declared:            declared,
 		cidrs:               cidrs,
@@ -246,6 +276,7 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte) error {
 		injectEnabled:       doc.InjectEnabled,
 		content:             newContentIndex(doc.ContentManifest),
 		decoys:              decoys,
+		tombstones:          tombstones,
 	})
 	if len(dropped) > 0 {
 		log.Printf("proxy: 策略 v%d 中有 %d 个后端地址不可用，已跳过：%s",
@@ -307,13 +338,11 @@ func (h *Handler) runPolicyPolling(ctx context.Context, interval time.Duration) 
 			return
 		}
 
-		if aerr := h.applyEdgePolicy(pullCtx, snap.GetPayload()); aerr != nil {
+		// checksum 与载荷一起进快照（N1）：发布之后**不再**改任何字段。
+		if aerr := h.applyEdgePolicy(pullCtx, snap.GetPayload(), snap.GetChecksum()); aerr != nil {
 			h.ack(pullCtx, snap, adapterID, false, aerr.Error())
 			log.Printf("proxy: 策略 v%d 应用失败（继续用当前策略）：%v", snap.GetVersion(), aerr)
 			return
-		}
-		if cur := h.remotePolicy(); cur != nil {
-			cur.checksum = snap.GetChecksum()
 		}
 		h.ack(pullCtx, snap, adapterID, true, "")
 		n := 0
@@ -336,6 +365,133 @@ func (h *Handler) runPolicyPolling(ctx context.Context, interval time.Duration) 
 	}
 }
 
+// decoyLease 返回搜索碑租约（N6）：默认 24h；“负数”表示不过期（永久）。
+func (h *Handler) decoyLease() time.Duration {
+	d := time.Duration(h.DecoyLease)
+	if d == 0 {
+		return defaultDecoyLease
+	}
+	return d
+}
+
+// clock 是 nil 安全的时钟（Provision 会装 time.Now；单测里可能什么都没装）。
+func (h *Handler) clock() time.Time {
+	if h.now == nil {
+		return time.Now()
+	}
+	return h.now()
+}
+
+// nextTombstones 计算下一份快照的搜索碑集。
+//
+// 规则（决定性与可测）：
+//  1. 上一份里活路由 + 已有碑，减去本份的活路由 ⇒ 候选；
+//  2. 候选延用**原有到期时刻**（不因每次下拉而续期），新撤销的用 now+租约；
+//  3. 到期清掉 —— 释放归属于业务是**有意的**动作，但要到期才发生。
+func (h *Handler) nextTombstones(live []policyDecoyRoute) []policyDecoyRoute {
+	prev := h.remotePolicy()
+	if prev == nil && len(live) == 0 {
+		return nil
+	}
+	now := h.clock()
+	lease := h.decoyLease()
+	livePaths := make(map[string]struct{}, len(live))
+	for _, d := range live {
+		livePaths[d.path] = struct{}{}
+	}
+	out := make([]policyDecoyRoute, 0, len(live))
+	seen := map[string]struct{}{}
+	if prev != nil {
+		for _, old := range append(append([]policyDecoyRoute{}, prev.decoys...), prev.tombstones...) {
+			if _, ok := livePaths[old.path]; ok {
+				continue // 又有主了
+			}
+			if _, dup := seen[old.path]; dup {
+				continue
+			}
+			until := old.leaseUntil
+			if until.IsZero() && !old.revoked {
+				// 新撤销：从本刻开始算租约。“永久”用零值表示。
+				if lease < 0 {
+					until = time.Time{}
+				} else {
+					until = now.Add(lease)
+				}
+			}
+			if !until.IsZero() && !now.Before(until) {
+				continue // 租约到期 ⇒ 释放归属
+			}
+			seen[old.path] = struct{}{}
+			out = append(out, policyDecoyRoute{path: old.path, id: old.id, revoked: true, leaseUntil: until})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i].path) != len(out[j].path) {
+			return len(out[i].path) > len(out[j].path)
+		}
+		return out[i].path < out[j].path
+	})
+	return out
+}
+
+// hostMatches 报告请求的 Host 是否命中归属声明（`W7`）。
+//
+// 语义（与核心校验同一口径）：
+//   - 声明为空 ⇒ **匹配**（旧载荷没有这个字段；此时行为与从前一致，不悄悄变成"谁都不接管"）；
+//   - 精确主机名 ⇒ 完全相等（大小写不敏感，端口已剥离）；
+//   - `*.example.com` ⇒ 后缀匹配，且**必须**有前缀标签（`example.com` 本身不算命中 -*-
+//     这是通配符最短形式，避免"通配声明覆盖了根域"这种常见误配）。
+func hostMatches(hosts []string, host string) bool {
+	if len(hosts) == 0 {
+		return true
+	}
+	h := normalizeRequestHost(host)
+	if h == "" {
+		return false
+	}
+	for _, pattern := range hosts {
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := strings.TrimPrefix(pattern, "*")
+			if strings.HasSuffix(h, suffix) && len(h) > len(suffix) {
+				return true
+			}
+			continue
+		}
+		if h == pattern {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeRequestHost 把请求的 Host 归一化成匹配视图：小写、去端口、去尾点。
+func normalizeRequestHost(host string) string {
+	h := strings.ToLower(strings.TrimSpace(host))
+	h = strings.TrimSuffix(h, ".")
+	if hostOnly, _, err := net.SplitHostPort(h); err == nil {
+		h = hostOnly
+	}
+	return h
+}
+
+// normalizeHostPattern 归一化一条归属声明；返回空串表示这条声明不可用（**丢弃**而不是放行）。
+func normalizeHostPattern(raw string) string {
+	h := normalizeRequestHost(raw)
+	if h == "" || h == "*" {
+		return ""
+	}
+	if strings.HasPrefix(h, "*.") && len(h) > 2 {
+		return h
+	}
+	if strings.Contains(h, "*") {
+		return "" // 只支持最左标签通配；其它形态直接丢弃（宁可不接管，也不要模糊归属）
+	}
+	return h
+}
+
+// defaultDecoyLease 是搜索碑租约的默认值（N6）。
+const defaultDecoyLease = 24 * time.Hour
+
 // ack 上报回执（`AR-13` 的版本对账）。回执失败只记日志 —— 对账不该影响服务。
 func (h *Handler) ack(ctx context.Context, snap *policyv1.PolicySnapshot, adapterID string, applied bool, reason string) {
 	if h.policy == nil {
@@ -356,19 +512,18 @@ func (h *Handler) ack(ctx context.Context, snap *policyv1.PolicySnapshot, adapte
 // policyTimeout 是单次策略拉取/回执的超时。策略面慢不能拖住进程退出。
 const policyTimeout = 3 * time.Second
 
-// currentInjector 返回**当前**生效的注入器：
+// currentInjector 返回**该快照**的注入器：
 //   - 策略面显式下发了 `inject_rules` → 用远端的（显式空数组 = 无规则，返回 nil）；
 //   - 未下发该段 → 用本地 env 构造的注入器。
-func (h *Handler) currentInjector() Injector {
-	if st := h.remotePolicy(); st != nil && st.injectRulesProvided {
+func (h *Handler) currentInjector(st *remoteState) Injector {
+	if st != nil && st.injectRulesProvided {
 		return st.injector
 	}
 	return h.injector
 }
 
-// remoteWhitelisted 报告来源 IP 是否命中远端白名单（`INT-25`）。
-func (h *Handler) remoteWhitelisted(ip string) bool {
-	st := h.remotePolicy()
+// remoteWhitelisted 报告来源 IP 是否命中**该快照的**远端白名单（`INT-25`）。
+func (h *Handler) remoteWhitelisted(st *remoteState, ip string) bool {
 	if st == nil || len(st.cidrs) == 0 {
 		return false
 	}

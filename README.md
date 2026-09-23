@@ -97,6 +97,32 @@ curl -s -A "Mozilla/5.0"        http://127.0.0.1:18080/               # 正常�
 其它：`make docker-ps`（状态）· `make docker-log S=core`（日志尾部 50 行）· `make down`（停掉）·
 宿主端口被占用时 `SHEN_HTTP_PORT=8080 SHEN_CONSOLE_PORT=9444 make start`。
 
+#### 合成 Web 管理台 + 诱饵路由（**验证档**，不是默认启动项）
+
+默认 `make start` 只起基础栈（核心 / 代理 / 控制台 / 演示业务），**不含** Web 诱饵后端。
+要验证「诱饵路由 → 真实合成后端」这条链，用**双文件**起验证档：
+
+```sh
+docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d --force-recreate
+curl -s http://127.0.0.1:18080/admin/login        # 合成登录页（Atlas 控制台）
+curl -s -c /tmp/jar -d 'username=x&password=y' http://127.0.0.1:18080/admin/login
+curl -s -b /tmp/jar http://127.0.0.1:18080/admin/api/users?page=1   # 需带 cookie 的合成 JSON
+docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.verify-mirage.yaml down
+```
+
+三条要注意的事（§7.1 的 `W1`/`W7`）：
+
+1. **登录输入只用合成值**：本后端没有账号体系、**从不校验凭据**，不要输入任何真实凭证。
+2. **`/admin` 是路径归属**：真实站点本来就有 `/admin` 时，验证档的配置会把它接走 ——
+   归属声明 `decoys.assets[].hosts` 就是为此存在的（**启用中的资产必须声明主机名**）；
+   套用到真实站点前先确认「这个路径确实归我们」。
+3. **撤销不等于立刻还给业务**：路由从策略里移除后，边缘在**搜索碑租约**内（默认 24h）仍以固定 502
+   结束那些路径（不回生产）—— 这是为了避免旧链接突然打到真实站点。
+
+> 诱饵路由与普通评分改道的**失败语义不同**：专属路由故障 ⇒ 固定 502 且**绝不回源**；
+> 普通 `route_mirage` 失败仍会**回落业务**（`NI-1`）。看单条请求的 `executed` / `delivery_result` 区分。
+> Web 的合成交互事件目前**只进日志**（尚未接入核心遥测）。
+
 ### 3.2 本地开发（Go / Python 直接跑）
 
 前置：**Go 1.26+**；跑 L4 与门禁另需 **Python 3.13+**（环境建在 `analysis/.venv`）。无外部服务依赖 —— 存储用内存实现。
