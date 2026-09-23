@@ -9,7 +9,13 @@
 #   4. 规则级豁免（内部日志参数、内部错误构造参数、struct tag）写在 main.go 的包注释里；
 #      整个文件是过滤器（如 AR-22 黑名单表）则由该文件自己声明 `//check-leak:filter <理由>`。
 #
-# 当前 5 条例外：
+# 当前 6 条例外：
+
+# 为什么这条不是"改代码"（OH-4 要求写清理由）：这个环境变量的名字必须与**已经存在的内部契约词**一致 ——
+# 配置段 `decoys`、策略载荷键 `decoys[].path`、事件取值 `executed=decoy` 都是同一套内部术语；
+# 换一个中性名会让"配置段 / 载荷键 / 事件取值 / 文档"四处对不上，运维排查时得先做一次心算。
+# 它只出现在启动参数与日志里（攻击者不可见，OH-2 判据）。
+OH-1 modules/deception/proxy/cmd/proxy/main.go SHEN_PROXY_DECOY_LEASE  # 环境变量名（运维面接口）：与配置段 `decoys`、载荷键 `decoys[].path`、事件取值 `executed=decoy` 同名同源；只出现在启动参数与日志里，攻击者不可见（OH-2）；改名会让四处对不上
 OH-1 common/core/internal/director/director.go mirage  # 内部逻辑后端名：核心→适配器的 gRPC backend 字段取值，也是运维配置的键；对外回显被 ST-7 单独禁止，不上攻击者的屏幕（OH-2）
 OH-1 modules/deception/proxy/cmd/proxy/main.go SHEN_PROXY_MIRAGE  # 环境变量名（运维面接口）：文档、配置模板、启动失败提示都用它，攻击者不可见
 OH-1 modules/deception/proxy/handler.go route_mirage  # 适配器**日志**里的设计三值术语（terminology.md §4）：只进 stdout 供运维排查，绝不写入响应（ST-7 禁止回显）；与控制台/核心日志用同一套词，改名会让排查对不上

@@ -234,12 +234,9 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		cacheCap = defaultCacheMaxEntries
 	}
 	h.cache = newDecisionCache(time.Duration(h.CacheTTL), cacheCap, now)
-	// 降级缓存预算（N2）：默认 1s，可配；显式负数视为 0 → 退化为不缓存降级结果。
-	if h.DegradedCacheTTL == 0 {
-		h.cache.degradedTTL = defaultDegradedCacheTTL
-	} else if h.DegradedCacheTTL > 0 {
-		h.cache.degradedTTL = time.Duration(h.DegradedCacheTTL)
-	}
+	// 降级缓存预算（`N2`）：正数 = 用它｜0 = 默认 1s｜**负数 = 关闭降级缓存**。
+	// 规则只在 `applyDegradedTTL` 一处实现（`Provision` 与单测脚手架共用）。
+	h.cache.applyDegradedTTL(time.Duration(h.DegradedCacheTTL))
 	// 会话钉定的 TTL 与判定缓存同窗：两者都是「可丢失的缓存」，过期重算得到同一结果（确定性）。
 	h.pins = newVariantPins(time.Duration(h.CacheTTL), cacheCap, now)
 

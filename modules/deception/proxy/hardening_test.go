@@ -595,3 +595,89 @@ func TestApplyPolicyWakesHealthProbe(t *testing.T) {
 		t.Fatal("唤醒不得阻塞策略应用")
 	}
 }
+
+// ── 配置合理性：三种取值语义各自明确（降级预算 / 租约）───────────────────────
+
+// TestDegradedBudgetDefaultingRules 钉住 `DegradedCacheTTL` 的三种取值：
+// 正数 = 用它｜0 = 默认 1s｜**负数 = 关闭降级缓存**（不是"按正常 TTL 缓存失败判定"）。
+func TestDegradedBudgetDefaultingRules(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured time.Duration
+		want       time.Duration
+	}{
+		{"没配 ⇒ 默认", 0, defaultDegradedCacheTTL},
+		{"正数 ⇒ 用它", 5 * time.Second, 5 * time.Second},
+		{"负数 ⇒ 关闭", -time.Hour, degradedCacheDisabled},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cache := newDecisionCache(time.Minute, 8, time.Now)
+			cache.applyDegradedTTL(c.configured)
+			if cache.degradedTTL != c.want {
+				t.Fatalf("预算应为 %v，实际 %v", c.want, cache.degradedTTL)
+			}
+		})
+	}
+}
+
+// TestDegradedCacheDisabledAsksCoreEveryTime 断言"关闭降级缓存"真的每次都问核心
+// （而不是像修复前那样：负值被当成 0 ⇒ 按**正常 TTL** 缓存失败判定）。
+func TestDegradedCacheDisabledAsksCoreEveryTime(t *testing.T) {
+	judge := &stubJudge{err: context.DeadlineExceeded}
+	h := newTestHandler(t, Config{
+		Upstream: "http://127.0.0.1:9", DegradedCacheTTL: -time.Hour,
+	}, judge, &stubReporter{})
+	if h.cache.degradedTTL != degradedCacheDisabled {
+		t.Fatalf("负数预算应关闭降级缓存，实际 %d", h.cache.degradedTTL)
+	}
+	for i := range 3 {
+		if resp := do(h, http.MethodGet, "http://svc.example/a", "", nil); resp.Code != http.StatusOK {
+			t.Fatalf("第 %d 次：判定失败仍应放行，实际 %d", i+1, resp.Code)
+		}
+	}
+	if n := judge.callCount(); n != 3 {
+		t.Fatalf("关闭降级缓存后每次都要问核心（3 次），实际 %d 次", n)
+	}
+}
+
+// TestDecoyLeaseSignConventions 钉住 `DecoyLease` 的三种取值：0 = 默认 24h｜正数 = 用它｜负数 = 永久。
+func TestDecoyLeaseSignConventions(t *testing.T) {
+	cases := []struct {
+		name       string
+		configured time.Duration
+	}{
+		{"没配 ⇒ 默认 24h", 0},
+		{"正数 ⇒ 用它", 30 * time.Minute},
+		{"负数 ⇒ 永久", -time.Second},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			base := time.Now()
+			h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9", DecoyLease: c.configured},
+				&stubJudge{}, &stubReporter{})
+			h.now = func() time.Time { return base }
+			h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) {
+				return fakeBackend{name: name}, nil
+			}
+			backends := []policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}
+			route := []policyDecoy{{ID: "admin", Path: "/admin", Backend: "hp"}}
+			if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, route), "s1"); err != nil {
+				t.Fatal(err)
+			}
+			// 撤销 ⇒ 进租约；把时钟推很久以后再应用一次（策略应用时才重算碑）
+			if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 2, backends, nil), "s2"); err != nil {
+				t.Fatal(err)
+			}
+			h.now = func() time.Time { return base.Add(365 * 24 * time.Hour) }
+			if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 3, backends, nil), "s3"); err != nil {
+				t.Fatal(err)
+			}
+			alive := len(h.remotePolicy().tombstones) == 1
+			wantAlive := c.configured < 0 // 永久 ⇒ 还在；默认 24h 与 30m ⇒ 已过期
+			if alive != wantAlive {
+				t.Fatalf("一年后的碑状态应为 alive=%v，实际 %v（配置 %v）", wantAlive, alive, c.configured)
+			}
+		})
+	}
+}

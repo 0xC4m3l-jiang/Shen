@@ -111,6 +111,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// 降级缓存预算（`N2`）：0 = 库内默认（1s）；**负数 = 关闭降级缓存**（判定失败不写缓存）。
+	degradedTTL, err := envDuration("SHEN_PROXY_DEGRADED_CACHE_TTL", 0)
+	if err != nil {
+		return err
+	}
+	// 诱饵路由撤销后的搜索碑租约（`N6`）：0 = 默认 24h；**负数 = 永久**（不释放归属）。
+	decoyLease, err := envDuration("SHEN_PROXY_DECOY_LEASE", 0)
+	if err != nil {
+		return err
+	}
 
 	handler := &proxy.Handler{
 		Upstream:        upstream,
@@ -137,6 +147,11 @@ func run() error {
 
 		BackendHealthInterval: caddy.Duration(healthInterval),
 		BackendHealthTimeout:  caddy.Duration(healthTimeout),
+
+		// 第二轮检验的另外三个可调项（此前**只在文档里存在**、代码未接线 —— 补上）。
+		DegradedCacheTTL:   caddy.Duration(degradedTTL),
+		DecoyLease:         caddy.Duration(decoyLease),
+		ForwardCredentials: envBool("SHEN_PROXY_FORWARD_CREDENTIALS", false),
 	}
 
 	cfg, err := proxy.BuildConfig(proxy.Options{
@@ -237,7 +252,8 @@ func envInt(key string, fallback int) (int, error) {
 	return v, nil
 }
 
-// parseTLS 解析 SHEN_PROXY_TLS_* 环境变量。
+// parseTLS 解析 TLS 相关环境变量（`SHEN_PROXY_TLS_MODE` / `SHEN_PROXY_DOMAIN` /
+// `SHEN_PROXY_CERT_FILE` / `SHEN_PROXY_KEY_FILE`）。
 func parseTLS() (proxy.TLSConfig, error) {
 	mode := proxy.TLSMode(strings.ToLower(strings.TrimSpace(env("SHEN_PROXY_TLS_MODE", string(proxy.TLSModeOff)))))
 	cfg := proxy.TLSConfig{

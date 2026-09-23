@@ -118,6 +118,12 @@ func run() error {
 	// 会话身份第 ① 级的 cookie 名**取自配置**（`session.cookie_name`）——
 	// 此前这里写死 `"sid"`，于是配置改了名也不生效、身份会静默退化到 TLS/IP 指纹。
 	// 适配器侧用 `SHEN_PROXY_SESSION_COOKIE` 取同一个名字（不一致时启动日志里能看出对不上）。
+	// 配置合理性的一部分：把**写了、但本期不消费**的项在启动时念一遍。
+	// 没有这一行，运维改 `core.listen` 却没换 `SHEN_LISTEN`（或把真实 Redis 密码填进被忽略的字段）时，
+	// 系统既不报错也不提示 —— "配置看起来生效其实没生效"是最难查的一类误解。
+	for _, note := range loader.UnconsumedNotes() {
+		log.Printf("WARN 配置项未消费：%s", note)
+	}
 	sessionCookie := loader.SessionCookieName()
 	log.Printf("会话身份：cookie 名=%q（第 ① 级；适配器侧 SHEN_PROXY_SESSION_COOKIE 必须是同一个名字）", sessionCookie)
 	sess := session.New(sessionCookie)

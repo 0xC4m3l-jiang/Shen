@@ -158,6 +158,12 @@ type Loader struct {
 	// 它此前**只被校验、没被消费**（cmd/core 里写死 `"sid"`）—— 客户把名字改成 `PHPSESSID` 时，
 	// 核心仍在找 `sid`，会话身份会静默退化成 TLS 指纹 / IP+UA（口径与适配器也对不上）。
 	sessionCookie string
+
+	// ── 「写了、但本期不消费」的项（只用于启动日志点名，不参与任何决策）──────────────
+	// 它们都是**允许留空**的可选段；记下来是为了让"配置看起来生效其实没生效"这件事在运行时可发现。
+	coreListen  string  // core.listen（实际监听地址取 SHEN_LISTEN）
+	guardBudget float64 // guard.false_route_budget（误调度率护栏属阶段 2b+）
+	storeExtra  bool    // store.{redis,clickhouse,postgres}（driver 只支持 memory）
 }
 
 // Load 解析并校验配置，产出不可变快照。
@@ -745,28 +751,67 @@ func (d *configDoc) validateStore() error {
 	if *d.Store.Driver != "memory" {
 		return fmt.Errorf("policy: store.driver=%q 未实现（本期只支持 memory）", *d.Store.Driver)
 	}
-	if d.Store.Redis == nil {
-		return missing("store.redis")
+	// Redis / ClickHouse / Postgres 的子段**可选**（只在写了的时候校验形态）。
+	//
+	// 为什么改掉"必填"：driver 只接受 `memory` ⇒ 这三段**永远不被消费**，
+	// 却原来要求配置里必须写出地址与密码 —— 那等于逼运维往一个**被忽略的字段**里填
+	// 真实连接串（或填假值以骗过校验）。两种结果都糟：前者是凭据落在无用处，
+	// 后者是"配置看起来齐全但全部无效"。改为可选后，想预留的人照样可以写（会被校验），
+	// 而**写了什么会被启动日志点名**（见 `Loader.UnconsumedNotes`）。
+	if d.Store.Redis != nil {
+		if err := key(d.Store.Redis.Addr, "store.redis.addr"); err != nil {
+			return err
+		}
+		if err := key(d.Store.Redis.Password, "store.redis.password"); err != nil {
+			return err
+		}
 	}
-	if err := key(d.Store.Redis.Addr, "store.redis.addr"); err != nil {
-		return err
+	if d.Store.ClickHouse != nil {
+		if err := key(d.Store.ClickHouse.Addr, "store.clickhouse.addr"); err != nil {
+			return err
+		}
+		if err := key(d.Store.ClickHouse.Database, "store.clickhouse.database"); err != nil {
+			return err
+		}
 	}
-	if err := key(d.Store.Redis.Password, "store.redis.password"); err != nil {
-		return err
+	if d.Store.Postgres != nil {
+		if err := key(d.Store.Postgres.DSN, "store.postgres.dsn"); err != nil {
+			return err
+		}
 	}
-	if d.Store.ClickHouse == nil {
-		return missing("store.clickhouse")
+	return nil
+}
+
+// deref 取指针值（nil ⇒ 零值）；用于"可选段"的读取。
+func deref[T any](p *T) T {
+	if p == nil {
+		var zero T
+		return zero
 	}
-	if err := key(d.Store.ClickHouse.Addr, "store.clickhouse.addr"); err != nil {
-		return err
+	return *p
+}
+
+// UnconsumedNotes 列出**配置里写了、本期却不消费**的项（供启动日志点名）。
+//
+// 为什么要有它（配置合理性的一部分）：`core.listen` / `guard.false_route_budget` /
+// `store.{redis,clickhouse,postgres}` 都在文档里写明"只校验不消费"，但**运维看不到文档就等于不知道** ——
+// 于是有人改 `core.listen` 却没换 `SHEN_LISTEN`，或者把真实 Redis 密码填进一个被忽略的字段。
+// 启动时把这些项**念一遍**，是"配置看起来生效其实没生效"这一类误解唯一的运行时出口。
+func (l *Loader) UnconsumedNotes() []string {
+	var out []string
+	if l.coreListen != "" {
+		out = append(out, fmt.Sprintf(
+			"core.listen=%q（本期只校验不消费；实际监听地址取自环境变量 SHEN_LISTEN）", l.coreListen))
 	}
-	if err := key(d.Store.ClickHouse.Database, "store.clickhouse.database"); err != nil {
-		return err
+	if l.guardBudget > 0 {
+		out = append(out, fmt.Sprintf(
+			"guard.false_route_budget=%g（本期只校验不消费；误调度率护栏属阶段 2b+）", l.guardBudget))
 	}
-	if d.Store.Postgres == nil {
-		return missing("store.postgres")
+	if l.storeExtra {
+		out = append(out, "store.{redis,clickhouse,postgres}（本期只支持 driver=memory，"+
+			"这些段不消费 —— 请勿在其中填写真实凭据）")
 	}
-	return key(d.Store.Postgres.DSN, "store.postgres.dsn")
+	return out
 }
 
 func (d *configDoc) validatePolicy() error {
@@ -934,6 +979,9 @@ func (d *configDoc) build(rules []contract.Rule) (*Loader, error) {
 		},
 		shadow:        *d.Shadow,
 		sessionCookie: *d.Session.CookieName,
+		coreListen:    deref(d.Core.Listen),
+		guardBudget:   deref(d.Guard.FalseRouteBudget),
+		storeExtra:    d.Store.Redis != nil || d.Store.ClickHouse != nil || d.Store.Postgres != nil,
 		ai:            d.buildAI(),
 		decoys:        d.buildDecoys(),
 		honeypots:     d.buildHoneypots(),

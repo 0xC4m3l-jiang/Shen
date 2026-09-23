@@ -187,6 +187,8 @@ func newTestHandler(t *testing.T, cfg Config, judge JudgeClient, report Telemetr
 		origin:    fakeBackend{name: "origin"},
 		mirage:    map[string]caddyhttp.MiddlewareHandler{},
 	}
+	// 与 `Provision` 用**同一套**降级预算默认化规则（否则用例跑的是另一套行为）。
+	h.cache.applyDegradedTTL(cfg.DegradedCacheTTL)
 	for name := range cfg.Mirage {
 		h.mirage[name] = fakeBackend{name: name}
 	}

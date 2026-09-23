@@ -36,6 +36,17 @@ from typing import Any
 HERE = pathlib.Path(__file__).resolve().parent
 SCENARIOS_FILE = HERE / "scenarios.json"
 
+# ── 冷启动预算（控制台首次构建索引）─────────────────────────────────────────
+#
+# 实测过的问题：`scripts/shen.sh restart` 之后**立刻**跑 verify，第一条判定的**逐请求记录**
+# 会晚于默认 8s 出现 ⇒ 整个 verify 变成 35/36 的**假失败**
+# （同一场景单独重跑、或再跑一次全量都是 36/36）。
+# 处理方式：**只在"本轮还没见过任何逐请求记录"时**把等待放宽一次，之后回到正常预算 ——
+# 既不掩盖真失败，也不把"控制台刚起来"变成一个 bug 报告。
+COLD_START_WAIT_FACTOR = 3.0
+COLD_START_WAIT_MIN = 20.0
+_COLD: dict[str, Any] = {"wait": 0.0, "saw_graph": False, "missed": False}
+
 DEFAULT_ENTRY = "http://127.0.0.1:18080"
 DEFAULT_CONSOLE = "http://127.0.0.1:19444"
 
@@ -400,7 +411,13 @@ def judge(
                 if "inject" in expect and inject != str(expect["inject"]):
                     failures.append(f"注入结果 {inject or '（空）'} ≠ 期望 {expect['inject']}")
     elif not (observe_only or gap):
-        failures.append("控制台里没找到这条判定（适配器上报是否正常？）")
+        if _COLD["missed"]:
+            failures.append(
+                f"控制台冷启动未就绪：首条判定在 {_COLD['wait']:g}s 内没有出现逐请求记录"
+                "（控制台首次构建索引；确认 core/console 已就绪后重跑，或用 --wait 加大预算）"
+            )
+        else:
+            failures.append("控制台里没找到这条判定（适配器上报是否正常？）")
 
     result["failures"] = failures
     return result
@@ -706,6 +723,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{exc}\n先跑 scripts/shen.sh status 看看服务起来没", file=sys.stderr)
         return 1
 
+    # 本轮冷启动预算（见文件顶部的说明）：只在还没见过逐请求记录时放宽一次。
+    _COLD["wait"] = max(args.wait * COLD_START_WAIT_FACTOR, COLD_START_WAIT_MIN)
+    _COLD["saw_graph"] = False
+    _COLD["missed"] = False
+    if _COLD["wait"] > args.wait:
+        print(
+            f"· 冷启动预算：本轮**首次**等待逐请求记录最长 {_COLD['wait']:g}s"
+            f"（控制台首次构建索引；之后回到 {args.wait:g}s）",
+            flush=True,
+        )
+
     # AI 层开没开，由**核心自己的快照**说了算（不猜）。
     # 为什么需要它：声明 `stack: takeover-ai` 的场景在「接管但 AI 关」的栈里，
     # 落点是对的（mirage）而注入结果是 `disabled` —— 那是**形态没打开**，不是被测行为不达标。
@@ -796,10 +824,14 @@ def main(argv: list[str] | None = None) -> int:
             if flow is not None and any(
                 name in (scenario.get("expect") or {}) for name in ("executed", "inject")
             ):
+                wait_here = args.wait if _COLD["saw_graph"] else _COLD["wait"]
                 graph_row = wait_for_graph(
-                    args.console, str(flow.get("decision_id") or ""), wait=args.wait
+                    args.console, str(flow.get("decision_id") or ""), wait=wait_here
                 )
+                if graph_row is None and not _COLD["saw_graph"]:
+                    _COLD["missed"] = True
                 if graph_row is not None:
+                    _COLD["saw_graph"] = True
                     for name in ("executed", "inject", "status", "content_id", "bytes"):
                         if graph_row.get(name) not in (None, ""):
                             flow[name] = graph_row[name]

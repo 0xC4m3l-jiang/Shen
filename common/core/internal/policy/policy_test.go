@@ -537,7 +537,10 @@ func TestLoadRejectsInvalidConfig(t *testing.T) {
 		{"误调度率越界", mutate(t, validYAML, "false_route_budget: 0.001", "false_route_budget: -1"), "越界"},
 		// 回归：早前 ratio() 一律报「thresholds」，配错 guard 时会把排障引向错误字段。
 		{"guard 缺键须报对字段", mutate(t, validYAML, "guard:\n  false_route_budget: 0.001", "guard: {}"), "guard.false_route_budget"},
-		{"缺 store.redis", mutate(t, validYAML, "  redis: {addr: \"\", password: \"\"}\n", ""), "缺少必填项 store.redis"},
+		// store 的未来驱动子段是**可选**的（driver 只接受 memory ⇒ 它们不被消费）；写了才校验形态。
+		{"store.redis 写了但缺 addr 键", mutate(t, validYAML,
+			"  redis: {addr: \"\", password: \"\"}", "  redis: {password: \"\"}"),
+			"store.redis.addr"},
 		{"驱动未实现", mutate(t, validYAML, `driver: "memory"`, `driver: "redis"`), "未实现"},
 		{"version 为 0", mutate(t, validYAML, "version: 3", "version: 0"), "policy.version=0 非法"},
 		{"gray_pct 越界", mutate(t, validYAML, "gray_pct: 0", "gray_pct: 101"), "gray_pct=101 越界"},
@@ -694,5 +697,67 @@ func TestExampleConfigLoads(t *testing.T) {
 	snap, _ := l.Snapshot(context.Background())
 	if snap.PolicyID == "" || snap.Version == 0 || snap.Checksum == "" {
 		t.Fatalf("示例配置的快照不完整：%+v", snap)
+	}
+}
+
+// ── 配置合理性：可选段与"写了但不消费"的可见性 ──────────────────────────────
+//
+// 背景：`store.{redis,clickhouse,postgres}` 原来**必填**，但 driver 只接受 `memory` ⇒ 这三段永远不被消费。
+// 结果是"逼运维往被忽略的字段里填真实连接串"（或填假值骗过校验）。改为可选后，仍要保证：
+//
+//	① 不写 ⇒ 能装载；② 写了 ⇒ 照旧校验形态；③ 写了什么 ⇒ 启动日志能念出来。
+func TestStoreFutureDriverBlocksAreOptional(t *testing.T) {
+	// 按**行**确定性地剥掉三个未来驱动子段（不用猜测字面量 —— 那种写法会随夹具漂移而静默失效）
+	stripStoreBlocks := func(src string) string {
+		var out []string
+		inStore := false
+		for _, line := range strings.Split(src, "\n") {
+			if strings.HasPrefix(line, "store:") {
+				inStore = true
+				out = append(out, line)
+				continue
+			}
+			if inStore && strings.HasPrefix(line, "  ") &&
+				(strings.HasPrefix(strings.TrimSpace(line), "redis:") ||
+					strings.HasPrefix(strings.TrimSpace(line), "clickhouse:") ||
+					strings.HasPrefix(strings.TrimSpace(line), "postgres:")) {
+				continue
+			}
+			if inStore && line != "" && !strings.HasPrefix(line, " ") {
+				inStore = false
+			}
+			out = append(out, line)
+		}
+		return strings.Join(out, "\n")
+	}
+
+	// ① 不写这三段 ⇒ 能装载，且**不该**出现 store 的未消费提示
+	l := mustLoad(t, stripStoreBlocks(validYAML))
+	joined := strings.Join(l.UnconsumedNotes(), " | ")
+	if strings.Contains(joined, "store.{") {
+		t.Fatalf("没写这三段就不该有 store 的未消费提示：%v", l.UnconsumedNotes())
+	}
+
+	// ② 写了 ⇒ 仍然校验形态：键必须齐全（`key()` 查的是**字段存在**，不是非空）
+	withBadRedis := strings.Replace(validYAML, "  redis: {addr: \"\", password: \"\"}", "  redis: {password: \"\"}", 1)
+	if _, err := Load(strings.NewReader(withBadRedis)); err == nil {
+		t.Fatal("写了 store.redis 就必须校验它（缺 addr 键应报错）")
+	}
+}
+
+// TestUnconsumedNotesPointAtIgnoredSettings 断言"写了但不消费"的项会被点名。
+func TestUnconsumedNotesPointAtIgnoredSettings(t *testing.T) {
+	l := mustLoad(t, validYAML)
+	notes := l.UnconsumedNotes()
+	joined := strings.Join(notes, " | ")
+	if !strings.Contains(joined, "core.listen") {
+		t.Fatalf("应点名 core.listen（监听地址实际取 SHEN_LISTEN），实际 %v", notes)
+	}
+	if !strings.Contains(joined, "false_route_budget") {
+		t.Fatalf("应点名 guard.false_route_budget，实际 %v", notes)
+	}
+	// store 子段在本夹具里写了 ⇒ 也要点名，并且提醒**不要填真实凭据**
+	if !strings.Contains(joined, "store.") || !strings.Contains(joined, "真实凭据") {
+		t.Fatalf("应点名 store 的未来驱动子段并提醒不要填真实凭据，实际 %v", notes)
 	}
 }

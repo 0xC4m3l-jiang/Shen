@@ -80,6 +80,23 @@ func newDecisionCache(ttl time.Duration, cap int, now func() time.Time) *decisio
 	return &decisionCache{m: map[string]cacheEntry{}, ttl: ttl, cap: cap, now: now}
 }
 
+// applyDegradedTTL 把**配置值**落实成降级缓存的预算（`N2`）：
+//
+//	正数 ⇒ 用这个预算 ｜ 0（没配）⇒ 默认 1s ｜ **负数 ⇒ 关闭降级缓存**（什么都不写）
+//
+// 为什么抽成方法：`Provision` 与单测脚手架（`newTestHandler`）**必须用同一套规则** ——
+// 否则用例跑的是另一套默认化行为，"测试通过"与"生产行为"就是两回事（`FIX`/`N9` 的教训）。
+func (c *decisionCache) applyDegradedTTL(configured time.Duration) {
+	switch {
+	case configured > 0:
+		c.degradedTTL = configured
+	case configured == 0:
+		c.degradedTTL = defaultDegradedCacheTTL
+	default:
+		c.degradedTTL = degradedCacheDisabled
+	}
+}
+
 // lookup 返回缓存条目（含降级标记）。
 func (c *decisionCache) lookup(id string) (cacheEntry, bool) {
 	c.mu.Lock()
@@ -100,10 +117,20 @@ func (c *decisionCache) put(id string, act judgev1.Action, backend string) {
 	c.store(id, cacheEntry{action: act, backend: backend, expires: c.now().Add(c.ttl)})
 }
 
+// degradedCacheDisabled 是「关闭降级缓存」的哨兵值（`DegradedCacheTTL < 0`）。
+//
+// 为什么要一个显式哨兵：0 的含义是"没配 ⇒ 用默认"，而"我不想缓存失败结果"是另一件事。
+// 原实现把两者混为一谈 ⇒ 负值反而按**正常 TTL** 缓存了失败判定。
+const degradedCacheDisabled = -1
+
 // putDegraded 写入一条**降级结果**（独立短预算，且不超过正常 TTL）。
 //
 // 到期后同键请求会重新调核心 ⇒ 故障恢复后自动重判（N2 的“恢复重判”）。
+// `degradedTTL < 0`（显式关闭）时**什么都不写** —— 每次失败都如实去问核心。
 func (c *decisionCache) putDegraded(id string, act judgev1.Action, backend string) {
+	if c.degradedTTL < 0 {
+		return
+	}
 	ttl := c.degradedTTL
 	if ttl <= 0 || ttl > c.ttl {
 		ttl = c.ttl
