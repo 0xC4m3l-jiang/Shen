@@ -761,3 +761,48 @@ func TestUnconsumedNotesPointAtIgnoredSettings(t *testing.T) {
 		t.Fatalf("应点名 store 的未来驱动子段并提醒不要填真实凭据，实际 %v", notes)
 	}
 }
+
+// TestGuardSectionIsOptional 断言 `guard` 段**可选**（与 store 的未来驱动子段同一纪律）。
+//
+// 背景（审计 §1.5）：`guard.false_route_budget`（误调度率护栏）本期不消费（阶段 2b+），
+// 却原来要求配置里**必须**写它 —— 强制填一个"写了也没用"的数，只会制造"配置看起来齐全"的错觉。
+// 规则：不写 ⇒ 装载成功；写了 ⇒ 照旧校验形态与取值范围；写了什么 ⇒ 启动日志会点名（`UnconsumedNotes`）。
+func TestGuardSectionIsOptional(t *testing.T) {
+	// ① 整段不写 ⇒ 能装载，且**不会**冒出 guard 的未消费提示
+	withoutGuard := stripGuardSection(validYAML)
+	l := mustLoad(t, withoutGuard)
+	if strings.Contains(strings.Join(l.UnconsumedNotes(), " | "), "false_route_budget") {
+		t.Fatalf("没写 guard 段就不该有它的未消费提示：%v", l.UnconsumedNotes())
+	}
+
+	// ② 写了整段但缺子字段 ⇒ 仍然拒绝（可选的是"整段"，不是"段内可以缺项"）
+	if _, err := Load(strings.NewReader(strings.Replace(withoutGuard, "whitelist:", "guard: {}\nwhitelist:", 1))); err == nil {
+		t.Fatal("写了 guard 段就必须写全 false_route_budget")
+	}
+
+	// ③ 写了且越界 ⇒ 仍然拒绝（取值校验没被一起丢）
+	out := strings.Replace(withoutGuard, "whitelist:", "guard:\n  false_route_budget: -1\nwhitelist:", 1)
+	if _, err := Load(strings.NewReader(out)); err == nil {
+		t.Fatal("guard.false_route_budget 越界必须拒绝")
+	}
+}
+
+// stripGuardSection 按行确定性剥掉 `guard:` 段（不用猜测字面量）。
+func stripGuardSection(src string) string {
+	var out []string
+	skipping := false
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(line, "guard:") {
+			skipping = true
+			continue
+		}
+		if skipping {
+			if line == "" || strings.HasPrefix(line, " ") {
+				continue // 段内（含空行）一并剥掉
+			}
+			skipping = false
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}

@@ -101,6 +101,28 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// 布尔开关：**写错即启动失败**（见 envBool 的说明 —— 其中包含影子模式与凭证剥离两个安全闸门）。
+	shadow, err := envBool("SHEN_PROXY_SHADOW", true)
+	if err != nil {
+		return err
+	}
+	logRequests, err := envBool("SHEN_PROXY_LOG_REQUESTS", false)
+	if err != nil {
+		return err
+	}
+	trustXFF, err := envBool("SHEN_PROXY_TRUST_XFF", false)
+	if err != nil {
+		return err
+	}
+	injectContent, err := envBool("SHEN_PROXY_INJECT_CONTENT", false)
+	if err != nil {
+		return err
+	}
+	forwardCredentials, err := envBool("SHEN_PROXY_FORWARD_CREDENTIALS", false)
+	if err != nil {
+		return err
+	}
+
 	// 幻境后端健康探针（建议书 §8 第 7 项）：`enabled` 不是健康。
 	// 0/未设 = 默认 30s；**负数 = 关闭**（关掉后"健康"就等于 enabled —— 这是刻意可关的）。
 	healthInterval, err := envDuration("SHEN_PROXY_BACKEND_HEALTH_INTERVAL", defaultBackendHealthInterval)
@@ -130,16 +152,16 @@ func run() error {
 		CacheTTL:        caddy.Duration(cacheTTL),
 		Window:          caddy.Duration(window),
 		SessionCookie:   sessionCookie,
-		Shadow:          envBool("SHEN_PROXY_SHADOW", true),
-		LogRequests:     envBool("SHEN_PROXY_LOG_REQUESTS", false),
-		TrustXFF:        envBool("SHEN_PROXY_TRUST_XFF", false),
+		Shadow:          shadow,
+		LogRequests:     logRequests,
+		TrustXFF:        trustXFF,
 		ReportQueue:     queue,
 		CacheMaxEntries: cacheMax,
 		CoreAddr:        coreAddr,
 		Inject:          splitInject(os.Getenv("SHEN_PROXY_INJECT")),
 		// AI 欺骗内容注入的**本地兜底开关**（ADR-0023 决定 4）：默认 false，
 		// 与策略载荷的 inject_enabled **取与** —— 即使策略面说"开"，边缘也要一次本地同意。
-		InjectContent: envBool("SHEN_PROXY_INJECT_CONTENT", false),
+		InjectContent: injectContent,
 		// 策略面（S4）：定期拉取，远端覆盖本地、本地兜底（ADR-0018）。
 		PolicyID:       strings.TrimSpace(os.Getenv("SHEN_PROXY_POLICY_ID")),
 		AdapterID:      env("SHEN_PROXY_ADAPTER_ID", "proxy@"+listen),
@@ -151,7 +173,7 @@ func run() error {
 		// 第二轮检验的另外三个可调项（此前**只在文档里存在**、代码未接线 —— 补上）。
 		DegradedCacheTTL:   caddy.Duration(degradedTTL),
 		DecoyLease:         caddy.Duration(decoyLease),
-		ForwardCredentials: envBool("SHEN_PROXY_FORWARD_CREDENTIALS", false),
+		ForwardCredentials: forwardCredentials,
 	}
 
 	cfg, err := proxy.BuildConfig(proxy.Options{
@@ -214,18 +236,28 @@ func env(key, fallback string) string {
 	return fallback
 }
 
-// envBool 解析布尔；无法识别时用默认值并在日志里说一声 —— 静默取默认会掩盖配置错误。
-func envBool(key string, fallback bool) bool {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return fallback
+// envBool 解析布尔开关；无法识别的取值 ⇒ **启动失败**。
+//
+// 为什么从"告警 + 用默认"改成 fail-fast（本文件的一致性 + 安全闸门）：
+//   - 同文件的 `envDuration` / `envInt` 本来就是"写错即失败"，`web` 入口的 `envBool` 也是；
+//     只有这里宽松，等于**同一个项目里两套纪律**（审计项 §1.5）。
+//   - 更要紧的是取值面：`SHEN_PROXY_SHADOW`（影子模式，`INT-11` 首次上线的安全闸门）、
+//     `SHEN_PROXY_FORWARD_CREDENTIALS`（凭证剥离，`W4`）都在这里。把 `SHEN_PROXY_SHADOW=yes-please`
+//     猜成 true 或 false，等于**在安全开关上替运维做猜测**；正确做法是拒绝启动并说清合法取值。
+//
+// 合法取值：`1/0` · `true/false` · `yes/no` · `on/off`（大小写不敏感）；空 = 用默认值。
+func envBool(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	switch strings.ToLower(raw) {
+	case "":
+		return fallback, nil
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s=%q 不是布尔值（用 1/0、true/false、yes/no、on/off）", key, raw)
 	}
-	v, err := strconv.ParseBool(strings.TrimSpace(raw))
-	if err != nil {
-		log.Printf("警告：%s=%q 不是布尔值，按默认 %v 处理", key, raw, fallback)
-		return fallback
-	}
-	return v
 }
 
 func envDuration(key string, fallback time.Duration) (time.Duration, error) {

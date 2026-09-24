@@ -712,8 +712,11 @@ func (d *configDoc) validateThresholds() error {
 	if mirage > block {
 		return fmt.Errorf("policy: thresholds.route_mirage=%v 不得大于 thresholds.block=%v", mirage, block)
 	}
+	// `guard` 段**可选**：`false_route_budget`（误调度率护栏）本期不消费（阶段 2b+）⇒
+	// 不该强制配置里必须写一个"写了也没用"的数。写了就照旧校验形态与取值范围，
+	// 并会在核心启动日志被点名（`Loader.UnconsumedNotes`）—— 与 `store` 的未来驱动子段同一纪律。
 	if d.Guard == nil {
-		return missing("guard")
+		return nil
 	}
 	if _, _, err := ratio("guard.false_route_budget", d.Guard.FalseRouteBudget, "", nil); err != nil {
 		return err
@@ -780,6 +783,18 @@ func (d *configDoc) validateStore() error {
 		}
 	}
 	return nil
+}
+
+// guardBudgetOf 取 `guard.false_route_budget`（**整段可省略** ⇒ 必须先判 nil）。
+//
+// ⚠️ 不能写成 `deref(d.Guard.FalseRouteBudget)`：当 `d.Guard == nil` 时**字段访问本身**就 panic
+// （`deref` 只能兜住"字段指针为 nil"，兜不住"父结构体指针为 nil"）。这是把 `guard` 改成可选时
+// 单测抓到的真实缺陷：合法配置（不写 guard）会把核心打崩。
+func guardBudgetOf(g *guardDoc) float64 {
+	if g == nil {
+		return 0
+	}
+	return deref(g.FalseRouteBudget)
 }
 
 // deref 取指针值（nil ⇒ 零值）；用于"可选段"的读取。
@@ -980,7 +995,7 @@ func (d *configDoc) build(rules []contract.Rule) (*Loader, error) {
 		shadow:        *d.Shadow,
 		sessionCookie: *d.Session.CookieName,
 		coreListen:    deref(d.Core.Listen),
-		guardBudget:   deref(d.Guard.FalseRouteBudget),
+		guardBudget:   guardBudgetOf(d.Guard),
 		storeExtra:    d.Store.Redis != nil || d.Store.ClickHouse != nil || d.Store.Postgres != nil,
 		ai:            d.buildAI(),
 		decoys:        d.buildDecoys(),
