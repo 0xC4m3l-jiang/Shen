@@ -806,3 +806,64 @@ func stripGuardSection(src string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// TestHostCoverageConflictsAreDetectedSemantically 对应验收用例 `Q05` 的 Host 部分（`R06`）。
+//
+// 修前只按 **Host 字符串** 分桶，于是 `app.example.com` 与 `*.example.com` 对同一路径的覆盖关系
+// 检测不到 —— 两条同时生效，谁接管取决于匹配细节，而"谁该接管"没有明确答案。
+func TestHostCoverageConflictsAreDetectedSemantically(t *testing.T) {
+	asset := func(id string, hosts []string, path string) string {
+		return "    - id: \"" + id + "\"\n" +
+			"      kind: \"bait\"\n" +
+			"      path: \"" + path + "\"\n" +
+			"      hosts: [" + strings.Join(quoteAll(hosts), ", ") + "]\n" +
+			"      backend: \"mirage\"\n" +
+			"      enabled: true\n"
+	}
+	honeypots := `honeypots:
+  - name: "mirage"
+    type: "nginx-admin"
+    addr: "127.0.0.1:19080"
+    enabled: true
+`
+	cases := []struct {
+		name string
+		a, b string
+		want bool // true = 必须拒绝
+	}{
+		{"精确同名 + 同路径", asset("a", []string{"app.example"}, "/admin"), asset("b", []string{"app.example"}, "/admin"), true},
+		{"精确被通配覆盖（同路径）", asset("a", []string{"app.svc.example"}, "/admin"), asset("b", []string{"*.svc.example"}, "/admin"), true},
+		{"通配被精确覆盖（同路径）", asset("a", []string{"*.svc.example"}, "/admin"), asset("b", []string{"app.svc.example"}, "/admin"), true},
+		{"子域通配相交（同路径）", asset("a", []string{"*.a.svc.example"}, "/admin"), asset("b", []string{"*.svc.example"}, "/admin"), true},
+		{"精确被覆盖且路径嵌套", asset("a", []string{"*.svc.example"}, "/admin"), asset("b", []string{"app.svc.example"}, "/admin/users"), true},
+		{"两个互不相交的精确 Host（同路径）", asset("a", []string{"a.svc.example"}, "/admin"), asset("b", []string{"b.svc.example"}, "/admin"), false},
+		{"两个互不相交的通配（同路径）", asset("a", []string{"*.a.svc.example"}, "/admin"), asset("b", []string{"*.b.svc.example"}, "/admin"), false},
+		{"同一 Host 不同路径", asset("a", []string{"app.svc.example"}, "/admin"), asset("b", []string{"app.svc.example"}, "/portal"), false},
+		{"通配不含根域（根域另一条应放行）", asset("a", []string{"*.svc.example"}, "/admin"), asset("b", []string{"svc.example"}, "/admin"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			block := decoysBlock(c.a + c.b)
+			_, err := Load(strings.NewReader(validYAML + block + honeypots))
+			if c.want && err == nil {
+				t.Fatal("归属相交 + 路径重叠必须发布失败（谁接管没有明确答案）")
+			}
+			if !c.want && err != nil {
+				t.Fatalf("归属不相交时应当放行（多站点同路径是正当用法），实际：%v", err)
+			}
+			if c.want && err != nil &&
+				(!strings.Contains(err.Error(), "hosts") || !strings.Contains(err.Error(), "path")) {
+				t.Fatalf("报错必须同时给出双方的 hosts 与 path，实际：%v", err)
+			}
+		})
+	}
+}
+
+// quoteAll 把字符串列表转成 YAML 双引号形式（测试夹具用）。
+func quoteAll(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		out = append(out, "\""+v+"\"")
+	}
+	return out
+}

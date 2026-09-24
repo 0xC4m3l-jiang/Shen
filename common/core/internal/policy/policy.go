@@ -494,7 +494,16 @@ func (d *configDoc) validateDecoys() error {
 	// 归属表：主机名（或通配后缀）-> 归一化路径 -> 资产 id。
 	// 为什么按主机分区：同一条路径在**不同主机**上可以各归各的资产（多站点部署），
 	// 但在同一主机上出现嵌套/重复归属就是配置错误 —— 匹配时谁赢取决于排序，那种"看运气"的语义不能要。
-	owned := make(map[string]map[string]string, len(*d.Decoys.Assets))
+	// 已登记资产的归属表（用于**语义相交**判定，见 `R06`）。
+	// 为什么不再是 `map[hostString]map[path]id`：那个结构只能发现"Host 字符串完全相同"的冲突，
+	// 于是 `app.example.com` 与 `*.example.com` 对同一路径的**覆盖关系**检测不到 ——
+	// 两条同时生效，谁接管取决于匹配细节，而"谁该接管"没有明确答案。
+	type ownership struct {
+		id    string
+		path  string
+		hosts []string
+	}
+	registered := make([]ownership, 0, len(*d.Decoys.Assets))
 	for i := range *d.Decoys.Assets {
 		a := (*d.Decoys.Assets)[i]
 		p := fmt.Sprintf("decoys.assets[%d]", i)
@@ -530,27 +539,29 @@ func (d *configDoc) validateDecoys() error {
 		if err != nil {
 			return err
 		}
-		for _, h := range hosts {
-			byPath, ok := owned[h]
-			if !ok {
-				byPath = map[string]string{}
-				owned[h] = byPath
+		// 冲突发布**失败**（方案 C01 的验收判据 + `R06`）：
+		//   · 同一（相交的）主机上的同一路由只能有一个资产；
+		//   · 且不允许**嵌套归属**（`/admin` 与 `/admin/users`）—— 谁接管谁没有明确答案。
+		for _, prev := range registered {
+			if !hostsIntersect(hosts, prev.hosts) {
+				continue // 归属不相交：不同站点上的同名路径各归各的（多站点部署的正当用法）
 			}
-			// 冲突发布**失败**：同一主机上的同一路由只能有一个资产（方案 C01 的验收判据），
-			// 且不允许**嵌套归属**（`/admin` 与 `/admin/users` 同主机）—— 谁接管谁没有明确答案。
-			for prevPath, prevID := range byPath {
-				if prevPath == *a.Path {
-					return fmt.Errorf("policy: %s.path=%q 在主机 %q 上与 assets[%s] 冲突 —— 同一路由只能登记一个资产",
-						p, *a.Path, h, prevID)
-				}
-				if contract.PathSegmentPrefix(*a.Path, prevPath) || contract.PathSegmentPrefix(prevPath, *a.Path) {
-					return fmt.Errorf(
-						"policy: %s.path=%q 在主机 %q 上与 assets[%s] 的 %q 嵌套 —— 同一主机上的归属不得互相包含（匹配谁赢会变得不可预期）",
-						p, *a.Path, h, prevID, prevPath)
-				}
+			samePath := *a.Path == prev.path
+			nested := contract.PathSegmentPrefix(*a.Path, prev.path) ||
+				contract.PathSegmentPrefix(prev.path, *a.Path)
+			if !samePath && !nested {
+				continue
 			}
-			byPath[*a.Path] = *a.ID
+			kind := "同一路由"
+			if !samePath {
+				kind = "嵌套路由"
+			}
+			return fmt.Errorf(
+				"policy: %s.path=%q hosts=%v 与 assets[%s] 的 path=%q hosts=%v 冲突（%s）—— "+
+					"归属相交且路径重叠时谁接管没有明确答案；请在配置里把两者的 Host 或路径区分开",
+				p, *a.Path, hosts, prev.id, prev.path, prev.hosts, kind)
 		}
+		registered = append(registered, ownership{id: *a.ID, path: *a.Path, hosts: hosts})
 		// 「部署未就绪不投放线索」（C01 验收）：启用中的资产**必须**有后端。
 		// 未启用时允许留空 —— 影子期先登记路径与内容，等后端就绪再打开（INT-11 的阶梯）。
 		if *a.Enabled {
@@ -783,6 +794,45 @@ func (d *configDoc) validateStore() error {
 		}
 	}
 	return nil
+}
+
+// hostsIntersect 报告两组**归属声明**在匹配语义上是否相交（`R06`）。
+//
+// 规则（与边缘 `hostMatches` 同一语义，只做"是否可能同时命中同一个 Host"的判断）：
+//   - 空列表 = 未声明 ⇒ 匹配**任何**主机 ⇒ 与任何声明都相交（含另一方也为空）；
+//   - 精确 vs 精确：字符串相等才相交；
+//   - 精确 vs `*.suffix`：精确名以 `.suffix` 结尾且**有前缀标签**才算相交（`*.example.com` 不含根域）；
+//   - `*.a` vs `*.b`：一个 suffix 是另一个的后缀（按点边界）即相交（例如 `*.a.example.com` 与 `*.example.com`）。
+func hostsIntersect(a, b []string) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return true
+	}
+	for _, x := range a {
+		for _, y := range b {
+			if hostPatternsIntersect(x, y) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hostPatternsIntersect(x, y string) bool {
+	if x == y {
+		return true
+	}
+	xs, xWild := strings.CutPrefix(x, "*.")
+	ys, yWild := strings.CutPrefix(y, "*.")
+	switch {
+	case xWild && yWild:
+		return strings.HasSuffix(xs, "."+ys) || strings.HasSuffix(ys, "."+xs)
+	case xWild: // x 通配、y 精确
+		return strings.HasSuffix(y, "."+xs) && len(y) > len(xs)+1
+	case yWild:
+		return strings.HasSuffix(x, "."+ys) && len(x) > len(ys)+1
+	default:
+		return false
+	}
 }
 
 // guardBudgetOf 取 `guard.false_route_budget`（**整段可省略** ⇒ 必须先判 nil）。

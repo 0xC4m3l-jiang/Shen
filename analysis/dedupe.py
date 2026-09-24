@@ -24,6 +24,21 @@ class SituationDedupe:
     admitted: int = 0
     suppressed: int = 0
 
+    def snapshot(self) -> SituationDedupe:
+        """复制一份**独立**实例（`R08`）。
+
+        为什么需要：worker 会把 checkpoint 里的去重状态**跨轮复用**；若不复制而直接改，
+        那么"本轮上报失败、游标不回退"的保护就形同虚设 —— 去重状态已经被改过了，
+        下一轮那些未被成功处理的态势会被当成"重复"压掉（静默丢事件）。
+        """
+        return SituationDedupe(
+            window_seconds=self.window_seconds,
+            capacity=self.capacity,
+            _seen=dict(self._seen),
+            admitted=self.admitted,
+            suppressed=self.suppressed,
+        )
+
     def key(self, *, source: str, session_id: str, method: str, path: str) -> str:
         return f"{source}|{session_id}|{method}|{path}"
 

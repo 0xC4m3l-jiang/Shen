@@ -125,9 +125,26 @@ func variantFor(session string, variants int) int {
 
 // sessionKeyOf 取会话键：**最小身份值**（与 `decisionID` 的会话分量**同一个来源**）。
 //
+// 取法有两级（`R07`）：
+//  1. **请求上下文里有入口钉定的值** ⇒ 用它。这是必需的：投递到幻境前会**剥离业务会话 Cookie**
+//     （`W4`），若这里仍从请求头取，剥离后所有请求都会退化成同一个空槽位 ——
+//     变体选择随之塌缩（"每个会话看到自己的那一份"就不再成立）。
+//  2. 没有钉定值（例如单测直接调 transport）⇒ 回落到按名读 cookie（行为与从前一致）。
+//
 // 空 Cookie 也合法：它只是一个会话值 —— 于是所有「没有 cookie 的请求」落同一个槽位（确定性优先）。
 func (h *Handler) sessionKeyOf(r *http.Request) string {
+	if v, ok := r.Context().Value(sessionKeyKey{}).(string); ok && v != "" {
+		return v
+	}
 	return sessionHint(r, h.sessionCookieName())
+}
+
+// sessionKeyKey 是请求上下文里的会话键（未导出类型：只有本包能写）。
+type sessionKeyKey struct{}
+
+// withSessionKey 把入口算出的会话键钉进上下文（`R07`：剥离凭证前先固定身份）。
+func withSessionKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, sessionKeyKey{}, key)
 }
 
 // ── 会话钉定（轮换只对新会话生效）────────────────────────────────────────────

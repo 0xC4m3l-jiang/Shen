@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -349,4 +350,101 @@ func firstAuditItem(t *testing.T, body string) map[string]any {
 func sessionCookieFromRaw(raw string) string {
 	head, _, _ := strings.Cut(raw, ";")
 	return head
+}
+
+// ── 第三次深度优化 R03：会话状态的并发原子性（验收用例 `Q07`）──────────────────
+
+// TestConcurrentCASSameVersionCommitsExactlyOnce 断言：**同一版本的两个并发提交只会有一个成功**。
+//
+// 修前的事实（`R03`）：`sessionState` 没有锁，"读值 → 比版本 → 改值 → 记审计 → 计数"分散在锁外，
+// 于是两个同版本请求可以**都**通过版本校验 ⇒ 两次提交（版本 +2、审计两条），
+// 或者版本与审计不同步（"写后读"与审计对不上）。这条用例用 `-race` 跑，同时断言最终状态。
+func TestConcurrentCASSameVersionCommitsExactlyOnce(t *testing.T) {
+	h, _ := newHandler(t, Options{})
+	cookie := loginSession(t, h, "alice")
+	key := h.scenario.Config[0].Key
+
+	const racers = 2
+	start := make(chan struct{})
+	// 结果经 channel 汇总（不共享切片下标写）：并发用例本身也要经得起 `-race` 与静态检查，
+	// 否则"测并发的用例自己带竞态"就成了新的噪声源。
+	codes := make(chan int, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Add(1)
+		go func(n int) { // 显式传参：不依赖循环变量捕获规则
+			defer wg.Done()
+			<-start // barrier：让两个请求尽量同时进入临界区
+			resp := do(h, http.MethodPost, "/admin/api/config/"+key,
+				fmt.Sprintf(`{"value":"v-%d","version":0}`, n),
+				map[string]string{"Content-Type": "application/json", "Cookie": cookie})
+			codes <- resp.Code
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+	got := make([]int, 0, racers)
+	for c := range codes {
+		got = append(got, c)
+	}
+
+	okCount, conflictCount := 0, 0
+	for _, c := range got {
+		switch c {
+		case http.StatusOK:
+			okCount++
+		case http.StatusConflict:
+			conflictCount++
+		default:
+			t.Fatalf("并发提交只应出现 200 或 409，实际 %v", got)
+		}
+	}
+	if okCount != 1 || conflictCount != 1 {
+		t.Fatalf("同版本并发提交应恰好 1 成功 + 1 冲突，实际 %v", got)
+	}
+
+	// 最终状态必须与"只提交了一次"一致：版本 +1、写计数 1、审计恰好 1 条
+	state := do(h, http.MethodGet, "/admin/api/state", "", map[string]string{"Cookie": cookie})
+	if state.Code != http.StatusOK {
+		t.Fatalf("GET /admin/api/state 应可用（CAS 的版本号要能被发现），实际 %d", state.Code)
+	}
+	body := state.Body.String()
+	if !strings.Contains(body, `"version":1`) || !strings.Contains(body, `"writes":1`) {
+		t.Fatalf("并发后应恰好一次提交（version=1 / writes=1），实际 %s", body)
+	}
+	audit := do(h, http.MethodGet, "/admin/api/audit?page=1&page_size=50", "",
+		map[string]string{"Cookie": cookie})
+	if n := strings.Count(audit.Body.String(), fmt.Sprintf(`"target":"%s"`, key)); n != 1 {
+		t.Fatalf("审计应恰好一条（版本与审计必须原子），实际 %d 条：%s", n, audit.Body.String())
+	}
+}
+
+// TestSnapshotReadIsConsistent 断言读路径拿的是**快照**：写完立刻读，版本与列表同时是新值。
+func TestSnapshotReadIsConsistent(t *testing.T) {
+	h, _ := newHandler(t, Options{})
+	cookie := loginSession(t, h, "alice")
+	key := h.scenario.Config[0].Key
+
+	write := do(h, http.MethodPost, "/admin/api/config/"+key, `{"value":"9.9.9"}`,
+		map[string]string{"Content-Type": "application/json", "Cookie": cookie})
+	if write.Code != http.StatusOK {
+		t.Fatalf("写应成功，实际 %d", write.Code)
+	}
+	var res struct {
+		Version uint64 `json:"version"`
+		Changed bool   `json:"changed"`
+	}
+	if err := json.Unmarshal(write.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	state := do(h, http.MethodGet, "/admin/api/state", "", map[string]string{"Cookie": cookie})
+	list := do(h, http.MethodGet, "/admin/api/config?page=1&page_size=20", "",
+		map[string]string{"Cookie": cookie})
+	if !strings.Contains(state.Body.String(), fmt.Sprintf(`"version":%d`, res.Version)) {
+		t.Fatalf("读到的版本应与写响应一致：write=%d state=%s", res.Version, state.Body.String())
+	}
+	if !strings.Contains(list.Body.String(), `"value":"9.9.9"`) {
+		t.Fatalf("列表应看到新值（写后读），实际 %s", list.Body.String())
+	}
 }

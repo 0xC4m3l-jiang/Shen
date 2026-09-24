@@ -681,3 +681,152 @@ func TestDecoyLeaseSignConventions(t *testing.T) {
 		})
 	}
 }
+
+// ── 第三次深度优化 R04 / R05：凭证边界覆盖每条路径 · 墓碑携带归属 ─────────────
+
+// TestScoreBasedRerouteStripsCredentialsAndFallbackKeepsThem 对应验收用例 `Q06`。
+//
+// `R04`（严重）：专属路由与本地 env 后端都剥离了凭证，**评分改道**这条路径漏了 ——
+// 于是"核心判成 route_mirage"时，生产 `Authorization` / 业务会话 Cookie 会被原样交给幻境。
+// 修法是"在**克隆**上剥离"：发往幻境的那一份干净，**回落业务时仍用原请求**（凭证完整）——
+// 后者同样重要：直接剥离 `r` 会把"少给幻境一点"变成"业务被登出"。
+func TestScoreBasedRerouteStripsCredentialsAndFallbackKeepsThem(t *testing.T) {
+	t.Run("改道成功：幻境收不到生产凭证，自己的 cookie 保留", func(t *testing.T) {
+		h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9", SessionCookie: "sid"},
+			&stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_MIRAGE, Backend: "hp"}},
+			&stubReporter{})
+		cap := &capturingBackend{}
+		h.buildRemote = func(string, string) (caddyhttp.MiddlewareHandler, error) { return cap, nil }
+		if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1,
+			[]policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}, nil), "s"); err != nil {
+			t.Fatal(err)
+		}
+		w := do(h, http.MethodGet, "http://svc.example/.git/config", "", map[string]string{
+			"Authorization": "Bearer prod-xxx",
+			"Cookie":        "sid=business-session; atlas_session=decoy-session",
+		})
+		if w.Code != http.StatusOK {
+			t.Fatalf("改道应成功，实际 %d", w.Code)
+		}
+		cap.mu.Lock()
+		hdr := cap.header
+		cap.mu.Unlock()
+		if got := hdr.Get("Authorization"); got != "" {
+			t.Errorf("评分改道的幻境仍收到了生产 Authorization=%q（R04 回归）", got)
+		}
+		cookie := hdr.Get("Cookie")
+		if strings.Contains(cookie, "business-session") {
+			t.Errorf("评分改道的幻境仍收到了业务会话 cookie（R04 回归）：%q", cookie)
+		}
+		if !strings.Contains(cookie, "atlas_session=decoy-session") {
+			t.Errorf("幻境自己的 cookie 必须保留：%q", cookie)
+		}
+	})
+
+	t.Run("后端失败回落：业务仍拿到完整凭证", func(t *testing.T) {
+		h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9", SessionCookie: "sid"},
+			&stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_MIRAGE, Backend: "hp"}},
+			&stubReporter{})
+		h.buildRemote = func(string, string) (caddyhttp.MiddlewareHandler, error) {
+			return fakeBackend{name: "hp", err: errStub("连接被拒")}, nil
+		}
+		origin := &capturingBackend{}
+		h.origin = origin
+		if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1,
+			[]policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}, nil), "s"); err != nil {
+			t.Fatal(err)
+		}
+		do(h, http.MethodGet, "http://svc.example/.git/config", "", map[string]string{
+			"Authorization": "Bearer prod-xxx",
+			"Cookie":        "sid=business-session",
+		})
+		origin.mu.Lock()
+		hdr := origin.header
+		origin.mu.Unlock()
+		if hdr.Get("Authorization") == "" {
+			t.Error("回落业务时凭证被剥掉了 —— 克隆剥离的目的是不伤害回落的业务请求（NI-1）")
+		}
+		if !strings.Contains(hdr.Get("Cookie"), "business-session") {
+			t.Errorf("回落业务时必须保留业务 cookie：%q", hdr.Get("Cookie"))
+		}
+	})
+}
+
+// TestTombstoneKeepsHostScope 对应验收用例 `Q05`（`R05`）。
+//
+// 墓碑丢了 hosts 就会按"声明缺失 = 任何主机"匹配一切 ⇒「撤销 a.example 的 /x」会把
+// b.example 的 /x 一并 502（错保护别人），或反过来被同路径的另一 Host 抵消（该保护的没保护）。
+func TestTombstoneKeepsHostScope(t *testing.T) {
+	judge := &stubJudge{resp: &judgev1.JudgeResponse{Action: judgev1.Action_ACTION_ORIGIN}}
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9"}, judge, &stubReporter{})
+	h.buildRemote = func(name, _ string) (caddyhttp.MiddlewareHandler, error) { return fakeBackend{name: name}, nil }
+	origin := &countingBackend{name: "origin"}
+	h.origin = origin
+
+	backends := []policyBackend{{Name: "hp", Address: "http://127.0.0.1:2222", Enabled: true}}
+	both := []policyDecoy{
+		{ID: "a-site", Path: "/console", Hosts: []string{"a.example"}, Backend: "hp"},
+		{ID: "b-site", Path: "/console", Hosts: []string{"b.example"}, Backend: "hp"},
+	}
+	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 1, backends, both), "s1"); err != nil {
+		t.Fatal(err)
+	}
+	// 只撤销 a 站点（b 站点继续登记）
+	if err := h.applyEdgePolicy(context.Background(), decoyPolicyFixture(t, 2, backends, both[1:]), "s2"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.remotePolicy().tombstones); n != 1 {
+		t.Fatalf("应恰好留下 1 条碑（只有 a 站点被撤销），实际 %d", n)
+	}
+	if hosts := h.remotePolicy().tombstones[0].hosts; len(hosts) != 1 || hosts[0] != "a.example" {
+		t.Fatalf("碑必须携带原归属，实际 %v", hosts)
+	}
+
+	// b 站点：正常投递（不该被 a 的碑波及）
+	wB := do(h, http.MethodGet, "http://b.example/console/users", "", nil)
+	if got := wB.Header().Get("X-Backend"); got != "hp" {
+		t.Fatalf("b 站点应正常投递到幻境，实际落点 %q（状态 %d）", got, wB.Code)
+	}
+	// a 站点：租约内固定 502 且不回生产
+	wA := do(h, http.MethodGet, "http://a.example/console/users", "", nil)
+	if wA.Code != http.StatusBadGateway {
+		t.Fatalf("a 站点租约内应 502，实际 %d", wA.Code)
+	}
+	if n := origin.calls.Load(); n != 0 {
+		t.Fatalf("两条都不该落到源站，实际 %d 次", n)
+	}
+}
+
+// ── 第三次深度优化 R07 / R12 / R13 ──────────────────────────────────────────
+
+// TestSessionKeyPinnedBeforeCredentialStripping 对应验收用例 `Q06` 的"剥离后绑定/变体不变"。
+//
+// `R07`：投递幻境前会剥离业务会话 Cookie（`W4`），而内容变体选择若仍从请求头取会话，
+// 剥离后所有请求都会退化成同一个空槽位 —— "每个会话看到自己的那一份"当场失效。
+func TestSessionKeyPinnedBeforeCredentialStripping(t *testing.T) {
+	h := newTestHandler(t, Config{Upstream: "http://127.0.0.1:9", SessionCookie: "sid"},
+		&stubJudge{}, &stubReporter{})
+	// `variantOfSession` 用会话钉定缓存；脚手架不建它（只有 Provision 建）⇒ 这里显式给一个。
+	h.pins = newVariantPins(time.Minute, 8, h.now)
+
+	// ① 入口钉定的会话键：即使 cookie 已被剥离，也仍然按这个会话取值
+	req := httptest.NewRequest(http.MethodGet, "http://svc.example/portal/api", nil)
+	req = req.WithContext(withSessionKey(req.Context(), "session-A"))
+	h.stripCredentials(req) // 模拟发往幻境前的那一步（这里 cookie 本来就没有，重点是"不依赖它"）
+	if got := h.sessionKeyOf(req); got != "session-A" {
+		t.Fatalf("剥离后必须仍用入口钉定的会话键，实际 %q（R07 回归）", got)
+	}
+
+	// ② 没有钉定值（单测直接调 transport 的路径）⇒ 回落到按名读 cookie，行为与从前一致
+	plain := httptest.NewRequest(http.MethodGet, "http://svc.example/portal/api", nil)
+	plain.Header.Set("Cookie", "sid=session-B")
+	if got := h.sessionKeyOf(plain); got != "session-B" {
+		t.Fatalf("无钉定值时应回落到 cookie，实际 %q", got)
+	}
+
+	// ③ 两个不同会话 ⇒ 不同变体槽位（多态确定性：同会话恒定、跨会话可分）
+	if variants := 8; h.variantOfSession("session-A", &contentIndex{variants: variants}) ==
+		h.variantOfSession("session-C", &contentIndex{variants: variants}) {
+		t.Log("两个会话恰好落同一槽位（概率 1/8）——只记录，不作为失败依据")
+	}
+}

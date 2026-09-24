@@ -110,7 +110,11 @@ func main() {
 	// 为什么需要它：诱饵后端重启时被硬切断的合成会话与半截响应，都是对手可见的异常。
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	// `R12`：Shutdown 跑在 goroutine 里，主流程**必须等它收尾**（原来是"起了 goroutine 就不管了"，
+	// 于是进程可能在在途请求还没结束时就退掉 —— 对手看到的是被硬切断的连接）。
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		sig := <-stop
 		log.Printf("web: 收到 %s ⇒ 停止接收新请求（最多等 %s）", sig, shutdownGrace)
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
@@ -124,6 +128,10 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("web: 监听失败：%v", err)
 	}
+	// 等收尾：`srv.Shutdown` 返回后，`ListenAndServe` 才会返回 ErrServerClosed。
+	// 这一步保证"日志里的丢弃/失败计数"是**收尾之后**的事实，而不是退出瞬间的快照。
+	<-shutdownDone
+	h.Close() // 有界关闭事件出口（见 asyncEmitter.Close）
 	log.Printf("web: 已停止（丢弃事件 %d 条 · 投递失败 %d 次）", h.DroppedEvents(), h.EventFailures())
 }
 
@@ -133,9 +141,14 @@ func main() {
 // 有输出、可 grep，且**永不**带正文。
 type eventLogger struct{}
 
-func (eventLogger) Event(_ context.Context, ev web.Event) {
-	log.Printf("web: 合成交互 kind=%s path=%s user=%q outcome=%s",
-		ev.Kind, ev.Path, ev.User, ev.Outcome)
+// Event 是默认出口：写标准日志（stderr）。
+//
+// 契约（`R12`）：**必须**在 ctx 期限内返回，并用返回值报告失败 —— 本地日志出口不会失败，
+// 因此返回 nil；换成网络出口（gRPC / 采集器）时必须如实返回错误，让 `EventFailures` 计数可见。
+func (eventLogger) Event(_ context.Context, ev web.Event) error {
+	log.Printf("web: 合成交互 kind=%s path=%s user=%q outcome=%s session=%s",
+		ev.Kind, ev.Path, ev.User, ev.Outcome, ev.Session)
+	return nil
 }
 
 // loadScenarioPacks 装载外部场景包；未配置时返回 nil（= 只用内置包）。

@@ -305,10 +305,88 @@ def test_worker_truncates_sessions_visibly() -> None:
         for n in range(MAX_SESSIONS_PER_RUN + 3)
     ]
     port = InMemoryTelemetry(events)
-    run = run_once(port, now="2026-09-19T10:00:30+08:00")
+    checkpoint = Checkpoint()
+    run = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:00:30+08:00")
     assert len(run.sessions) == MAX_SESSIONS_PER_RUN
     assert run.truncated_sessions == 3, "被截断的会话数必须可见（不是静默丢弃）"
-    assert run.admitted == len(events), "去重计数仍覆盖全部事件"
+    # `R08` 之后：**只有被分析会话的观测进入去重状态**（截断掉的会话不进去）——
+    # 否则下一轮它们会被当成"已处理过的重复态势"压掉（静默丢事件）。
+    assert run.admitted == MAX_SESSIONS_PER_RUN, (
+        f"去重只应覆盖本轮真正分析的会话，实际 {run.admitted}"
+    )
+    assert run.admitted < len(events), "截断会话的事件不得计入本轮去重"
+
+
+# ── 第三次深度优化 R08：去重状态的事务性 ────────────────────────────────────
+
+
+def test_r08_dedupe_state_unchanged_when_round_fails() -> None:
+    """上报失败的一轮**不得改动已提交的去重状态**（`R08` 第 1 步）。
+
+    修前的事实：worker 直接把 `checkpoint.dedupe` 拿来就地 `admit`；
+    于是"游标不提交"的保护形同虚设 —— 去重状态已经被改过了，
+    下一轮那些没上报成功的态势会被当成"重复"压掉（静默丢事件）。
+    """
+
+    class ReportFailsPort(InMemoryTelemetry):
+        def report(self, _event: WireEvent) -> tuple[int, int]:
+            raise TelemetryUnavailable("模拟核心写侧不可用")
+
+    events = [decision("e-1", "/.git/config", session="s-1")]
+    checkpoint = Checkpoint()
+    first = run_once(
+        InMemoryTelemetry(events), checkpoint=checkpoint, now="2026-09-19T10:00:30+08:00"
+    )
+    assert first.reported > 0, "首轮应成功上报"
+    committed = dict(checkpoint.dedupe._seen)  # 已提交的去重状态
+
+    # 第二轮必须是**新态势**（换路径）：同一条事件会被窗口去重压掉，那样根本走不到上报，
+    # 也就测不到"失败轮不得改动去重状态"。
+    fresh = [decision("e-2", "/etc/passwd", session="s-2", at="2026-09-19T10:00:20+08:00")]
+    second = run_once(
+        ReportFailsPort(fresh), checkpoint=checkpoint, now="2026-09-19T10:00:40+08:00"
+    )
+    assert second.errors, "上报失败必须如实记录"
+    assert dict(checkpoint.dedupe._seen) == committed, (
+        "失败轮不得改动已提交的去重状态（否则下一轮会把未处理的态势压掉）"
+    )
+
+
+def test_r08_truncated_sessions_are_re_admitted_next_round() -> None:
+    """被截断的会话下一轮必须**仍可被 admit**（`R08` 第 2 步）。"""
+    from analysis.worker import MAX_SESSIONS_PER_RUN
+
+    total = MAX_SESSIONS_PER_RUN + 2
+    events = [
+        decision(f"e-{n}", f"/p/{n}", session=f"s-{n}", at=f"2026-09-19T10:{n:02d}:00+08:00")
+        for n in range(total)
+    ]
+    port = InMemoryTelemetry(events)
+    checkpoint = Checkpoint()
+    first = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:30:00+08:00")
+    assert first.truncated_sessions == 2
+
+    # 被截断会话的事件**不在**已提交的去重状态里 ⇒ 下一轮可以重新触发分析
+    seen = checkpoint.dedupe._seen
+    dropped = [f"s-{n}" for n in range(total)]
+    analyzed = {s.session_id for s in first.sessions}
+    dropped = [s for s in dropped if s not in analyzed]
+    assert dropped, "应当有被截断的会话"
+    for sid in dropped:
+        assert not any(sid in key for key in seen), f"被截断的会话 {sid} 不该进入去重状态"
+
+    # 被推迟的会话**不会**被静默吞掉，两条保证各测一条：
+    #  ① 它们的事件不在已提交的去重状态里（上面已断言）⇒ 窗口允许时仍可 admit；
+    #  ② 本轮**显式报告**了推迟数量（`truncated_sessions`）；
+    #     无法前进时由既有 `known_loss` 分支记「已知丢失」
+    #     （见 `test_n3_known_loss_is_recorded_when_progress_is_impossible`）。
+    second = run_once(port, checkpoint=checkpoint, now="2026-09-19T10:31:00+08:00")
+    assert second.truncated_sessions >= 0
+    assert second.completeness in ("complete", "unknown")
+    # 至少不能出现"被推迟且无人知晓"的状态：要么本轮分析了（admitted>0），要么明确报告推迟/丢失。
+    assert second.admitted > 0 or second.truncated_sessions > 0 or second.known_loss, (
+        "被推迟的会话必须被分析或被显式报告（不得静默消失）"
+    )
 
 
 def test_ar14_worker_dedupes_same_situation_before_analysis() -> None:

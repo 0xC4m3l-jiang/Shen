@@ -109,15 +109,15 @@ func (h *Handler) handleAdminWrite(w http.ResponseWriter, r *http.Request) {
 	}
 	h.emitFor(r, Event{Kind: EventStateChange, Outcome: outcome, User: id})
 
-	res := writeResult{Kind: resource, ID: id, Version: sess.version, Changed: changed}
+	res := writeResult{Kind: resource, ID: id, Version: sess.Version(), Changed: changed}
 	switch resource {
 	case "users":
-		if i, ferr := sess.findUser(id); ferr == nil {
-			res.Value = sess.users[i].Enabled
+		if v, ok := sess.userEnabled(id); ok {
+			res.Value = v
 		}
 	case "config":
-		if i, ferr := sess.findConfig(id); ferr == nil {
-			res.Value = sess.config[i].Value
+		if v, ok := sess.configValue(id); ok {
+			res.Value = v
 		}
 	}
 	writeJSON(w, http.StatusOK, res)
@@ -224,7 +224,7 @@ func (h *Handler) pageWriteFailed(w http.ResponseWriter, r *http.Request, resour
 // currentVersion 取当前会话的版本（用于 409 的可重试信息）。
 func (h *Handler) currentVersion(r *http.Request) uint64 {
 	if sess, ok := h.sessionOf(r); ok {
-		return sess.version
+		return sess.Version() // 锁内读（`R03`：版本与其他可变字段同属一份状态）
 	}
 	return 0
 }

@@ -21,10 +21,11 @@ type recordingSink struct {
 	events []Event
 }
 
-func (s *recordingSink) Event(_ context.Context, ev Event) {
+func (s *recordingSink) Event(_ context.Context, ev Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, ev)
+	return nil
 }
 
 func (s *recordingSink) all() []Event {

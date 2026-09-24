@@ -31,6 +31,10 @@ services:
       # 不设 SHEN_WEB_SCENARIOS 时用内置包；文件非法则启动失败（坏素材不带出去）。
       SHEN_WEB_SCENARIOS: "/etc/shen/scenarios.json"
       SHEN_WEB_SCENARIO: "contoso"
+      # 可信前跳（`R13`）：只有来自这些网段的请求，才采信它的 `X-Forwarded-For`。
+      # 验证档里 web 后端只经引擎到达（共享命名空间内的回环）⇒ 声明它，按客户端来源限流才成立；
+      # 不声明（默认空）时一律只信直接对端 ⇒ 所有请求会被算成同一个来源（限流退化成共用桶）。
+      SHEN_WEB_TRUSTED_PROXIES: "127.0.0.1/32"
     volumes:
       - ../config/scenarios.example.json:/etc/shen/scenarios.json:ro
     restart: unless-stopped

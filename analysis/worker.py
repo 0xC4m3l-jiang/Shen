@@ -438,8 +438,10 @@ def run_once(
     run.contiguous = contiguous
     run.window_gap = fetch_note
     # 去重状态跨轮复用（`N8`）：**只有提交成功时**才会被写回 checkpoint（见下面的 `_commit`）。
+    # **用时复制**（`R08`）：拿到的是一份独立副本，只有 `_commit` 成功才写回 checkpoint。
+    # 直接复用同一对象会让"未提交"变成假象 —— 失败轮也已经改动了它。
     dedupe = (
-        checkpoint.dedupe
+        checkpoint.dedupe.snapshot()
         if checkpoint is not None and checkpoint.dedupe is not None
         else SituationDedupe(window_seconds=window_seconds)
     )
@@ -461,8 +463,29 @@ def run_once(
     parsed = len(observations)
     observations = [obs for obs in observations if obs.event_id]
     run.dropped_events = parsed - len(observations)
+    # ── 分组与截断**先于**去重（`R08`）─────────────────────────────────────
+    # 为什么顺序重要：被截断的会话本轮**没有被分析**，它们的事件就不该进入去重状态 ——
+    # 否则下一轮它们会被当成"已处理过的重复态势"压掉（静默丢事件，正是 `N3` 消除过的那类缺陷）。
+    # 归属决定仍按**最近活跃优先**（既有语义，方案 T23 要求覆盖"先分析哪个会话"）；
+    # 被推迟的会话靠两件事保证不被静默吞掉：
+    #   ① 它们的事件**不进入去重状态**（下一轮窗口允许时仍可 admit）；
+    # ② 游标停在天花板之前，且**无法前进时显式记 known_loss**（`R08` 验收的第二个分支）。
+    groups_all, truncated = _group_by_session(observations, MAX_SESSIONS_PER_RUN)
+    run.truncated_sessions = truncated
+    analyzed_sessions = {group[0].session_id for group in groups_all if group}
+    candidates = [obs for group in groups_all for obs in group]
+    # 位置的**天花板**（`N3`）：从**未被分析**的观测里取最早时刻（不看去重结果）。
+    if truncated:
+        dropped_stamps = [
+            at
+            for obs in observations
+            if obs.session_id not in analyzed_sessions and (at := _at_of(obs))
+        ]
+        if dropped_stamps:
+            ceiling = min(dropped_stamps)
+
     admitted: list[Observation] = []
-    for obs in observations:
+    for obs in candidates:
         key = dedupe.key(
             source=obs.source, session_id=obs.session_id, method=obs.method, path=obs.path
         )
@@ -480,18 +503,8 @@ def run_once(
     # 结论是**会话级**的：意图、攻击链与策略描述的都是「一个主体在做什么」。
     # 改造前这里取 `admitted[0].session_id` 当整批的会话，其余会话的观测混进同一份结论 ——
     # 跨会话串链，引用看似真实、语义却是错的。现在每个会话各产一份。
-    groups, truncated = _group_by_session(admitted, MAX_SESSIONS_PER_RUN)
-    run.truncated_sessions = truncated
-    # 位置的**天花板**（`N3`）：若本轮因会话上限少分析了若干会话，游标就不能越过这些事件里
-    # **最早**的那条 —— 越过它 = 那些事件永远不会被分析（原缺陷正是如此）。
-    # 取最早 ⇒ 下一轮的 `since` 一定落在它们之前，于是它们会被重新读到并分析；最终收敛。
-    if truncated:
-        analyzed = {group[0].session_id for group in groups if group}
-        dropped_stamps = [
-            at for obs in admitted if obs.session_id not in analyzed and (at := _at_of(obs))
-        ]
-        if dropped_stamps:
-            ceiling = min(dropped_stamps)
+    # 去重后成员变少 ⇒ 重新分组（截断计数已在上一步报告，不重复计入）。
+    groups, _ = _group_by_session(admitted, MAX_SESSIONS_PER_RUN)
 
     for index, group in enumerate(groups):
         session = _analyze_session(

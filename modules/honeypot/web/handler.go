@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,6 +74,9 @@ type Options struct {
 	EventQueue int
 	// RequestLog 打开逐请求日志（默认关：事件已经记录了交互，日志只用于本地排查）。
 	RequestLog bool
+	// TrustedProxies 是**可信前跳**的网段（`R13`）：只有来自这些网段的请求，我们才采信它的
+	// `X-Forwarded-For`。空 = 只信直接对端（最保守）。部署在引擎后面时必须显式声明。
+	TrustedProxies []netip.Prefix
 	// Now 与 Rand 可注入，使会话行为可测（内容本身与时钟无关）。
 	Now  func() time.Time
 	Rand io.Reader
@@ -86,10 +90,11 @@ type Handler struct {
 	now      func() time.Time
 	rand     io.Reader
 
-	cookieSecure bool
-	requestLog   bool
-	login        *loginLimiter
-	emitter      *asyncEmitter
+	cookieSecure   bool
+	requestLog     bool
+	trustedProxies []netip.Prefix
+	login          *loginLimiter
+	emitter        *asyncEmitter
 
 	mu       sync.Mutex
 	sessions map[string]*sessionState // 合成会话：id -> 到期时刻 + **可变场景状态**（C06）
@@ -105,15 +110,16 @@ func New(opts Options) *Handler {
 		sc.MaxPageSize = 20
 	}
 	h := &Handler{
-		scenario:     sc,
-		maxBody:      opts.MaxBodyBytes,
-		ttl:          opts.SessionTTL,
-		now:          opts.Now,
-		rand:         opts.Rand,
-		cookieSecure: opts.CookieSecure,
-		requestLog:   opts.RequestLog,
-		login:        newLoginLimiter(opts.LoginBurst, opts.LoginWindow),
-		sessions:     map[string]*sessionState{},
+		scenario:       sc,
+		maxBody:        opts.MaxBodyBytes,
+		ttl:            opts.SessionTTL,
+		now:            opts.Now,
+		rand:           opts.Rand,
+		cookieSecure:   opts.CookieSecure,
+		requestLog:     opts.RequestLog,
+		trustedProxies: opts.TrustedProxies,
+		login:          newLoginLimiter(opts.LoginBurst, opts.LoginWindow),
+		sessions:       map[string]*sessionState{},
 	}
 	if opts.Events != nil {
 		h.emitter = newAsyncEmitter(opts.Events, opts.EventQueue)
@@ -212,7 +218,7 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// 登录配额（`W6`）：合成登录台也要有速率上限 —— 否则「无限次尝试」既是资源放大器，
 	// 也是一个可被对手观察到「不在乎任何凭据」的异常信号。
-	if !h.allowLogin(clientIPOf(r)) {
+	if !h.allowLogin(clientIPOf(r, h.trustedProxies)) {
 		h.emit(Event{Kind: EventLoginAttempt, Path: r.URL.Path, User: user, Outcome: outcomeThrottled})
 		h.render(w, http.StatusTooManyRequests, tmplError,
 			h.errViewOf("Too many attempts", http.StatusTooManyRequests,
@@ -221,7 +227,8 @@ func (h *Handler) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.requestLog {
-		log.Printf("web: 合成登录尝试 来源=%s 用户=%q 场景=%s", clientIPOf(r), user, h.scenario.ID)
+		log.Printf("web: 合成登录尝试 来源=%s 用户=%q 场景=%s",
+			clientIPOf(r, h.trustedProxies), user, h.scenario.ID)
 	}
 	if h.scenario.Outcome == LoginFails {
 		h.emit(Event{Kind: EventLoginAttempt, Path: r.URL.Path, User: user, Outcome: string(LoginFails)})
@@ -271,19 +278,21 @@ func (h *Handler) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin/login", http.StatusFound)
 		return
 	}
+	// **快照读**（`R03`）：页面与 API 都从同一个一致性视图取数据，读到的状态一定对应某个提交点。
+	snap := sess.snapshot()
 	page := pageParam(r)
 	h.emitFor(r, Event{Kind: EventPageView, Outcome: "page"})
 	switch r.URL.Path {
 	case "/admin/users":
-		p := paginate(sess.users, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
+		p := paginate(snap.users, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
 		h.render(w, http.StatusOK, tmplList, h.listView("Users", metaOf("/admin/users", p),
 			[]string{"ID", "Name", "Role", "State", "Last seen"}, userRows(p.Items)))
 	case "/admin/config":
-		p := paginate(sess.config, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
+		p := paginate(snap.config, page, h.pageSizeParam(r), h.scenario.MaxPageSize)
 		h.render(w, http.StatusOK, tmplList, h.listView("Configuration", metaOf("/admin/config", p),
 			[]string{"Key", "Value"}, cfgRows(p.Items)))
 	case "/admin/audit":
-		p := paginate(latestFirst(sess.audit), page, h.pageSizeParam(r), h.scenario.MaxPageSize)
+		p := paginate(latestFirst(snap.audit), page, h.pageSizeParam(r), h.scenario.MaxPageSize)
 		h.render(w, http.StatusOK, tmplList, h.listView("Audit log", metaOf("/admin/audit", p),
 			[]string{"Time", "Actor", "Action", "Target"}, auditRows(p.Items)))
 	default:
@@ -299,6 +308,8 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
 		return
 	}
+	// **快照读**（`R03`）：见 `sessionState.snapshot`。
+	snap := sess.snapshot()
 	page := pageParam(r)
 	size := h.pageSizeParam(r)
 	h.emitFor(r, Event{Kind: EventPageView, Outcome: "api"})
@@ -310,11 +321,18 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	var body any
 	switch resource {
 	case "users":
-		body = paginate(sess.users, page, size, h.scenario.MaxPageSize)
+		body = paginate(snap.users, page, size, h.scenario.MaxPageSize)
 	case "config":
-		body = paginate(sess.config, page, size, h.scenario.MaxPageSize)
+		body = paginate(snap.config, page, size, h.scenario.MaxPageSize)
 	case "audit":
-		body = paginate(latestFirst(sess.audit), page, size, h.scenario.MaxPageSize)
+		body = paginate(latestFirst(snap.audit), page, size, h.scenario.MaxPageSize)
+	case "state":
+		// 会话状态的**可发现视图**（`R03` 第 3 步）：对外暴露版本号，CAS 流程才用得上 ——
+		// 否则客户端只能靠"撞一次 409"去猜当前版本（文档 §7.1：接口能被调用 ≠ Agent 会自然发现它）。
+		body = map[string]any{
+			"version": snap.version, "writes": snap.writes,
+			"users": len(snap.users), "config": len(snap.config), "audit": len(snap.audit),
+		}
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 		return
@@ -335,7 +353,7 @@ func apiResource(path string) (string, bool) {
 		return "", false
 	}
 	switch trimmed {
-	case "users", "config", "audit":
+	case "users", "config", "audit", "state":
 		return trimmed, true
 	default:
 		return "", false

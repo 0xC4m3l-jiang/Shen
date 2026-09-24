@@ -4,11 +4,13 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync/atomic"
@@ -326,12 +328,13 @@ type slowSink struct {
 	events chan Event
 }
 
-func (s *slowSink) Event(_ context.Context, ev Event) {
+func (s *slowSink) Event(_ context.Context, ev Event) error {
 	s.calls.Add(1)
 	time.Sleep(s.delay)
 	if s.events != nil {
 		s.events <- ev
 	}
+	return nil
 }
 
 func TestSlowSinkDoesNotBlockRequestsAndDropsAreCounted(t *testing.T) {
@@ -360,7 +363,16 @@ func TestSlowSinkDoesNotBlockRequestsAndDropsAreCounted(t *testing.T) {
 // ── W6：登录配额 · 会话逐出 · 优雅退出 ───────────────────────────────────────
 
 func TestLoginRateLimitRejectsWithoutSession(t *testing.T) {
-	h, sink := newHandler(t, Options{LoginBurst: 2, LoginWindow: time.Minute})
+	// `R13` 之后，**按来源限流要求先声明可信前跳**：测试客户端的对端是 192.0.2.1，
+	// 只有它在可信名单里，下面的 X-Forwarded-For 才会被采信（否则一律按对端计来源，
+	// 两个"不同来源"会落进同一个桶 —— 那正是修复要防的伪造场景）。
+	h, sink := newHandler(t, Options{
+		LoginBurst:  2,
+		LoginWindow: time.Minute,
+		TrustedProxies: []netip.Prefix{
+			netip.MustParsePrefix("192.0.2.1/32"),
+		},
+	})
 	form := url.Values{"username": {"a"}, "password": {"b"}}.Encode()
 	hdr := map[string]string{
 		"Content-Type":    "application/x-www-form-urlencoded",
@@ -475,5 +487,97 @@ func TestServerErrorPageIsComplete(t *testing.T) {
 	}
 	if sessionCookieFrom(resp) != "" {
 		t.Fatal("没建起会话就不得下发 cookie")
+	}
+}
+
+// ── 第三次深度优化 R12 / R13 ────────────────────────────────────────────────
+
+// errorSink 每次投递都失败（用来验证失败**被计数**，而不是静默消失）。
+type errorSink struct{ calls atomic.Int64 }
+
+func (s *errorSink) Event(context.Context, Event) error {
+	s.calls.Add(1)
+	return errors.New("上游采集器不可用")
+}
+
+// blockedSink 永远不返回（模拟卡住的出口）。
+type blockedSink struct{ release chan struct{} }
+
+func (s *blockedSink) Event(context.Context, Event) error {
+	<-s.release
+	return nil
+}
+
+// TestEventSinkErrorsAreCounted（`R12`）：出口报错必须能被读到 ——
+// 否则运维看到"一切正常"，而实际一条事件都没送出去。
+func TestEventSinkErrorsAreCounted(t *testing.T) {
+	sink := &errorSink{}
+	h := New(Options{ScenarioID: "atlas", Rand: fixedRand{9}, Events: sink, EventQueue: 8})
+	defer h.Close()
+
+	login := do(h, http.MethodPost, "/admin/login", url.Values{
+		"username": {"alice"}, "password": {"x"},
+	}.Encode(), map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+	if login.Code != http.StatusFound {
+		t.Fatalf("登录应成功（出口失败不得影响交互），实际 %d", login.Code)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && h.EventFailures() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if h.EventFailures() == 0 {
+		t.Fatal("出口报错必须被计数（EventFailures）—— 静默失败等于观测面撒谎")
+	}
+}
+
+// TestCloseIsBoundedWhenSinkIsStuck（`R12`）：卡住的出口不得让退出流程无限等待。
+func TestCloseIsBoundedWhenSinkIsStuck(t *testing.T) {
+	old := closeTimeout
+	closeTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { closeTimeout = old })
+
+	sink := &blockedSink{release: make(chan struct{})}
+	t.Cleanup(func() { close(sink.release) })
+	h := New(Options{ScenarioID: "atlas", Rand: fixedRand{3}, Events: sink, EventQueue: 4})
+	do(h, http.MethodPost, "/admin/login", "username=a&password=b",
+		map[string]string{"Content-Type": "application/x-www-form-urlencoded"})
+
+	start := time.Now()
+	h.Close()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Close 必须在有界时间内返回（出口卡住时也不能无限等），实际 %s", elapsed)
+	}
+}
+
+// TestClientIPHonorsTrustedProxies（`R13`）：只有可信前跳的 XFF 才被采信，且取**最后一段**。
+func TestClientIPHonorsTrustedProxies(t *testing.T) {
+	trustEngine := []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
+	mk := func(remote, xff string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "http://x/", nil)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	cases := []struct {
+		name    string
+		remote  string
+		xff     string
+		trusted []netip.Prefix
+		want    string
+	}{
+		{"默认不信任：忽略伪造 XFF", "203.0.113.9:5555", "1.2.3.4", nil, "203.0.113.9"},
+		{"可信前跳：取最后一段（代理追加的那段）", "127.0.0.1:5555", "1.2.3.4, 203.0.113.9", trustEngine, "203.0.113.9"},
+		{"可信前跳但无 XFF：用对端", "127.0.0.1:5555", "", trustEngine, "127.0.0.1"},
+		{"不可信前跳 + 多段 XFF：仍用对端", "198.51.100.7:5555", "1.2.3.4, 5.6.7.8", trustEngine, "198.51.100.7"},
+		{"对端非法地址：原样返回", "not-an-ip", "1.2.3.4", trustEngine, "not-an-ip"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := clientIPOf(mk(c.remote, c.xff), c.trusted); got != c.want {
+				t.Fatalf("clientIPOf = %q，期望 %q", got, c.want)
+			}
+		})
 	}
 }

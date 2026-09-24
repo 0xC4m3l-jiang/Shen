@@ -407,18 +407,21 @@ func (h *Handler) nextTombstones(live []policyDecoyRoute) []policyDecoyRoute {
 	}
 	now := h.clock()
 	lease := h.decoyLease()
-	livePaths := make(map[string]struct{}, len(live))
+	// 活路由按 **(归属, 路径)** 记：同一条路径可以被不同 Host 分别声明（多站点），
+	// 撤销其中一个站点不该影响另一个 —— 这就是 `R05` 的核心（原来只按 path 记）。
+	liveKeys := make(map[string]struct{}, len(live))
 	for _, d := range live {
-		livePaths[d.path] = struct{}{}
+		liveKeys[routeKey(d.hosts, d.path)] = struct{}{}
 	}
 	out := make([]policyDecoyRoute, 0, len(live))
 	seen := map[string]struct{}{}
 	if prev != nil {
 		for _, old := range append(append([]policyDecoyRoute{}, prev.decoys...), prev.tombstones...) {
-			if _, ok := livePaths[old.path]; ok {
-				continue // 又有主了
+			key := routeKey(old.hosts, old.path)
+			if _, ok := liveKeys[key]; ok {
+				continue // 又有主了（同一归属 + 同一路径）
 			}
-			if _, dup := seen[old.path]; dup {
+			if _, dup := seen[key]; dup {
 				continue
 			}
 			until := old.leaseUntil
@@ -433,8 +436,14 @@ func (h *Handler) nextTombstones(live []policyDecoyRoute) []policyDecoyRoute {
 			if !until.IsZero() && !now.Before(until) {
 				continue // 租约到期 ⇒ 释放归属
 			}
-			seen[old.path] = struct{}{}
-			out = append(out, policyDecoyRoute{path: old.path, id: old.id, revoked: true, leaseUntil: until})
+			seen[key] = struct{}{}
+			// **归属必须跟着墓碑走**（`R05`）：丢了 hosts 的碑会按"声明缺失 = 任何主机"匹配一切，
+			// 于是「撤销 a.example 的 /x」会把 b.example 的 /x 也一并 502（错保护别人的站点），
+			// 或者反过来被同路径的另一 Host 抵消掉（该保护的没保护）。两种方向都违背 §9.2 的归属承诺。
+			out = append(out, policyDecoyRoute{
+				path: old.path, id: old.id, hosts: append([]string(nil), old.hosts...),
+				revoked: true, leaseUntil: until,
+			})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -444,6 +453,19 @@ func (h *Handler) nextTombstones(live []policyDecoyRoute) []policyDecoyRoute {
 		return out[i].path < out[j].path
 	})
 	return out
+}
+
+// routeKey 是**路由归属键**：归一化后的主机集合 + 归一化路径。
+//
+// 为什么不是 path 单键（`R05`）：一条路径可以在多个主机上各归各的资产；
+// 用 path 单键会让"撤销 A 站点的 /x"同时抹掉 B 站点的同名路由（或反过来抵消）。
+func routeKey(hosts []string, path string) string {
+	if len(hosts) == 0 {
+		return "|" + path // 空归属：与显式声明区分开（它在匹配语义上等于"任何主机"）
+	}
+	hs := append([]string(nil), hosts...)
+	sort.Strings(hs)
+	return strings.Join(hs, ",") + "|" + path
 }
 
 // hostMatches 报告请求的 Host 是否命中归属声明（`W7`）。

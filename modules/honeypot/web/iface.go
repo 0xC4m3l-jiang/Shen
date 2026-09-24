@@ -45,8 +45,12 @@ type Event struct {
 
 // EventSink 是事件出口（**由消费方定义**：装配层接上自己的观测面，测试接替身）。
 //
-// 实现**必须**是非阻塞或极短的：它跑在诱饵后端的请求路径上，
-// 慢接收方不能拖住合成交互（诱饵侧同样不该被上游抖动放大）。
+// 契约（`R12`，两条都必须满足）：
+//
+//	① **必须在 `ctx` 的期限内返回**：它跑在诱饵后端的投递 goroutine 上，
+//	   慢接收方不能拖住合成交互，也不能让进程退出无限等待（投递侧会按 `eventTimeout` 施加期限）；
+//	② **用返回值报告失败**（`error`）：出口的失败要能被计数（`EventFailures`），
+//	   否则运维看到的是"一切正常"，而实际是一条事件都没送出去。
 type EventSink interface {
-	Event(ctx context.Context, ev Event)
+	Event(ctx context.Context, ev Event) error
 }

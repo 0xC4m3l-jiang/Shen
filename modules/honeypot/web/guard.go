@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -181,21 +183,38 @@ func (e *asyncEmitter) run() {
 						e.failures.Add(1)
 					}
 				}()
-				e.sink.Event(ctx, ev)
+				// 出口的失败**必须被计数**（`R12`）：静默失败 = 运维以为一切正常而事件全丢。
+				if err := e.sink.Event(ctx, ev); err != nil {
+					e.failures.Add(1)
+					log.Printf("web: 合成交互事件投递失败（已计数，不重试）：%v", err)
+				}
 			}()
 			cancel()
 		}
 	}
 }
 
-// Close 停止投递（幂等）。已入队的事件不保证送达 —— 进程退出路径上不值得等。
+// closeTimeout 是 Close 等待投递 goroutine 退出的上限（`R12`）。
+//
+// 为什么必须有上限：出口是我们自己的装配层，但"它不会卡住"不是可以赌的假设 ——
+// 一个卡在 `Event` 里的实现会让 `Close` 无限等待，进程就退不出去。
+// 超时后**如约返回**并记一行日志：宁可留下一个未收尾的投递 goroutine（进程退出会带走它），
+// 也不要让退出流程没有上限。
+var closeTimeout = 3 * time.Second // 变量而非常量：单测要把它缩短（否则一条用例要真等 3 秒）
+
+// Close 停止投递（幂等，**有界**）。已入队的事件不保证送达 —— 进程退出路径上不值得等。
 func (e *asyncEmitter) Close() {
 	if e == nil {
 		return
 	}
 	e.once.Do(func() {
 		close(e.done)
-		<-e.stopped
+		select {
+		case <-e.stopped:
+		case <-time.After(closeTimeout):
+			log.Printf("web: 事件投递未在 %s 内收尾（出口可能卡住）—— 不再等待，丢弃 %d 条、失败 %d 次",
+				closeTimeout, e.Dropped(), e.Failures())
+		}
 	})
 }
 
@@ -229,24 +248,53 @@ func scrubSession(id string) string {
 	return hex.EncodeToString(sum[:4]) // 8 hex 字符：够区分，不足以还原
 }
 
-// clientIPOf 取请求来源 IP。
+// clientIPOf 取请求来源 IP —— **只信可信前跳**（`R13`）。
 //
-// 优先级：`X-Forwarded-For` 的第一段 → `RemoteAddr`。为什么敢信 XFF：本后端只经由**我们自己的**
-// 前跳（引擎/接入层）到达，不直接对外（`SHEN_WEB_LISTEN` 默认回环，验证档只在共享网络命名空间内）；
-// 不取 XFF 的话，所有请求的 `RemoteAddr` 都是前跳地址 ⇒ 配额会把全部访问者算成同一个人。
-func clientIPOf(r *http.Request) string {
+// 修前的事实：无条件取 `X-Forwarded-For` 的**第一段**。那是**客户端可伪造**的字段：
+// 攻击者只要每次请求换一个 XFF 值，就能把登录配额（每来源限流）绕过去 ——
+// 限流形同不存在，而这恰恰是 `W6` 刚补上的那道护栏。
+//
+// 现在的规则：
+//  1. 取直接对端（`RemoteAddr`）；
+//  2. 对端**不在**可信前跳名单里 ⇒ 返回对端，**完全忽略** XFF（不可信来源提供的信息一律不用）；
+//  3. 对端可信 ⇒ 取 XFF 的**最后一段**（可信代理**追加**的那一段才是它看到的客户端；
+//     第一段仍然是更前面的、可能被伪造的值）。
+//
+// 默认名单为空 = 只信对端（最保守）。部署在引擎后面时必须显式声明引擎的网段
+// （`SHEN_WEB_TRUSTED_PROXIES`），否则所有请求会共享同一个配额桶。
+func clientIPOf(r *http.Request, trusted []netip.Prefix) string {
 	if r == nil {
 		return ""
 	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		first := strings.TrimSpace(strings.Split(xff, ",")[0])
-		if first != "" {
-			return first
+	peer := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	if !trustedPeer(peer, trusted) {
+		return peer
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if strings.TrimSpace(xff) == "" {
+		return peer
+	}
+	parts := strings.Split(xff, ",")
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if last == "" {
+		return peer
+	}
+	return last
+}
+
+// trustedPeer 报告直接对端是否在可信前跳名单里（名单为空 ⇒ 一律不可信）。
+func trustedPeer(peer string, trusted []netip.Prefix) bool {
+	addr, err := netip.ParseAddr(peer)
+	if err != nil {
+		return false
+	}
+	for _, p := range trusted {
+		if p.Contains(addr) {
+			return true
 		}
 	}
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
-		return strings.TrimSpace(r.RemoteAddr)
-	}
-	return host
+	return false
 }

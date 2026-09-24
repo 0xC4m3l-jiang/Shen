@@ -388,6 +388,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 	// 而上报发生在这里 —— 中间隔着 Caddy 的转发链，上下文是唯一不被它包一层的传递面。
 	outcome := &injectOutcome{}
 	r = r.WithContext(withInjectOutcome(r.Context(), outcome))
+	// `R07`：把**入口算出的会话键**钉进上下文 —— 后面 `stripCredentials` 会摘掉业务 Cookie，
+	// 而内容变体选择必须仍按"同一个会话"进行（否则剥离即塌缩）。
+	r = r.WithContext(withSessionKey(r.Context(), session))
 
 	// ⓪ 专属诱饵路由（方案 §9.2 / C01）：路径归属在**白名单与判定之前**。
 	//
@@ -668,7 +671,17 @@ func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.
 		return true, h.origin.ServeHTTP(w, r, next)
 	}
 	tw := &trackingWriter{ResponseWriter: w}
-	if err := rp.ServeHTTP(tw, r, next); err != nil {
+	// **凭证边界必须覆盖每一条送达幻境的路径**（`R04`，严重）：
+	// 专属诱饵路由（`deliverDecoy`）与本地 env 后端（`forward`）此前已剥离，只有这里漏了 ——
+	// 于是"评分改道"会把生产 `Authorization` / 业务会话 Cookie 原样交给幻境后端。
+	//
+	// 为什么用**克隆**而不是直接改 `r`：本函数还有一条"后端不可达 ⇒ 回落业务"的路径（`NI-1`），
+	// 回落用的必须是**凭证完整**的原请求。直接剥离 `r` 会让回落后的业务请求丢掉认证材料 ——
+	// 那就把"少给幻境一点"变成了"业务被登出"。克隆是浅拷贝（`Body` 共享，见 Go 文档），
+	// 对 GET 无影响；POST 的 body 本就不可重放（既有边界，非本处引入）。
+	mreq := r.Clone(r.Context())
+	h.stripCredentials(mreq)
+	if err := rp.ServeHTTP(tw, mreq, next); err != nil {
 		if !tw.wrote {
 			log.Printf("proxy: 引流后端不可达，回落业务：%v", err)
 			return true, h.origin.ServeHTTP(w, r, next)

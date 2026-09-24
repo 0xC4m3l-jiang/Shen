@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -39,6 +40,12 @@ const defaultMaxAuditEntries = 200
 // 为什么按会话而不是全局：诱饵的意义在于"每个来访者看到自己的那一份"，把 A 的改动暴露给 B 既不像真实
 // 管理台里的"共享后台"，也会让**跨会话串数据**成为一个可被对手利用的观测面（方案 `C05` 的"租户不串数据"）。
 type sessionState struct {
+	// mu 保护下面**全部可变字段**（`R03`）：会话状态是并发访问的 ——
+	// 同一个 `atlas_session` 的两个请求会同时读到同一个 `*sessionState`，
+	// 而 CAS（版本校验）、审计追加、写计数必须**在锁内**一起完成，否则：
+	//   · 两个同版本请求都能通过版本校验 ⇒ 两次提交（本该一次成功一次 409）；
+	//   · 版本 +1 与审计追加不是原子的 ⇒ 计数与审计对不上（"写后读"就不可信了）。
+	mu      sync.Mutex
 	expires time.Time
 	users   []User
 	config  []ConfigItem
@@ -80,7 +87,7 @@ func latestFirst(events []AuditEvent) []AuditEvent {
 }
 
 // findUser / findConfig 按标识查下标（未找到 ⇒ errNotConfigured ⇒ 404）。
-func (s *sessionState) findUser(id string) (int, error) {
+func (s *sessionState) findUserLocked(id string) (int, error) {
 	for i := range s.users {
 		if s.users[i].ID == id {
 			return i, nil
@@ -89,7 +96,7 @@ func (s *sessionState) findUser(id string) (int, error) {
 	return -1, fmt.Errorf("%w：账号 %q", errNotConfigured, id)
 }
 
-func (s *sessionState) findConfig(key string) (int, error) {
+func (s *sessionState) findConfigLocked(key string) (int, error) {
 	for i := range s.config {
 		if s.config[i].Key == key {
 			return i, nil
@@ -98,10 +105,61 @@ func (s *sessionState) findConfig(key string) (int, error) {
 	return -1, fmt.Errorf("%w：配置项 %q", errNotConfigured, key)
 }
 
+// snapshot 是**并发读的一致性视图**（`R03`）：拷贝出三个列表 + 版本 + 写计数。
+//
+// 为什么读也要拷贝：原来页面/API 直接 `paginate(sess.users, …)` —— 那是**切片头**，
+// 并发写会同时改底层数组，读到的可能是"半次提交"（例如列表已变、计数未变）。
+// 拷贝代价与列表规模同阶（合成场景只有几十条），换来的是"读到的状态一定对应某个提交点"。
+func (s *sessionState) snapshot() sessionSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return sessionSnapshot{
+		users:   append([]User(nil), s.users...),
+		config:  append([]ConfigItem(nil), s.config...),
+		audit:   append([]AuditEvent(nil), s.audit...),
+		version: s.version,
+		writes:  s.writes,
+	}
+}
+
+// sessionSnapshot 是一次读操作看到的状态（`snapshot()` 的产物）。
+type sessionSnapshot struct {
+	users   []User
+	config  []ConfigItem
+	audit   []AuditEvent
+	version uint64
+	writes  int
+}
+
+// version / userEnabled / configValue 是**锁内读取的单值**（写响应与 CAS 提示要用）。
+func (s *sessionState) Version() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.version
+}
+
+func (s *sessionState) userEnabled(id string) (bool, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i, err := s.findUserLocked(id); err == nil {
+		return s.users[i].Enabled, true
+	}
+	return false, false
+}
+
+func (s *sessionState) configValue(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if i, err := s.findConfigLocked(key); err == nil {
+		return s.config[i].Value, true
+	}
+	return "", false
+}
+
 // guard 做提交前的统一检查：配额 + CAS。
 //
 // 顺序刻意的：先配额（资源护栏，与内容无关）再 CAS（并发语义）—— 配额用尽时不该因为版本恰好相符就放行。
-func (s *sessionState) guard(expected *uint64) error {
+func (s *sessionState) guardLocked(expected *uint64) error {
 	if s.writes >= defaultMaxWritesPerSession || len(s.audit) >= defaultMaxAuditEntries {
 		return fmt.Errorf("%w（已写 %d 次，审计 %d 条）", errWriteQuota, s.writes, len(s.audit))
 	}
@@ -114,7 +172,7 @@ func (s *sessionState) guard(expected *uint64) error {
 // commit 提交一次写操作：追加审计 + 推进版本 + 计数。
 //
 // **只有值真的变了**才调用它（幂等：同值重复提交不产生审计、不推进版本、不消耗配额）。
-func (s *sessionState) commit(at time.Time, action, target string) {
+func (s *sessionState) commitLocked(at time.Time, action, target string) {
 	s.audit = append(s.audit, AuditEvent{
 		At: at.UTC().Format(time.RFC3339), Actor: s.actor, Action: action, Target: target,
 	})
@@ -126,21 +184,23 @@ func (s *sessionState) commit(at time.Time, action, target string) {
 //
 // 返回 (是否发生变化, 错误)。值未变 ⇒ `false, nil`（幂等成功，不消耗配额）。
 func (s *sessionState) setUserEnabled(id string, enabled bool, at time.Time, expected *uint64) (bool, error) {
-	i, err := s.findUser(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, err := s.findUserLocked(id)
 	if err != nil {
 		return false, err
 	}
 	if s.users[i].Enabled == enabled {
-		return false, nil
+		return false, nil // 幂等短路也在锁内：否则两个同值请求可能各自"看到不同值"再各写一次
 	}
-	if err := s.guard(expected); err != nil {
+	if err := s.guardLocked(expected); err != nil {
 		return false, err
 	}
 	s.users[i].Enabled = enabled
 	if enabled {
-		s.commit(at, "user.enable", id)
+		s.commitLocked(at, "user.enable", id)
 	} else {
-		s.commit(at, "user.disable", id)
+		s.commitLocked(at, "user.disable", id)
 	}
 	return true, nil
 }
@@ -152,18 +212,20 @@ func (s *sessionState) setConfigValue(key, value string, at time.Time, expected 
 	if strings.TrimSpace(value) == "" || len(value) > maxConfigValueLen {
 		return false, fmt.Errorf("%w：配置值必须非空且不超过 %d 字节", errInvalidValue, maxConfigValueLen)
 	}
-	i, err := s.findConfig(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i, err := s.findConfigLocked(key)
 	if err != nil {
 		return false, err
 	}
 	if s.config[i].Value == value {
 		return false, nil
 	}
-	if err := s.guard(expected); err != nil {
+	if err := s.guardLocked(expected); err != nil {
 		return false, err
 	}
 	s.config[i].Value = value
-	s.commit(at, "config.update", key)
+	s.commitLocked(at, "config.update", key)
 	return true, nil
 }
 
