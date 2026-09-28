@@ -1,7 +1,7 @@
 # 构建上下文瘦身（compose 的 context 是仓库根）。
 #
 # 为什么放仓库根：Docker 只在**上下文根目录**读 .dockerignore，放在别处不生效。
-# 排除的是「构建不需要的东西」：版本库、文档、Python 虚拟环境与缓存、工具二进制。
+# 排除的是「构建不需要的东西」：版本库、文档、Python 虚拟环境与缓存、工具二进制、前端依赖与产物。
 
 .git
 .pi
@@ -15,3 +15,14 @@ scripts/bin
 **/.ruff_cache
 coverage.out
 *.test
+
+# 前端：依赖在镜像内 `npm ci` 重新安装（宿主的 node_modules 可能是别的平台编译的原生包）
+**/node_modules
+modules/console/ui/dist
+modules/console/ui/coverage
+
+# 本机环境与密钥文件不进构建上下文
+.env
+.env.*
+!.env.example
+secrets/

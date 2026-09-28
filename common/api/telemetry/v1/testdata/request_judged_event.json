@@ -6,12 +6,15 @@
   "decision_error": "",
   "decision_id": "d-9f3c1a2b",
   "delivery_result": "",
+  "dispatched": "",
   "duration_ms": 4.2,
   "executed": "origin_fallback",
+  "host": "shop.example.com",
   "inject": "off",
   "method": "GET",
   "path": "/.git/config",
   "shadow": false,
+  "source_ip": "192.0.2.1",
   "status": 200,
   "ua": "HeadlessChrome/120"
 }

@@ -1,0 +1,165 @@
+# 蜃楼 Shen · Docker Compose 基础文件（base）
+#
+# 一键起全部（仓库根执行；首次先复制环境文件）：
+#   cp .env.example .env          # Windows PowerShell：Copy-Item .env.example .env
+#   docker compose up -d --build
+#
+# 按模块单独起（profiles；core 没有 profile，永远随行 —— 它拥有共享网络命名空间）：
+#   docker compose --profile frontend up -d   # 管控台：console-ui + console-api
+#   docker compose --profile honeypot up -d   # 蜜罐：honeypot-web
+#   docker compose --profile backend  up -d   # 后端：console-api + proxy + analysis
+#   ⚠️ .env 里的 COMPOSE_PROFILES 会与 --profile **叠加**：只起单个模块时先临时清空它
+#      （bash: COMPOSE_PROFILES= docker compose --profile honeypot up -d ；PowerShell 见 deploy/docker/README.md）。
+#
+# 叠加文件（放在 deploy/docker/，路径一律**相对仓库根**书写 —— Compose 以第一个文件所在目录为项目目录）：
+#   开发：docker compose -f compose.yaml -f deploy/docker/compose.dev.yaml up -d --build   （Vite 热更新、调试端口）
+#   生产：docker compose -f compose.yaml -f deploy/docker/compose.prod.yaml up -d --no-build（镜像 tag、secrets、加固）
+#   验证：docker compose -f compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d --build（非影子，验证改道 / 诱饵）
+#
+# 网络：除 core 外全部 `network_mode: service:core`，共享同一个回环。
+#   原因：核心判定面是**明文 gRPC**，只允许监听回环（assertPlaintextListenIsLocal）；
+#   共享命名空间让「同机部署」在容器里依然成立。代价：端口统一发布在 core 上，且命名空间内端口不能冲突。
+#   跨主机部署必须改 mTLS，不在本文件范围。完整说明见 deploy/docker/README.md。
+#
+# 版本要求：Docker Compose v2.20+（用到 depends_on.required、profiles）。旧的 docker-compose v1 已停止维护，不保证可用。
+name: shen
+
+x-go-build: &go-build
+  context: .
+  dockerfile: deploy/docker/go.Dockerfile
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  # ── 核心：判定与响应生成的唯一实现；拥有本栈的网络命名空间（无 profile：永远启动）─────
+  core:
+    build: { <<: *go-build, args: { SERVICE: ./common/core/cmd/core } }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/core:${SHEN_VERSION:-dev}
+    environment:
+      SHEN_CONFIG: /etc/shen/config.yaml
+      SHEN_LISTEN: 127.0.0.1:9443 # 明文 gRPC 只绑回环（同命名空间的服务可达，宿主不可达）
+      SHEN_LOG_FORMAT: ${SHEN_LOG_FORMAT:-text}
+    volumes:
+      - ${SHEN_CORE_CONFIG:-./deploy/config/config.example.yaml}:/etc/shen/config.yaml:ro
+    ports:
+      # 所有对宿主发布的端口都写在这里（发布的是共享命名空间里的监听）。默认只绑本机回环。
+      - "${SHEN_BIND_ADDR:-127.0.0.1}:${SHEN_HTTP_PORT:-18080}:8080" # 业务入口（proxy 监听）
+      - "${SHEN_BIND_ADDR:-127.0.0.1}:${SHEN_CONSOLE_PORT:-19444}:9444" # 管控台（console-ui / nginx 监听）
+    extra_hosts:
+      # Linux 下让容器能用 host.docker.internal 访问宿主（macOS / Windows 的 Docker Desktop 自带）。
+      # 共享命名空间的服务不能各自设置 extra_hosts —— 只能写在 core 上。
+      - "host.docker.internal:host-gateway"
+    <<: *restart
+
+  # ── 后端：管控台 API（带鉴权的 /api/v1；只监听回环，经 console-ui 同源访问）──────────
+  console-api:
+    build: { <<: *go-build, args: { SERVICE: ./modules/console/cmd/console } }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/console-api:${SHEN_VERSION:-dev}
+    profiles: [all, frontend, backend, console]
+    network_mode: service:core
+    depends_on:
+      core: { condition: service_started }
+    environment:
+      SHEN_CORE_ADDR: 127.0.0.1:9443
+      SHEN_CONSOLE_LISTEN: 127.0.0.1:9445
+      SHEN_CONSOLE_DATA_DIR: /data
+      SHEN_CONSOLE_ALLOWED_ORIGINS: ${SHEN_CONSOLE_ALLOWED_ORIGINS:-http://127.0.0.1:${SHEN_CONSOLE_PORT:-19444},http://localhost:${SHEN_CONSOLE_PORT:-19444}}
+      SHEN_CONSOLE_TRUSTED_PROXIES: 127.0.0.1/32 # 只信同命名空间内 nginx 追加的 X-Forwarded-For
+      SHEN_CONSOLE_COOKIE_SECURE: ${SHEN_CONSOLE_COOKIE_SECURE:-false}
+      SHEN_CONSOLE_BOOTSTRAP_USER: ${SHEN_CONSOLE_BOOTSTRAP_USER:-admin}
+      SHEN_CONSOLE_BOOTSTRAP_PASSWORD: ${SHEN_CONSOLE_BOOTSTRAP_PASSWORD:-admin} # 默认 admin/admin 便于人工验证（首登强制改密）；random = 随机生成写 /data/bootstrap-admin.txt；生产用 secrets
+      SHEN_CONSOLE_API_TOKEN: ${SHEN_CONSOLE_API_TOKEN:-} # 只读自动化令牌（脚本用）；空 = 不启用
+      # 宿主脚本经 Docker 端口转发到达时，来源是 Docker 网关（私有网段）；宿主端口只绑回环，外部不可达。
+      SHEN_CONSOLE_API_TOKEN_SOURCES: ${SHEN_CONSOLE_API_TOKEN_SOURCES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      SHEN_CONSOLE_ALERT_SCORE: ${SHEN_CONSOLE_ALERT_SCORE:-0.9}
+    volumes:
+      - console-data:/data # 账号 / 反向链接器登记 / 审计：命名卷（跨平台无权限与性能问题）
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/shen", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    <<: *restart
+
+  # ── 前端：管控台 UI（nginx 提供静态资源，同源反代 /api/ → console-api）───────────────
+  console-ui:
+    build:
+      context: .
+      dockerfile: deploy/docker/console-ui.Dockerfile
+      target: runtime
+    image: ${SHEN_IMAGE_PREFIX:-shen}/console-ui:${SHEN_VERSION:-dev}
+    profiles: [all, frontend, console]
+    network_mode: service:core
+    depends_on:
+      console-api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9444/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    <<: *restart
+
+  # ── 后端：L1 适配器（反向代理前置，形态③）。首次上线必须影子模式（INT-11）─────────────
+  proxy:
+    build: { <<: *go-build, args: { SERVICE: ./modules/deception/proxy/cmd/proxy } }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/proxy:${SHEN_VERSION:-dev}
+    profiles: [all, backend, deception]
+    network_mode: service:core
+    depends_on:
+      core: { condition: service_started }
+      business: { condition: service_started, required: false } # 未启用 demo 时不强制
+    environment:
+      SHEN_PROXY_UPSTREAM: ${SHEN_PROXY_UPSTREAM:-http://127.0.0.1:19080} # 换成你的真实业务地址
+      SHEN_CORE_ADDR: 127.0.0.1:9443
+      SHEN_PROXY_LISTEN: 0.0.0.0:8080
+      SHEN_PROXY_SHADOW: ${SHEN_PROXY_SHADOW:-true}
+      SHEN_PROXY_LOG_REQUESTS: ${SHEN_PROXY_LOG_REQUESTS:-true} # 逐请求定位日志（生产叠加文件关闭）
+    <<: *restart
+
+  # ── 后端：L4 近线分析（读遥测 → 结论上报；不在业务路径上）────────────────────────────
+  analysis:
+    build: { context: ., dockerfile: deploy/docker/analysis.Dockerfile }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/analysis:${SHEN_VERSION:-dev}
+    profiles: [all, backend, analysis]
+    network_mode: service:core
+    depends_on:
+      core: { condition: service_started }
+    command: ["--core", "127.0.0.1:9443", "--interval", "${SHEN_ANALYSIS_INTERVAL:-20}"]
+    <<: *restart
+
+  # ── 蜜罐：合成 Web 管理台场景包（只经引擎的诱饵路由到达；不接生产认证、不出站）─────────
+  honeypot-web:
+    build: { <<: *go-build, args: { SERVICE: ./modules/honeypot/web/cmd/web } }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/honeypot-web:${SHEN_VERSION:-dev}
+    profiles: [all, honeypot]
+    network_mode: service:core
+    depends_on:
+      core: { condition: service_started }
+    environment:
+      SHEN_WEB_LISTEN: ${SHEN_WEB_LISTEN:-127.0.0.1:19090} # 只监听回环：宿主不可直连（开发叠加文件可放开）
+      SHEN_WEB_SCENARIOS: /etc/shen/scenarios.json
+      SHEN_WEB_SCENARIO: ${SHEN_WEB_SCENARIO:-contoso}
+      SHEN_WEB_TRUSTED_PROXIES: 127.0.0.1/32 # 只信同命名空间内 proxy 追加的 X-Forwarded-For（登录限流按真实来源计数）
+    volumes:
+      - ${SHEN_WEB_SCENARIOS_FILE:-./deploy/config/scenarios.example.json}:/etc/shen/scenarios.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:19090/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+    <<: *restart
+
+  # ── 演示：假业务站（不是产品的一部分；真实部署不要启用 demo profile）─────────────────
+  business:
+    build: { context: ., dockerfile: deploy/docker/business.Dockerfile }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/business-demo:${SHEN_VERSION:-dev}
+    profiles: [all, demo]
+    network_mode: service:core
+    depends_on:
+      core: { condition: service_started }
+    <<: *restart
+
+volumes:
+  console-data:

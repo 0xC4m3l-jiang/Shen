@@ -11,8 +11,7 @@
    （[ADR-0024](../../docs/background/decisions/0024-ai-oss-reuse-boundary.md) 决定 1：
    默认行为必须 fail-closed）。
 
-**为什么用 `http.client` 而不是 `urllib.request`**：与实机探针
-[`scripts/dev/ai-model-probe.py`](../../scripts/dev/ai-model-probe.py) 用同一套传输，
+**为什么用 `http.client` 而不是 `urllib.request`**：
 `https` 在类型层面就是唯一可能（构造 `HTTPSConnection`，没有 scheme 选择的降级空间），
 且状态码要自己判 —— 与「非 2xx 即失败」的语义直接对应。
 （[ADR-0026](../../docs/background/decisions/0026-cloud-model-backend.md) 决定 3 写的是

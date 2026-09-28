@@ -1,0 +1,48 @@
+# 开发叠加文件（叠在仓库根 compose.yaml 之上）。路径一律**相对仓库根**（Compose 以第一个文件所在目录为项目目录）。
+#
+#   docker compose -f compose.yaml -f deploy/docker/compose.dev.yaml up -d --build
+#   或在 .env 里设：COMPOSE_FILE=compose.yaml;deploy/docker/compose.dev.yaml（配合 COMPOSE_PATH_SEPARATOR=;）
+#
+# 与基础文件的差异：
+#   - console-ui 换成 Vite 开发服务器（同一个 19444 端口，改源码即热更新；/api 仍代理到 console-api）；
+#   - 发布调试端口：console-api 19445（直接调接口）、honeypot-web 19090（直连诱饵后端，**绕过引擎，仅限开发**）；
+#     做法是让这两个服务在命名空间内改听 0.0.0.0，再由 core 发布到宿主**回环**；
+#   - 逐请求日志全开；Cookie 不强制 Secure（本机 http）。
+services:
+  core:
+    ports:
+      # 叠加文件的 ports 会**追加**到基础文件（不会覆盖）；同样只绑宿主回环。
+      - "127.0.0.1:${SHEN_CONSOLE_API_PORT:-19445}:9445"
+      - "127.0.0.1:${SHEN_HONEYPOT_PORT:-19090}:19090"
+    environment:
+      SHEN_LOG_FORMAT: text
+
+  console-api:
+    environment:
+      SHEN_CONSOLE_LISTEN: 0.0.0.0:9445 # 仅开发：让宿主调试口可达（启动日志会提示非回环监听）
+      SHEN_CONSOLE_COOKIE_SECURE: "false"
+      SHEN_CONSOLE_ALLOWED_ORIGINS: http://127.0.0.1:${SHEN_CONSOLE_PORT:-19444},http://localhost:${SHEN_CONSOLE_PORT:-19444},http://127.0.0.1:${SHEN_CONSOLE_API_PORT:-19445},http://localhost:${SHEN_CONSOLE_API_PORT:-19445}
+
+  console-ui:
+    build:
+      target: dev
+    image: ${SHEN_IMAGE_PREFIX:-shen}/console-ui:dev-hmr
+    environment:
+      SHEN_VITE_PORT: "9444"
+      SHEN_CONSOLE_API_URL: http://127.0.0.1:9445
+      # Windows / macOS 绑定挂载下文件变更事件不可靠：改为轮询（纯 Linux 可设 SHEN_VITE_POLLING=false 省 CPU）。
+      CHOKIDAR_USEPOLLING: ${SHEN_VITE_POLLING:-true}
+    volumes:
+      - ./modules/console/ui:/ui
+      - /ui/node_modules # 匿名卷：保留镜像里按 Linux 安装的依赖，不被宿主目录（可能是 Windows/macOS 依赖）覆盖
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9444/ >/dev/null 2>&1 || exit 1"]
+
+  proxy:
+    environment:
+      SHEN_PROXY_LOG_REQUESTS: "true"
+
+  honeypot-web:
+    environment:
+      SHEN_WEB_LISTEN: 0.0.0.0:19090 # 仅开发：直连诱饵后端调试（绕过引擎的路由归属与 502 语义）
+      SHEN_WEB_REQUEST_LOG: "true"

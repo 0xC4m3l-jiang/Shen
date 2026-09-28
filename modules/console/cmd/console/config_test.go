@@ -1,89 +1,78 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"errors"
-	"net/http"
-	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
-
-	"google.golang.org/grpc"
-
-	telemetryv1 "shen/common/api/telemetry/v1"
+	"time"
 )
 
-// fakeTelemetry 只实现本文件用到的方法；其余由嵌入的接口兜底 ——
-// 一旦测试走到了没实现的路径就是 nil panic，比静默返回零值更容易发现。
-type fakeTelemetry struct {
-	telemetryv1.DeceptionTelemetryClient
-	snap *telemetryv1.CoreSnapshot
-	err  error
+func envOf(m map[string]string) func(string) string {
+	return func(k string) string { return m[k] }
 }
 
-func (f fakeTelemetry) GetCoreSnapshot(
-	context.Context, *telemetryv1.GetCoreSnapshotRequest, ...grpc.CallOption,
-) (*telemetryv1.CoreSnapshot, error) {
-	return f.snap, f.err
+func TestLoadConfigDefaults(t *testing.T) {
+	c, err := loadConfig(envOf(map[string]string{}))
+	if err != nil {
+		t.Fatalf("默认配置不应报错：%v", err)
+	}
+	if c.Listen != "127.0.0.1:9445" || c.CoreAddr != "127.0.0.1:9443" {
+		t.Errorf("默认监听应为回环 9445、核心 9443：%+v", c)
+	}
+	if c.CookieSecure || c.SessionIdle != 30*time.Minute || c.SessionTTL != 12*time.Hour || c.AlertScore != 0.9 {
+		t.Errorf("默认值不对：%+v", c)
+	}
+	if len(c.TokenSources) != 2 {
+		t.Errorf("只读令牌默认只允许回环来源：%v", c.TokenSources)
+	}
 }
 
-// 「配置」接口的键必须是 snake_case（与项目其余载荷一致），且 policy / ai 两块都在。
-//
-// 为什么这条要测：页面直接按这些键取值，键名漂了就整块显示「—」，
-// 而 Go 的编译期**看不出** JSON 键的漂移 —— 只能靠这条测试钉住。
-func TestHandleConfig_EmitsSnakeCaseShape(t *testing.T) {
-	srv := &server{client: fakeTelemetry{snap: &telemetryv1.CoreSnapshot{
-		PolicyId: "site-a", PolicyVersion: 7, PolicyChecksum: "abc", RuleCount: 3, WhitelistCount: 4,
-		AiEnabled: true, AiKinds: []string{"content"}, AiModel: "deepseek-flash",
-		AiManifestPath: "/m.json", AiContentVariants: 8, AiRotateCooldown: "30m0s",
-		AiManifestLoaded: true, AiManifestVersion: 2, AiManifestResources: 5, AiManifestContents: 16,
-	}}}
-
-	rec := httptest.NewRecorder()
-	srv.handleConfig(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("期望 200，实际 %d：%s", rec.Code, rec.Body.String())
+func TestLoadConfigParsesListsAndRejectsGarbage(t *testing.T) {
+	c, err := loadConfig(envOf(map[string]string{
+		"SHEN_CONSOLE_ALLOWED_ORIGINS": "http://127.0.0.1:19444, http://localhost:19444",
+		"SHEN_CONSOLE_TRUSTED_PROXIES": "127.0.0.1, 10.0.0.0/8",
+		"SHEN_CONSOLE_COOKIE_SECURE":   "true",
+		"SHEN_CONSOLE_SESSION_IDLE":    "10m",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AllowedOrigins) != 2 || len(c.TrustedProxies) != 2 || !c.CookieSecure || c.SessionIdle != 10*time.Minute {
+		t.Fatalf("解析结果不对：%+v", c)
 	}
 
-	var got map[string]map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("响应不是预期形状：%v（%s）", err, rec.Body.String())
+	_, err = loadConfig(envOf(map[string]string{
+		"SHEN_CONSOLE_ALLOWED_ORIGINS": "evil.example",
+		"SHEN_CONSOLE_TRUSTED_PROXIES": "not-a-cidr",
+		"SHEN_CONSOLE_COOKIE_SECURE":   "maybe",
+		"SHEN_CONSOLE_ALERT_SCORE":     "2",
+	}))
+	if err == nil {
+		t.Fatal("非法配置必须报错")
 	}
-	for _, key := range []string{"policy_id", "version", "checksum", "rule_count", "whitelist_count"} {
-		if _, ok := got["policy"][key]; !ok {
-			t.Errorf("policy 缺键 %q（当前：%v）", key, got["policy"])
+	for _, key := range []string{"ALLOWED_ORIGINS", "TRUSTED_PROXIES", "COOKIE_SECURE", "ALERT_SCORE"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("错误信息应一次性列出全部问题，缺 %s：%v", key, err)
 		}
 	}
-	for _, key := range []string{
-		"enabled", "kinds", "model", "manifest_path", "variants", "rotate_cooldown",
-		"manifest_loaded", "manifest_version", "manifest_resources", "manifest_contents",
-	} {
-		if _, ok := got["ai"][key]; !ok {
-			t.Errorf("ai 缺键 %q（当前：%v）", key, got["ai"])
-		}
-	}
-	if got["ai"]["manifest_contents"] != float64(16) {
-		t.Errorf("manifest_contents 应为 16，实际 %v", got["ai"]["manifest_contents"])
-	}
 }
 
-// 核心未装配快照读侧 ⇒ 控制台返回**错误**，不得伪造一份全零的「正常」配置。
-//
-// 与核心侧的 Unimplemented 是同一条决定的另一半：全零配置看起来完全正常
-// （version=0、变体=0），运维会以为引擎真的这么配的 —— 报错才是对的（AR-15 的精神）。
-func TestHandleConfig_CoreUnimplementedIsAnError(t *testing.T) {
-	srv := &server{client: fakeTelemetry{err: errors.New("core: 未装配快照读侧")}}
-
-	rec := httptest.NewRecorder()
-	srv.handleConfig(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
-	if rec.Code == http.StatusOK {
-		t.Fatalf("取不到快照时不得返回 200：%s", rec.Body.String())
+func TestSecretFromFileAndConflict(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("  file-token-value-0123456789  \n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	var got map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("错误响应形状不对：%v", err)
+	c, err := loadConfig(envOf(map[string]string{"SHEN_CONSOLE_API_TOKEN_FILE": path}))
+	if err != nil || c.APIToken != "file-token-value-0123456789" {
+		t.Fatalf("应从 *_FILE 读取并去空白：%q %v", c.APIToken, err)
 	}
-	if got["error"] == "" {
-		t.Errorf("错误响应必须带 error 字段：%s", rec.Body.String())
+	if _, err := loadConfig(envOf(map[string]string{
+		"SHEN_CONSOLE_API_TOKEN_FILE": path, "SHEN_CONSOLE_API_TOKEN": "x",
+	})); err == nil {
+		t.Fatal("同时设置 KEY 与 KEY_FILE 应报错")
+	}
+	if _, err := loadConfig(envOf(map[string]string{"SHEN_CONSOLE_BOOTSTRAP_PASSWORD_FILE": "/nonexistent/file"})); err == nil {
+		t.Fatal("*_FILE 指向不存在的文件应报错")
 	}
 }

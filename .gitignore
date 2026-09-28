@@ -11,8 +11,15 @@ deploy/config/*.local.yaml
 *.secret.yaml
 *.key
 *.pem
+# 例外：vendor/ 里第三方模块用 //go:embed 内嵌的**公开**根证书（不是密钥）。
+# 被上一条误伤会让干净检出（含 Docker 构建）编译失败：`pattern aws_certificates.pem: no matching files found`。
+!vendor/**/*.pem
 .env
 .env.local
+# 生产叠加文件的 Compose secrets（口令 / 令牌文件）
+/secrets/
+# 本机直接跑管控台 API 时的数据目录兜底（默认在用户配置目录，见 modules/console/README.md）
+shen-console-data/
 
 # ── 门禁工具与产物（版本固定但不入库）────────────────────────────────────
 scripts/bin/

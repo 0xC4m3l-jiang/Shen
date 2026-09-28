@@ -110,7 +110,7 @@ flowchart TB
     MODEL["模型后端<br/>自写标准库适配器 → 云模型<br/>显式开启 · 失败回落模板并如实标注 · 热路径永不调模型"]
   end
 
-  CON["观测控制台（Go + 静态页，只读）<br/>概览 · 逐请求链路 DAG · 配置快照 · SSE 实时流"]
+  CON["管控台（Go API + Vue3 前端，带鉴权）<br/>总览 · 欺骗层 · 蜜罐层 · 反向链接器 · 分析 · 告警 · 系统"]
 
   U -->|HTTPS| L0
   L0 -->|HTTPS| AD
@@ -182,13 +182,12 @@ flowchart TB
 | `intent` | 意图识别（引用的证据必须存在，否则结论作废） | ✅ |
 | `chain` | 攻击链还原 | ✅ |
 | `strategy` | 策略生成 | ✅ |
-| `console` | 观测控制台：概览 · 逐请求链路 DAG · 配置快照 · 告警 · 原始事件（**只读**；策略编排等属规划） | 🟡 只读 |
+| `console` | 管控台：登录鉴权（本地账号 + 管理员/欺骗运维/蜜罐运维/只读）· 总览（来源归属地）· 欺骗层 · 蜜罐层 · 反向链接器登记与按服务观测 · 分析 · 告警 · 系统审计（**观测+登记，不下发策略**） | 🟢 可用 |
 
 ### 工程工具
 
 | 工具 | 职责 |
 | --- | --- |
-| `sentinel` | **差异哨兵**：同一组 URL 在真实业务与幻境各打一次，逐字段 diff |
 | `doctor` | 接入自检（五项） |
 | `check-leak` | 对外可见面禁用串扫描（`OH-1`） |
 
@@ -202,6 +201,8 @@ flowchart TB
 staticcheck · errcheck · gofmt · go vet · archcheck · tracecheck · leakcheck · licensecheck
                                                                           + go test -race + pytest
 ```
+
+含**密钥泄漏门禁**（`make secrets-check`，并入 gate）：拦截 `sk-` 真值与密钥类变量的非占位赋值进入版本库；模型密钥只走 `SHEN_AI_KEY` 环境变量（`ST-20`：密钥不入日志）。
 
 | 检查 | 防的是什么 |
 | --- | --- |
@@ -249,7 +250,7 @@ make start                      # = scripts/shen.sh up；自动等就绪并打�
 
 | 地址 | 是什么 |
 | --- | --- |
-| http://127.0.0.1:19444/ | **观测控制台** —— 概览（含观测新鲜度）· 配置 · 逐请求链路 · 告警 · 逐判定日志 · L4 分析结论 · 原始事件 |
+| http://127.0.0.1:19444/ | **管控台** —— 登录（本地账号+RBAC；默认账号/口令 admin/admin，首登强制改密）· 总览 · 欺骗层 · 蜜罐层 · 反向链接器 · 分析 · 告警 · 系统 |
 | http://127.0.0.1:18080/ | **业务入口**（经引擎；默认影子模式：只观测、不处置） |
 
 ```sh
@@ -262,15 +263,15 @@ curl -s -A "Mozilla/5.0"        http://127.0.0.1:18080/               # 正常�
 
 ### 5.2 验证档：合成管理台 + 诱饵路由（**不是默认启动项**）
 
-默认栈**不含** Web 诱饵后端。要验证「诱饵路由 → 真实合成后端」这条链，用**双文件**起验证档：
+默认栈已带 Web 诱饵后端（`honeypot-web`，honeypot profile），但默认配置不登记指向它的诱饵路由、且处于影子模式。要验证「诱饵路由 → 真实合成后端」这条链，叠加验证档（非影子）：
 
 ```sh
-docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d --force-recreate
+docker compose -f compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d --force-recreate
 curl -s http://127.0.0.1:18080/admin/login                      # 合成登录页
 curl -s -c /tmp/jar -d 'username=x&password=y' http://127.0.0.1:18080/admin/login
 curl -s -b /tmp/jar http://127.0.0.1:18080/admin/api/users?page=1
 curl -s -b /tmp/jar http://127.0.0.1:18080/admin/api/state        # 会话状态版本（CAS 用）
-docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.verify-mirage.yaml down
+docker compose -f compose.yaml -f deploy/docker/compose.verify-mirage.yaml down
 ```
 
 三条必须知道的事：
@@ -348,7 +349,7 @@ make bench            # 延迟基准
 | 4 | **合成交互事件回流核心** | 管理台的登录/浏览/受限写事件目前只进本地日志，效果漏斗缺一段 |
 | 5 | **墓碑持久化** | 搜索碑租约在进程内；重启后依赖策略重新下发才恢复保护 |
 | 6 | **多租户 / 一进程多场景** | 每个 Web 后端进程服务一套场景；按 Host/租户同时服务多套未做 |
-| 7 | 控制台鉴权 | 控制台是只读的，但**只读不等于有鉴权**；面向生产需接入运维鉴权 |
+| 7 | ~~控制台鉴权~~ → **已交付**（本地账号 + argon2id + 四角色 RBAC + CSRF/Origin 校验 + 审计）；剩余：OIDC/SSO 对接、可写下发策略的审批流 | 
 
 > 安全硬边界（不泄露生产权限 · 不误投其他 Host · 不回源）**每次都有测试与端到端证据**；
 > 能力缺口按上表如实标注，不用「模块数量 / 测试通过率」替代「欺骗效果」。
@@ -362,10 +363,10 @@ common/api/            跨平面契约（.proto：judge / policy / telemetry）
 common/core/           核心（Go）：判定 · 决策 · 会话 · 策略 · 遥测 · 存储 · 控制面 · 诱饵 · 幻境入口
 modules/deception/     L1 边缘：反向代理前置与边车 · 旁路镜像 · DNS 模板 · 边缘注入
 modules/honeypot/      L2 幻境后端：合成 Web 管理台 · 协议仿真框架
-modules/console/       观测控制台（只读）
+modules/console/       管控台（API + Vue3 UI；观测 + 登记，不下发策略）
 analysis/              L4（Python）：AI 能力护栏出口 · 意图/攻击链/策略 · 近线 worker
 deploy/                Docker Compose · 示例配置 · 验证档
-scripts/               门禁与工程工具（archcheck · tracecheck · leakcheck · verify · doctor · sentinel …）
+scripts/               门禁与工程工具（archcheck · tracecheck · leakcheck · verify · doctor …）
 assets/                项目 logo
 ```
 

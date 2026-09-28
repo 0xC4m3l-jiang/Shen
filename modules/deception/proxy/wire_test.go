@@ -52,6 +52,41 @@ func TestRequestJudgedWireContract(t *testing.T) {
 	}
 }
 
+// TestRequestJudgedHostAndSource 钉住新增的两个观测键与既有口径一致：
+// host 与诱饵路由匹配同一归一化（小写 / 去端口 / 去尾点）；source_ip 只在 TrustXFF 时采信 XFF。
+func TestRequestJudgedHostAndSource(t *testing.T) {
+	cases := []struct {
+		name     string
+		host     string
+		xff      string
+		trustXFF bool
+		wantHost string
+		wantIP   string
+	}{
+		{"带端口与大小写", "Shop.Example.COM:8443", "", false, "shop.example.com", "192.0.2.1"},
+		{"尾点", "shop.example.com.", "", false, "shop.example.com", "192.0.2.1"},
+		{"不信任 XFF 时忽略它", "a.example", "203.0.113.9", false, "a.example", "192.0.2.1"},
+		{"信任 XFF 取首段", "a.example", "203.0.113.9, 10.0.0.1", true, "a.example", "203.0.113.9"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &Handler{TrustXFF: tc.trustXFF}
+			req := httptest.NewRequest("GET", "http://placeholder/x", nil)
+			req.Host = tc.host
+			if tc.xff != "" {
+				req.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			got := h.judgedEventPayload("d-1", req, judgev1.Action_ACTION_ORIGIN, routeInfo{executed: executedOrigin})
+			if got["host"] != tc.wantHost {
+				t.Errorf("host = %v，期望 %q", got["host"], tc.wantHost)
+			}
+			if got["source_ip"] != tc.wantIP {
+				t.Errorf("source_ip = %v，期望 %q", got["source_ip"], tc.wantIP)
+			}
+		})
+	}
+}
+
 // TestExecutedFor 穷举「实际落点」的取值。
 //
 // 这是图上区分「核心判成什么」与「适配器实际走了哪」的唯一依据，必须逐分支钉死：

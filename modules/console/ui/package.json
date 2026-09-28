@@ -1,0 +1,42 @@
+{
+  "name": "shen-console-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "蜃楼 Shen 管控台前端：只通过 /api/v1 取数（REST + SSE），不读本地数据",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "typecheck": "vue-tsc -b",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vueuse/core": "^13.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "echarts": "^6.0.0",
+    "motion-v": "^2.0.0",
+    "pinia": "^3.0.1",
+    "reka-ui": "^2.6.0",
+    "tailwind-merge": "^2.5.5",
+    "tailwindcss-animate": "^1.0.7",
+    "vue": "^3.5.13",
+    "vue-echarts": "^8.0.0",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "@vue/test-utils": "^2.4.6",
+    "autoprefixer": "^10.4.20",
+    "jsdom": "^25.0.1",
+    "lucide-vue-next": "^0.468.0",
+    "postcss": "^8.5.0",
+    "tailwindcss": "3.4.17",
+    "typescript": "~5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^2.1.10"
+  }
+}

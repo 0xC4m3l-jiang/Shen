@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import os
 import pathlib
 import secrets
 import sys
@@ -168,14 +169,44 @@ def body_findings(body: str, flow: dict[str, Any] | None) -> list[str]:
     return findings
 
 
+# 控制台接口已迁到带鉴权的 `/api/v1`：脚本用**只读自动化令牌**（Bearer，仅 viewer 权限、禁写）。
+# 令牌由环境变量 SHEN_CONSOLE_API_TOKEN 提供（`scripts/shen.sh up` 首次运行会写进仓库根 .env）。
+CONSOLE_PATHS = {
+    "/api/flow": "/api/v1/deception/flow",
+    "/api/graphs": "/api/v1/deception/graphs",
+    "/api/topology": "/api/v1/deception/topology",
+    "/api/config": "/api/v1/deception/config",
+    "/api/analysis": "/api/v1/analysis",
+}
+
+
+def console_path(path: str) -> str:
+    """把旧路径映射到 v1（只映射已登记的五个；其余原样返回）。"""
+    base, sep, query = path.partition("?")
+    return CONSOLE_PATHS.get(base, base) + sep + query
+
+
+def console_token() -> str:
+    return os.environ.get("SHEN_CONSOLE_API_TOKEN", "").strip()
+
+
 def fetch_json(path: str, console: str, timeout: float = 5.0) -> Any:
     host, port, _ = parse_http_url(console)
-    url = f"http://{host}:{port}{path}"
+    url = f"http://{host}:{port}{console_path(path)}"
+    headers = {"Accept": "application/json"}
+    if token := console_token():
+        headers["Authorization"] = f"Bearer {token}"
     try:
         # scheme 与主机名已由 parse_http_url 显式校验（只允许 http/https），故：
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        hint = ""
+        if exc.code == 401:
+            hint = "：未提供或令牌无效 —— 设置 SHEN_CONSOLE_API_TOKEN（见仓库根 .env），且须从允许的来源网段访问"
+        raise ConsoleError(f"控制台拒绝访问（{url}，HTTP {exc.code}）{hint}") from exc
     except OSError as exc:
         raise ConsoleError(f"控制台不可读（{url}）：{exc}") from exc
     try:

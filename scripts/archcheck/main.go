@@ -692,7 +692,9 @@ func checkLanguages(root string) []finding {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" {
+			// dist：前端构建产物（已被 .gitignore 忽略；与源码布局检查的排除列表一致）——
+			// 打包出的 .js 是 TypeScript 的编译结果，不是「引入了 JavaScript 这门语言」。
+			if strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules" || name == "dist" {
 				return fs.SkipDir
 			}
 			return nil

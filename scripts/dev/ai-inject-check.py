@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import http.client
 import json
+import secrets
 import os
 import shutil
 import signal
@@ -83,6 +84,22 @@ def _http_get(port: int, path: str, headers: dict[str, str]) -> bytes:
         conn.close()
 
 
+# 控制台只提供带鉴权的 /api/v1：本脚本起的控制台用一次性只读令牌（进程内随机生成，不落盘）。
+CONSOLE_TOKEN = secrets.token_urlsafe(32)
+CONSOLE_V1 = {
+    "/api/graphs": "/api/v1/deception/graphs",
+    "/api/topology": "/api/v1/deception/topology",
+    "/api/flow": "/api/v1/deception/flow",
+    "/api/analysis": "/api/v1/analysis",
+}
+
+
+def console_get(port: int, path: str) -> bytes:
+    base, sep, query = path.partition("?")
+    return _http_get(port, CONSOLE_V1.get(base, base) + sep + query,
+                     {"Authorization": f"Bearer {CONSOLE_TOKEN}", "Accept": "application/json"})
+
+
 def http_get(
     port: int, path: str, cookie: str | None = None, ua: str = "HeadlessChrome/120"
 ) -> bytes:
@@ -110,7 +127,7 @@ def http_status(
 
 def get_graphs(port: int, limit: int = 200) -> list[dict]:
     try:
-        raw = json.loads(_http_get(port, f"/api/graphs?limit={limit}", {}))
+        raw = json.loads(console_get(port, f"/api/graphs?limit={limit}"))
     except (OSError, RuntimeError, ValueError):
         return []
     if not isinstance(raw, list):
@@ -282,6 +299,8 @@ def start_stack(
         {
             "SHEN_CORE_ADDR": f"127.0.0.1:{ports['core']}",
             "SHEN_CONSOLE_LISTEN": f"127.0.0.1:{ports['console']}",
+            "SHEN_CONSOLE_DATA_DIR": str(RUNDIR / "console-data"),
+            "SHEN_CONSOLE_API_TOKEN": CONSOLE_TOKEN,
         },
         RUNDIR / "console.log",
     )
@@ -366,7 +385,7 @@ def dump_dag(ports: dict[str, int], out: Path) -> None:
         ("analysis", "/api/analysis"),
     ):
         try:
-            raw = http_get(ports["console"], path)
+            raw = console_get(ports["console"], path)
             (out / f"{name}.json").write_bytes(raw)
             written.append(f"{name}.json({len(raw)}B)")
         except Exception as exc:  # 落盘失败不该让验收变红：它只是证据附件

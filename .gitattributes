@@ -1,0 +1,33 @@
+# 换行符策略：容器里执行 / 解析的文件一律 LF。
+# 否则 Windows 检出（core.autocrlf=true）会变成 CRLF：shell 脚本报 `/bin/sh^M: bad interpreter`，
+# nginx / YAML / JSON 也可能因行尾多出的 \r 解析异常。
+* text=auto
+
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.conf      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.json      text eol=lf
+*.env       text eol=lf
+.env.example text eol=lf
+Dockerfile* text eol=lf
+*.Dockerfile text eol=lf
+*.go        text eol=lf
+*.py        text eol=lf
+*.ts        text eol=lf
+*.vue       text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.md        text eol=lf
+Makefile    text eol=lf
+
+# PowerShell 脚本保持 CRLF（Windows 原生工具链更友好；pwsh 在 Linux / macOS 上也能读 CRLF）。
+*.ps1       text eol=crlf
+
+# 二进制：不做任何换行转换。
+*.xdb    binary
+*.png    binary
+*.jpg    binary
+*.ico    binary
+*.woff2  binary

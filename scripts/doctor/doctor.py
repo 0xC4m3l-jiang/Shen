@@ -28,11 +28,13 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import os
 import secrets
 import ssl
 import sys
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -113,12 +115,23 @@ def request(
 
 
 def console_json(console: str, path: str, timeout: float = 8.0) -> Any:
+    """读控制台 v1 接口（只读令牌取自 SHEN_CONSOLE_API_TOKEN；控制台已不再提供未鉴权接口）。"""
     host, port, _ = parse_url(console)
     url = f"http://{host}:{port}{path}"
+    headers = {"Accept": "application/json"}
+    token = os.environ.get("SHEN_CONSOLE_API_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     # scheme 与主机名已显式校验（只允许 http/https）
     # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8")
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise ConsoleError(f"控制台拒绝访问（{url}）：请设置 SHEN_CONSOLE_API_TOKEN（见仓库根 .env）") from exc
+        raise
     try:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -126,7 +139,7 @@ def console_json(console: str, path: str, timeout: float = 8.0) -> Any:
 
 
 def flows(console: str) -> list[dict[str, Any]]:
-    data = console_json(console, "/api/flow?limit=500")
+    data = console_json(console, "/api/v1/deception/flow?limit=500")
     return data if isinstance(data, list) else []
 
 

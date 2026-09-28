@@ -859,12 +859,21 @@ func (h *Handler) judgedEventPayload(id string, r *http.Request, act judgev1.Act
 		"method":      r.Method,
 		"path":        r.URL.Path,
 		"ua":          r.UserAgent(),
-		"action":      act.String(),
-		"shadow":      h.Shadow,
+		// host / source_ip：观测面按「被保护的 Web 服务」（反向链接器登记的域名）归类流量、
+		// 按来源画归属地要用。host 与诱饵路由匹配**同一口径**（小写、去端口、去尾点）；
+		// source_ip 与判定观测**同一口径**（是否采信 XFF 由 TrustXFF 决定）—— 两处各算一份必然漂移。
+		// 专属诱饵路由命中时不调核心、没有 decision 事件，这两个键是它唯一的来源信息。
+		"host":      normalizeRequestHost(r.Host),
+		"source_ip": clientIP(r, h.TrustXFF),
+		"action":    act.String(),
+		"shadow":    h.Shadow,
 		// 判定失败的原因要留下 —— 否则运营看到的是「全是放行」而不知道核心挂了。
 		"decision_error": errString(info.cause),
 		// 以下为「实际落点 + 返回信息」（图与验证页靠它们）：
-		"executed":    info.executed,
+		"executed": info.executed,
+		// dispatched：仅 executed=cache 时非空 —— 缓存决策**实际**走到的落点（mirage/origin/origin_fallback/block）。
+		// 不带它，观测面只能把缓存命中一律当成「回了业务」，流入蜃楼的统计会系统性偏低。
+		"dispatched":  info.dispatched,
 		"backend":     info.backend,
 		"status":      info.status,
 		"bytes":       info.bytes,

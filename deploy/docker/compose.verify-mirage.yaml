@@ -1,50 +1,31 @@
-# 验证覆盖文件：用于**真实验证改道（幻境）与回落分支**，让 DAG 上出现"幻境后端"与"幻境不可用→回落"两种节点。
+# 验证叠加文件：**真实验证改道（幻境）与专属诱饵路由**，让链路上出现「幻境后端」「诱饵投递」「回落」三类节点。
+# 路径一律**相对仓库根**（叠在根目录 compose.yaml 之上）。
 #
-# 用法（不要与默认栈同时起）：
-#   docker compose -f deploy/docker/compose.yaml \
-#     -f deploy/docker/compose.verify-mirage.yaml up -d --build
-#   curl -s -A "HeadlessChrome/120" \
-#     http://127.0.0.1:18080/.git/config      # 分值 0.90 ≥ 阈值 0.70 ⇒ 改道
-#   curl -s http://127.0.0.1:19444/api/graphs?limit=10
-#     # 应看到 executed=mirage
+# 用法（本机验证环境；不要与生产叠加文件同时使用）：
+#   docker compose -f compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d --build --force-recreate
+#   curl -s -A "HeadlessChrome/120" http://127.0.0.1:18080/.git/config   # 分值 0.90 ≥ 阈值 0.70 ⇒ 改道
+#   curl -s http://127.0.0.1:18080/admin/login                            # 专属诱饵路由 → honeypot-web
+#   然后在管控台「蜜罐层」「反向链接器」页查看是否流入蜃楼。
 #
 # ⚠️ 这会让引擎**真的执行改道**（非影子模式）——只在本机验证环境使用。
+# honeypot-web 服务本身定义在基础文件（honeypot profile）；这里只覆盖差异项。
 services:
   core:
     environment:
       # 拦截默认关（Q5）。验证 block 分支时显式打开；真实部署按 INT-12 阶梯放开。
       SHEN_BLOCK_ENABLED: "true"
     volumes:
-      - ../config/config.verify-mirage.yaml:/etc/shen/config.yaml:ro
-  # 合成 Web 管理台场景包（模块 honeypot-web）：独立后端，只在本档起。
-  # 它**不接生产认证、只用合成素材、不发起出站连接**；由诱饵路由（`decoys` 段）指过来。
-  web:
-    build:
-      context: ../..
-      dockerfile: deploy/docker/go.Dockerfile
-      args: {SERVICE: ./modules/honeypot/web/cmd/web}
-    network_mode: service:core
-    depends_on: [core]
-    environment:
-      SHEN_WEB_LISTEN: "127.0.0.1:19090"   # 只监听本机（幻境后端不对宿主机暴露）
-      # 场景**是数据**（C04）：装载外部场景包（格式见 docs/spec/decoy-scenario.md）并选中一套。
-      # 不设 SHEN_WEB_SCENARIOS 时用内置包；文件非法则启动失败（坏素材不带出去）。
-      SHEN_WEB_SCENARIOS: "/etc/shen/scenarios.json"
-      SHEN_WEB_SCENARIO: "contoso"
-      # 可信前跳（`R13`）：只有来自这些网段的请求，才采信它的 `X-Forwarded-For`。
-      # 验证档里 web 后端只经引擎到达（共享命名空间内的回环）⇒ 声明它，按客户端来源限流才成立；
-      # 不声明（默认空）时一律只信直接对端 ⇒ 所有请求会被算成同一个来源（限流退化成共用桶）。
-      SHEN_WEB_TRUSTED_PROXIES: "127.0.0.1/32"
-    volumes:
-      - ../config/scenarios.example.json:/etc/shen/scenarios.json:ro
-    restart: unless-stopped
+      - ./deploy/config/config.verify-mirage.yaml:/etc/shen/config.yaml:ro
 
   proxy:
     environment:
-      SHEN_PROXY_SHADOW: "false"      # 关闭影子：把判定真正执行出去（INT-11 只在首次上线要求影子）
-      SHEN_PROXY_POLICY_INTERVAL: 5s  # 加快策略拉取，便于验证后端表下发
-      # 本地兜底的后端表（ADR-0018：远端策略优先、本地配置兜底）。真实部署把地址换成蜜罐。
-      # 指向演示站端口只是为了"转发成功"，验证 DAG 上的「幻境后端」分支。
+      SHEN_PROXY_SHADOW: "false" # 关闭影子：把判定真正执行出去（INT-11 只在首次上线要求影子）
+      SHEN_PROXY_POLICY_INTERVAL: 5s # 加快策略拉取，便于验证后端表下发
+      # 本地兜底的后端表（ADR-0018：远端策略优先、本地配置兜底）。指向演示站只为「转发成功」。
       SHEN_PROXY_MIRAGE: "mirage=http://127.0.0.1:19080"
       # 白名单（INT-25）：验证「白名单命中 ⇒ 跳过判定」这条落点。容器网络里来源是网关地址。
       SHEN_PROXY_WHITELIST: "${SHEN_VERIFY_WHITELIST:-127.0.0.0/8}"
+
+  honeypot-web:
+    environment:
+      SHEN_WEB_SCENARIO: contoso

@@ -7,8 +7,7 @@
 # 策略是数据：规则随配置下发，不编译进代码（ST-24）。
 #
 # 用法（本档**不是**默认启动项）：
-#   docker compose -f deploy/docker/compose.yaml \
-#     -f deploy/docker/compose.verify-mirage.yaml up -d
+#   docker compose -f compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d   （仓库根执行）
 #   本地直跑：SHEN_CONFIG=deploy/config/config.verify-mirage.yaml make run
 #
 # ⚠️ 已消费的段落与默认档**相同**（不存在“只消费 policy/rules”）：

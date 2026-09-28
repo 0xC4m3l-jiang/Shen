@@ -21,7 +21,7 @@ PROTOS := $(shell find common/api -name '*.proto')
         archcheck trace leakcheck licensecheck license-ledger tools gate check run coverage clean \
         check-config replay smoke dev ai-check ai-check-llm ai-dag verify-modules verify-evidence commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen check-pydeps analysis analysis-llm \
-        docker-build up down docker-ps docker-logs docker-log check-ignore \
+        docker-build up up-dev up-frontend up-backend up-honeypot up-prod compose-config down docker-ps docker-logs docker-log check-ignore \
         start status app-smoke traffic verify
 
 # check-ignore 必须用 --no-index：默认行为下 git 认为已入库文件不受忽略规则影响，
@@ -52,17 +52,38 @@ verify: ## 仓库级验证：make gate + make dev
 	@scripts/shen.sh check
 
 # ── Docker：一键起全套（本机只需 Docker，不用装 Go / Node / Python）──────────
-COMPOSE := docker compose -f deploy/docker/compose.yaml
+# 基础文件在仓库根（compose.yaml）；ENV=dev|prod|verify 叠加 deploy/docker/compose.<ENV>.yaml；
+# PROFILES=frontend,honeypot 只起指定模块（core 永远随行）。Windows 无 make：用 scripts/shen.ps1。
+COMPOSE_OVERLAY := $(if $(filter verify,$(ENV)),-f deploy/docker/compose.verify-mirage.yaml,$(if $(ENV),-f deploy/docker/compose.$(ENV).yaml,))
+comma := ,
+COMPOSE_PROFILE_ARGS := $(foreach p,$(subst $(comma), ,$(PROFILES)),--profile $(p))
+COMPOSE := $(if $(PROFILES),COMPOSE_PROFILES=,) docker compose --project-directory . -f compose.yaml $(COMPOSE_OVERLAY) $(COMPOSE_PROFILE_ARGS)
 
-docker-build: ## 构建全部镜像（core / proxy / console / analysis / business）
+docker-build: ## 构建全部镜像（core / proxy / console-api / console-ui / analysis / honeypot-web / business）
 	$(COMPOSE) build
 
-up: ## 一键起全套（Docker）：核心 + 代理 + 控制台 + L4 + 演示业务站
+up: ## 一键起全套（Docker；ENV=dev 开发形态，PROFILES=honeypot 只起某模块）
+	@test -f .env || { cp .env.example .env && echo "已从 .env.example 生成 .env（初始口令留空 ⇒ 随机生成，见 /data/bootstrap-admin.txt）"; }
 	$(COMPOSE) up -d --build
 	@echo
-	@echo "控制台  http://127.0.0.1:$${SHEN_CONSOLE_PORT:-19444}/   业务入口  http://127.0.0.1:$${SHEN_HTTP_PORT:-18080}/"
+	@echo "管控台  http://127.0.0.1:$${SHEN_CONSOLE_PORT:-19444}/   业务入口  http://127.0.0.1:$${SHEN_HTTP_PORT:-18080}/"
 
-down: ## 停掉全套并删容器（镜像保留）
+up-dev: ## 开发形态：Vite 热更新 + 调试端口（= make up ENV=dev）
+	@$(MAKE) --no-print-directory up ENV=dev
+
+up-frontend: ## 只起管控台（console-ui + console-api + core）
+	@$(MAKE) --no-print-directory up PROFILES=frontend
+
+up-backend: ## 只起后端（console-api + proxy + analysis + core）
+	@$(MAKE) --no-print-directory up PROFILES=backend
+
+up-honeypot: ## 只起蜜罐（honeypot-web + core）
+	@$(MAKE) --no-print-directory up PROFILES=honeypot
+
+up-prod: ## 生产形态（镜像 tag + secrets + 加固；需先 pull，见 deploy/docker/README.md）
+	docker compose --project-directory . -f compose.yaml -f deploy/docker/compose.prod.yaml up -d --no-build
+
+down: ## 停掉全套并删容器（镜像与数据卷保留）
 	$(COMPOSE) down
 
 docker-ps: ## 看全套容器状态
@@ -75,6 +96,9 @@ docker-logs: ## 跟看日志（会一直挂着，Ctrl-C 退出；S=core 只看�
 #    在非交互场景（含 AI 助手）里会把命令挂住 —— 本仓库真的踩过。取最近 50 行后立即退出。
 docker-log: ## 只看日志尾部（不跟随；S=core 可选，N=行数默认 50）
 	$(COMPOSE) logs --tail=$${N:-50} $(S)
+
+compose-config: ## 渲染合并后的 compose 配置（排查变量与叠加结果；不启动任何容器）
+	$(COMPOSE) config
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -93,6 +117,9 @@ build: ## 编译全部
 # ── 静态检查与结构检查：注释里标明每条对应的文档出处 ─────────────────────────
 fmt-check: ## 格式化检查，不改文件（依据 TB-15）
 	@scripts/gate/check-fmt.sh
+
+secrets-check: ## 密钥泄漏门禁：拦截 sk- 真值与密钥类变量的非占位赋值进入版本库
+	@scripts/gate/check-secrets.sh
 
 vet: ## go vet（依据 TB-15）
 	$(GO) vet ./...
@@ -169,7 +196,7 @@ pytest: ## L4 单测（pytest）
 check-pydeps: ## 锁文件 ↔ venv 一致性（依据 TB-16；不一致即失败，指向 make pyenv）
 	@$(CURDIR)/scripts/gate/check-pydeps.sh
 
-lint: fmt-check vet staticcheck errcheck pyfmt-check check-pydeps pylint check-ignore archcheck verify-evidence trace leakcheck licensecheck ## 全部静态、结构、逐模块证据与追溯检查
+lint: fmt-check secrets-check vet staticcheck errcheck pyfmt-check check-pydeps pylint check-ignore archcheck verify-evidence trace leakcheck licensecheck ## 全部静态、结构、逐模块证据与追溯检查（含密钥泄漏门禁）
 
 # ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
 #
@@ -203,9 +230,6 @@ fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
 # ── 观测台（人工测试用）──────────────────────────────────────────────────────
 console: ## 只起观测控制台（核心需已在跑；地址取 SHEN_CORE_ADDR）
 	$(GO) run ./modules/console/cmd/console
-
-demo: ## 一键起「能看」的本地环境：核心 + 假业务 + 代理 + 控制台（人工测试入口）
-	@scripts/demo/run.sh
 
 # ── Caddy 耦合面（升级时先看它）──────────────────────────────────────────────
 # 为什么做成目标而不是写在文档里：文档会腐烂，这里的结果**永远来自代码**。

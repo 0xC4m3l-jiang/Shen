@@ -1,0 +1,100 @@
+# 生产叠加文件（叠在仓库根 compose.yaml 之上）。路径一律**相对仓库根**。
+#
+#   docker compose -f compose.yaml -f deploy/docker/compose.prod.yaml pull
+#   docker compose -f compose.yaml -f deploy/docker/compose.prod.yaml up -d --no-build
+#
+# 与基础文件的差异：
+#   - 镜像必须带版本 tag（${SHEN_VERSION:?}），不在生产机上现场构建；
+#   - 密钥走 Compose secrets（文件挂载到 /run/secrets/，进程以 *_FILE 读取），不出现在环境变量与 `docker inspect` 里；
+#   - 只读根文件系统 + tmpfs、资源上限、日志轮转、restart: always；
+#   - 会话 Cookie 强制 Secure（TLS 由客户侧 L0 终结，ADR-0019）；Origin 白名单必须填对外地址；
+#   - 首次上线强制影子模式（INT-11）；proxy 上游必须显式指向真实业务；不要启用 demo profile。
+#
+# 生产推荐的 COMPOSE_PROFILES：frontend,backend,honeypot（不含 demo）。
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs: ["/tmp:size=16m"]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  restart: always
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  core:
+    image: ${SHEN_IMAGE_PREFIX:?生产必须设置镜像仓库前缀 SHEN_IMAGE_PREFIX}/core:${SHEN_VERSION:?生产必须固定镜像版本 SHEN_VERSION}
+    <<: *hardening
+    environment:
+      SHEN_LOG_FORMAT: json
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1g }
+
+  console-api:
+    image: ${SHEN_IMAGE_PREFIX:?}/console-api:${SHEN_VERSION:?}
+    <<: *hardening
+    environment:
+      SHEN_CONSOLE_COOKIE_SECURE: "true"
+      SHEN_CONSOLE_ALLOWED_ORIGINS: ${SHEN_CONSOLE_PUBLIC_ORIGIN:?生产必须设置管控台对外地址，如 https://console.example.com}
+      SHEN_CONSOLE_BOOTSTRAP_PASSWORD: ""
+      SHEN_CONSOLE_BOOTSTRAP_PASSWORD_FILE: /run/secrets/console_bootstrap_password
+      SHEN_CONSOLE_API_TOKEN: ""
+      SHEN_CONSOLE_API_TOKEN_FILE: /run/secrets/console_api_token
+      # 大模型提供方密钥的加密主密钥：与数据卷分离存放（拿到卷也解不开密文）。≥32 个字符。
+      SHEN_CONSOLE_SECRET_KEY: ""
+      SHEN_CONSOLE_SECRET_KEY_FILE: /run/secrets/console_secret_key
+      # 生产只允许本机回环使用只读令牌（运维脚本在宿主上经 L0 以外的回环路径访问时再按需放宽）。
+      SHEN_CONSOLE_API_TOKEN_SOURCES: ${SHEN_CONSOLE_API_TOKEN_SOURCES:-127.0.0.1/32,::1/128}
+      SHEN_CONSOLE_SESSION_IDLE: ${SHEN_CONSOLE_SESSION_IDLE:-30m}
+      SHEN_CONSOLE_SESSION_TTL: ${SHEN_CONSOLE_SESSION_TTL:-8h}
+    secrets: [console_bootstrap_password, console_api_token, console_secret_key]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256m }
+
+  console-ui:
+    image: ${SHEN_IMAGE_PREFIX:?}/console-ui:${SHEN_VERSION:?}
+    <<: *hardening
+    environment:
+      NGINX_ENTRYPOINT_QUIET_LOGS: "1" # 只读根下入口脚本不改写配置（我们的 default.conf 已自带）
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128m }
+
+  proxy:
+    image: ${SHEN_IMAGE_PREFIX:?}/proxy:${SHEN_VERSION:?}
+    <<: *hardening
+    environment:
+      SHEN_PROXY_UPSTREAM: ${SHEN_PROXY_UPSTREAM:?生产必须把 SHEN_PROXY_UPSTREAM 指向真实业务}
+      SHEN_PROXY_SHADOW: ${SHEN_PROXY_SHADOW:-true}
+      SHEN_PROXY_LOG_REQUESTS: "false"
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 512m }
+
+  analysis:
+    image: ${SHEN_IMAGE_PREFIX:?}/analysis:${SHEN_VERSION:?}
+    <<: *hardening
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512m }
+
+  honeypot-web:
+    image: ${SHEN_IMAGE_PREFIX:?}/honeypot-web:${SHEN_VERSION:?}
+    <<: *hardening
+    environment:
+      SHEN_WEB_COOKIE_SECURE: "true"
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128m }
+
+secrets:
+  # 文件形式的 secrets 在 Windows / macOS / Linux 上都可用。目录建议 0700、文件 0444（容器内以 nobody 读取）。
+  console_bootstrap_password:
+    file: ${SHEN_SECRETS_DIR:-./secrets}/console_bootstrap_password
+  console_api_token:
+    file: ${SHEN_SECRETS_DIR:-./secrets}/console_api_token
+  console_secret_key:
+    file: ${SHEN_SECRETS_DIR:-./secrets}/console_secret_key
