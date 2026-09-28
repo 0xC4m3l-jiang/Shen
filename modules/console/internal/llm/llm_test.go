@@ -15,7 +15,9 @@ import (
 	"time"
 )
 
-const testKey = "sk-live0123456789abcdefWXYZ"
+// 假密钥带连字符：形态上不像「sk-+20 位纯字母数字」的真实服务密钥（secrets-check 规则①），
+// 但对 scrub / Hint / Bearer 校验等被测逻辑完全等价。
+const testKey = "sk-live-0123456789abcdefWXYZ"
 
 func TestVaultRoundTripAndBinding(t *testing.T) {
 	v, err := OpenVault(t.TempDir(), "")
@@ -29,7 +31,7 @@ func TestVaultRoundTripAndBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(sealed, "live0123") {
+	if strings.Contains(sealed, "live-0123") {
 		t.Fatal("密文里不应出现明文片段")
 	}
 	if got, err := v.Open(sealed, "llm-a"); err != nil || got != testKey {
@@ -106,14 +108,14 @@ func TestProviderKeyNeverStoredOrReturnedInPlaintext(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(view)
-	if strings.Contains(string(raw), "live0123") || strings.Contains(string(raw), "key_sealed") {
+	if strings.Contains(string(raw), "live-0123") || strings.Contains(string(raw), "key_sealed") {
 		t.Fatalf("接口视图泄露密钥：%s", raw)
 	}
 	if view.KeyHint != "sk-****WXYZ" || view.DefaultModel != "deepseek-chat" {
 		t.Fatalf("视图不对：%+v", view)
 	}
 	file, _ := os.ReadFile(filepath.Join(dir, "p.json"))
-	if strings.Contains(string(file), testKey) || strings.Contains(string(file), "live0123") {
+	if strings.Contains(string(file), testKey) || strings.Contains(string(file), "live-0123") {
 		t.Fatal("落盘文件里出现了明文密钥")
 	}
 	if _, key, err := s.Credentials(view.ID); err != nil || key != testKey {
@@ -165,12 +167,12 @@ func TestHTTPCallerParsesUsage(t *testing.T) {
 func TestHTTPCallerErrorsNeverContainKey(t *testing.T) {
 	srv := fakeProvider(t, 200, `{}`)
 	defer srv.Close()
-	_, err := NewHTTPCaller(5*time.Second).Chat(context.Background(), srv.URL, "sk-wrongkey0123456789zzzz", "m", nil, 8)
+	_, err := NewHTTPCaller(5*time.Second).Chat(context.Background(), srv.URL, "sk-wrong-key0123456789zzzz", "m", nil, 8)
 	var ce *CallError
 	if !errors.As(err, &ce) || ce.Status != 401 {
 		t.Fatalf("应返回 401 CallError，实际 %v", err)
 	}
-	if strings.Contains(err.Error(), "wrongkey0123") {
+	if strings.Contains(err.Error(), "wrong-key0123") {
 		t.Fatalf("错误信息回显了密钥：%v", err)
 	}
 	if !strings.Contains(err.Error(), "API Key 无效") {
@@ -196,6 +198,72 @@ func TestHTTPCallerRefusesRedirect(t *testing.T) {
 	}
 }
 
+// fakeModelServer 模拟 OpenAI 兼容的 /models：鉴权 + 回模型清单（含未排序与空白项）。
+func fakeModelServer(t *testing.T, status int, body string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer "+testKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad key ` + r.Header.Get("Authorization") + `"}}`))
+			return
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
+func TestHTTPCallerListModels(t *testing.T) {
+	srv := fakeModelServer(t, 200, `{"object":"list","data":[{"id":"deepseek-reasoner"},{"id":" deepseek-chat "},{"id":"deepseek-reasoner"}]}`)
+	defer srv.Close()
+	models, err := NewHTTPCaller(5*time.Second).ListModels(context.Background(), srv.URL, testKey)
+	if err != nil || len(models) != 2 || models[0] != "deepseek-chat" || models[1] != "deepseek-reasoner" {
+		t.Fatalf("应去重、修剪并按名称排序：%v %v", models, err)
+	}
+	// 错误密钥：401 + 人话提示 + 绝不回显密钥
+	_, err = NewHTTPCaller(5*time.Second).ListModels(context.Background(), srv.URL, "sk-wrong-key0123456789zzzz")
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Status != 401 || strings.Contains(err.Error(), "wrong-key0123") {
+		t.Fatalf("应返回不含密钥的 401 CallError：%v", err)
+	}
+}
+
+func TestProbeModels(t *testing.T) {
+	svc, pid := newService(t, &stubListCaller{models: []string{"m1", "m2"}})
+	// ① 带密钥直探：只依赖地址与密钥
+	got, err := svc.ProbeModels(context.Background(), ProbeInput{BaseURL: "https://api.deepseek.com/", APIKey: testKey})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("探测应返回模型清单：%v %v", got, err)
+	}
+	// ② 编辑既有提供方且密钥留空：回落到已存密钥（表单「留空=不修改」的同一语义）
+	got, err = svc.ProbeModels(context.Background(), ProbeInput{BaseURL: "https://api.deepseek.com", ProviderID: pid})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("密钥留空应用已存密钥：%v %v", got, err)
+	}
+	// ③ 既无密钥又无提供方：字段校验失败
+	if _, err := svc.ProbeModels(context.Background(), ProbeInput{BaseURL: "https://api.deepseek.com"}); !IsValidation(err) {
+		t.Fatalf("缺密钥应报字段校验错误，实际 %v", err)
+	}
+	// ④ 非法地址（明文 http 公网）
+	if _, err := svc.ProbeModels(context.Background(), ProbeInput{BaseURL: "http://api.example.com", APIKey: testKey}); !IsValidation(err) {
+		t.Fatalf("公网明文 http 应被拒绝，实际 %v", err)
+	}
+	// ⑤ 探测不进 token 账本
+	if s := svc.Usage().Summarize(time.Now(), 7, "", true); s.Totals.Requests != 0 {
+		t.Fatalf("探测不是计费调用，不应记账：%+v", s.Totals)
+	}
+}
+
+// stubListCaller 只实现 ListModels（Chat 恒失败，探测用不到）。
+type stubListCaller struct{ models []string }
+
+func (s *stubListCaller) Chat(context.Context, string, string, string, []Message, int) (Reply, error) {
+	return Reply{}, &CallError{Msg: "not implemented"}
+}
+
+func (s *stubListCaller) ListModels(context.Context, string, string) ([]string, error) {
+	return s.models, nil
+}
+
 // blockingCaller 在 release 关闭前一直阻塞：用来制造「同一会话两条消息同时在途」。
 type blockingCaller struct {
 	release chan struct{}
@@ -209,6 +277,10 @@ func (b *blockingCaller) Chat(ctx context.Context, _, _, _ string, _ []Message, 
 	case <-ctx.Done():
 	}
 	return Reply{Content: "分析完成", Usage: Usage{Prompt: 100, Completion: 20, Total: 120}}, nil
+}
+
+func (b *blockingCaller) ListModels(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
 }
 
 func newService(t *testing.T, c Caller) (*Service, string) {

@@ -172,20 +172,21 @@ switch ($Command) {
   }
   'traffic' {
     # 伪造流量 + 从观测面核对判定（完整验证；参数原样传给 send.py，如 --check-l4 --explain）
-    $env:SHEN_CONSOLE_API_TOKEN = Get-EnvValue 'SHEN_CONSOLE_API_TOKEN'
+    # 赋值加括号：值是函数引用（环境变量透传），不是实值 —— 也不该长成密钥赋值的形态（secrets-check 规则②）。
+    $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
     python (Join-Path $Root 'scripts/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
     if ($LASTEXITCODE -ne 0) { Fail 'traffic 验证未通过（详见上方输出）' }
   }
   'doctor' {
     # 接入自检（INT-17 五项：body 可读性 / TLS 终结 / 会话粘性 / 后端可区分 / 引擎在路径上）
-    $env:SHEN_CONSOLE_API_TOKEN = Get-EnvValue 'SHEN_CONSOLE_API_TOKEN'
+    $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
     python (Join-Path $Root 'scripts/doctor/doctor.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
     if ($LASTEXITCODE -ne 0) { Fail 'doctor 自检未通过（详见上方输出）' }
   }
   'verify' {
     # 一键端到端：容器与观测面 → 伪造流量 + L4 核对 → 报告
     Assert-Docker
-    $env:SHEN_CONSOLE_API_TOKEN = Get-EnvValue 'SHEN_CONSOLE_API_TOKEN'
+    $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
     Invoke-Compose @('ps')
     $report = Join-Path $RunDir ("verify-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
     python (Join-Path $Root 'scripts/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl), '--check-l4', '--check-graph', '--explain', '--report', $report) + $Rest

@@ -1,17 +1,26 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
+// 出站调用经 github.com/sashabaranov/go-openai（MIT，零第三方依赖；DeepSeek 官方文档的 Go 示例同款）。
+// 协议细节（请求组装 / 响应解析 / /models 列表）交给库；**安全不变量留在本文件**：
+//
+//	① 不跟随重定向 —— Authorization 头跟着 3xx 跳到别的域名就是一次密钥外泄；
+//	② 响应体积上限 —— 异常大的回包不能拖垮进程；
+//	③ 错误回显 scrub —— 有些服务商会在错误里回显部分 key；
+//	④ 网络错误的人话提示 —— 运维看得懂。
+//
 // Message 是一条对话消息（OpenAI 兼容格式）。
 type Message struct {
 	Role    string `json:"role"` // system / user / assistant
@@ -55,10 +64,29 @@ const (
 // Caller 抽象出站调用：测试里换成假服务商，不碰网络。
 type Caller interface {
 	Chat(ctx context.Context, base, key, model string, msgs []Message, maxTokens int) (Reply, error)
+	// ListModels 拉取接口支持的模型清单（GET {base}/models）——「按已填信息探测可用模型」用。
+	ListModels(ctx context.Context, base, key string) ([]string, error)
 }
 
-// HTTPCaller 调 OpenAI 兼容的 `POST {base}/chat/completions`
-// （DeepSeek：https://api.deepseek.com；OpenAI：https://api.openai.com/v1；Ollama：http://127.0.0.1:11434/v1）。
+// limitedTransport 把响应体包上 LimitReader：异常大的回包在传输层就被截住。
+type limitedTransport struct{ rt http.RoundTripper }
+
+type limitedBody struct {
+	io.Reader
+	io.Closer
+}
+
+func (t *limitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.rt.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = limitedBody{Reader: io.LimitReader(resp.Body, maxResponseBytes), Closer: resp.Body}
+	return resp, nil
+}
+
+// HTTPCaller 调 OpenAI 兼容接口（chat/completions 与 models 都在库内拼路径）。
+// （DeepSeek：https://api.deepseek.com；OpenAI：https://api.openai.com/v1；Ollama：http://127.0.0.1:11434/v1）
 type HTTPCaller struct {
 	client *http.Client
 }
@@ -68,63 +96,93 @@ func NewHTTPCaller(timeout time.Duration) *HTTPCaller {
 	if timeout <= 0 {
 		timeout = 120 * time.Second
 	}
+	inner := http.DefaultTransport
+	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+		clone := t.Clone()
+		inner = clone
+	}
 	return &HTTPCaller{client: &http.Client{
 		Timeout: timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("模型接口返回重定向：出于密钥安全不跟随，请直接填写最终地址")
 		},
+		Transport: &limitedTransport{rt: inner},
 	}}
+}
+
+// openaiClient 按提供方地址与密钥组装库客户端（每次调用现场组装：无共享状态，密钥不驻留）。
+func openaiClient(c *http.Client, base, key string) *openai.Client {
+	cfg := openai.DefaultConfig(key)
+	cfg.BaseURL = base
+	cfg.HTTPClient = c
+	return openai.NewClientWithConfig(cfg)
 }
 
 // Chat 发起一次对话补全。
 func (c *HTTPCaller) Chat(ctx context.Context, base, key, model string, msgs []Message, maxTokens int) (Reply, error) {
-	body, err := json.Marshal(map[string]any{
-		"model": model, "messages": msgs, "max_tokens": maxTokens, "temperature": 0.3, "stream": false,
-	})
-	if err != nil {
-		return Reply{}, err
+	req := openai.ChatCompletionRequest{
+		Model: model, Temperature: 0.3, Stream: false,
+		Messages: make([]openai.ChatCompletionMessage, len(msgs)),
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return Reply{}, &CallError{Msg: "构造请求失败"}
+	// 用 max_tokens 而不是库标记的 MaxCompletionTokens：本管控台面向 OpenAI **兼容**端点
+	// （DeepSeek / Ollama / vLLM …），max_completion_tokens 只有 OpenAI 自家新模型支持。
+	//lint:ignore SA1019 兼容端点统一走 max_tokens（见上一行注释）
+	req.MaxTokens = maxTokens
+	for i, m := range msgs {
+		req.Messages[i] = openai.ChatCompletionMessage{Role: m.Role, Content: m.Content}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+key)
 	started := time.Now()
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return Reply{}, &CallError{Msg: scrub(transportReason(err), key)}
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	resp, err := openaiClient(c.client, base, key).CreateChatCompletion(ctx, req)
 	latency := time.Since(started)
 	if err != nil {
-		return Reply{Latency: latency}, &CallError{Status: resp.StatusCode, Msg: "读取响应失败"}
+		return Reply{Latency: latency}, callError(err, key)
 	}
-	if resp.StatusCode/100 != 2 {
-		return Reply{Latency: latency}, &CallError{Status: resp.StatusCode, Msg: scrub(errorReason(raw, resp.StatusCode), key)}
+	if len(resp.Choices) == 0 {
+		return Reply{Latency: latency}, &CallError{Msg: "响应不是 OpenAI 兼容格式（缺 choices）"}
 	}
-	var out struct {
-		Choices []struct {
-			Message      Message `json:"message"`
-			FinishReason string  `json:"finish_reason"`
-		} `json:"choices"`
-		Usage *Usage `json:"usage"`
-	}
-	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
-		return Reply{Latency: latency}, &CallError{Status: resp.StatusCode, Msg: "响应不是 OpenAI 兼容格式（缺 choices）"}
-	}
-	reply := Reply{Content: out.Choices[0].Message.Content, Latency: latency, Truncated: out.Choices[0].FinishReason == "length"}
-	if out.Usage != nil {
-		reply.Usage = *out.Usage
-		if reply.Usage.Total == 0 {
-			reply.Usage.Total = reply.Usage.Prompt + reply.Usage.Completion
-		}
+	reply := Reply{Content: resp.Choices[0].Message.Content, Latency: latency, Truncated: resp.Choices[0].FinishReason == openai.FinishReasonLength}
+	if resp.Usage.TotalTokens > 0 {
+		reply.Usage = Usage{Prompt: resp.Usage.PromptTokens, Completion: resp.Usage.CompletionTokens, Total: resp.Usage.TotalTokens}
+	} else if resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 {
+		reply.Usage = Usage{Prompt: resp.Usage.PromptTokens, Completion: resp.Usage.CompletionTokens,
+			Total: resp.Usage.PromptTokens + resp.Usage.CompletionTokens}
 	} else {
-		reply.Usage = estimate(msgs, reply.Content)
+		reply.Usage = estimate(msgs, reply.Content) // 服务商没回 usage：粗估并显式标注
 	}
 	return reply, nil
+}
+
+// ListModels 拉取模型清单（按名称排序，去重）。
+func (c *HTTPCaller) ListModels(ctx context.Context, base, key string) ([]string, error) {
+	page, err := openaiClient(c.client, base, key).ListModels(ctx)
+	if err != nil {
+		return nil, callError(err, key)
+	}
+	seen := make(map[string]bool, len(page.Models))
+	out := make([]string, 0, len(page.Models))
+	for _, m := range page.Models {
+		if id := strings.TrimSpace(m.ID); id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// callError 把库错误翻译成 CallError：API 错误给状态码与人话提示；网络错误按成因归类；一律 scrub。
+func callError(err error, key string) error {
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		msg := strings.TrimSpace(apiErr.Message)
+		hint := map[int]string{401: "API Key 无效或已吊销", 402: "账户余额不足", 403: "无权访问该模型",
+			404: "接口地址或模型名不对", 429: "触发限流或额度用尽"}[apiErr.HTTPStatusCode]
+		if hint != "" {
+			msg = hint + "（" + truncate(msg, maxErrorChars) + "）"
+		}
+		return &CallError{Status: apiErr.HTTPStatusCode, Msg: scrub(truncate(msg, maxErrorChars+40), key)}
+	}
+	return &CallError{Msg: scrub(transportReason(err), key)}
 }
 
 // estimate 在服务商不回 usage 时粗估（中文约 1 字 ≈ 1 token、英文约 4 字符 ≈ 1 token），并显式标注。
@@ -165,32 +223,6 @@ func transportReason(err error) string {
 		return "模型接口返回重定向：出于密钥安全不跟随，请直接填写最终地址"
 	}
 	return "网络错误：" + truncate(msg, 160)
-}
-
-// errorReason 提取服务商错误信息（OpenAI 格式 {"error":{"message":...}}），并给常见状态码一句人话。
-func errorReason(raw []byte, status int) string {
-	var e struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-		Message string `json:"message"`
-	}
-	msg := ""
-	if json.Unmarshal(raw, &e) == nil {
-		msg = e.Error.Message
-		if msg == "" {
-			msg = e.Message
-		}
-	}
-	if msg == "" {
-		msg = strings.TrimSpace(string(raw))
-	}
-	hint := map[int]string{401: "API Key 无效或已吊销", 402: "账户余额不足", 403: "无权访问该模型",
-		404: "接口地址或模型名不对", 429: "触发限流或额度用尽"}[status]
-	if hint != "" {
-		return hint + "（" + truncate(msg, maxErrorChars) + "）"
-	}
-	return truncate(msg, maxErrorChars)
 }
 
 // scrub 从任何要回显的文本里抹掉密钥（有些服务商会在错误里回显部分 key）。

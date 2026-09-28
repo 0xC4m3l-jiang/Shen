@@ -13,7 +13,8 @@ import type { LLMProvider, LLMTestResult } from '@/lib/types'
 import { useAuthStore } from '@/stores/auth'
 import ProviderForm from './ProviderForm.vue'
 
-// 大模型提供方：登记 / 编辑 / 删除 / 测试连通（管理员）；其他角色只读，用于在分析时选择模型。
+// 大模型接入（基础能力模块）：登记 / 编辑 / 删除 / 测试连通（管理员）；其他角色只读。
+// 供分析模块与后续 AI 模块统一调用，不与任何消费方耦合。
 const auth = useAuthStore()
 const admin = auth.can('llm:admin')
 const { data, error, loading, refresh } = useLiveResource(
@@ -60,7 +61,7 @@ async function remove(p: LLMProvider) {
   <div class="flex flex-col gap-4">
     <div class="flex items-center justify-between">
       <p class="text-sm text-muted-foreground">
-        {{ admin ? '登记 OpenAI 兼容的大模型接口；密钥加密保存，只显示末 4 位。' : '可用于分析的模型（登记与修改需要管理员）。' }}
+        {{ admin ? '登记 OpenAI 兼容的大模型接口；密钥加密保存，只显示末 4 位。' : '已接入的模型（登记与修改需要管理员）。' }}
       </p>
       <Button v-if="admin" @click="openForm(null)"><Plus class="h-4 w-4" />登记大模型</Button>
     </div>
@@ -120,7 +121,7 @@ async function remove(p: LLMProvider) {
     </div>
     <div v-if="!loading && !data?.providers?.length" class="glass flex flex-col items-center gap-3 rounded-2xl px-6 py-14 text-center">
       <PlugZap class="h-8 w-8 text-muted-foreground" />
-      <p class="text-sm text-muted-foreground">{{ admin ? '还没有登记任何大模型。登记并测试连通后，就能选流量让模型分析。' : '管理员尚未登记可用的大模型。' }}</p>
+      <p class="text-sm text-muted-foreground">{{ admin ? '还没有接入任何大模型。登记并测试连通后，分析等模块即可选用。' : '管理员尚未接入可用的大模型。' }}</p>
       <Button v-if="admin" @click="openForm(null)"><Plus class="h-4 w-4" />登记第一个大模型</Button>
     </div>
     <ProviderForm v-model:open="formOpen" :provider="editing" @saved="refresh()" />

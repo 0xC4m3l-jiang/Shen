@@ -26,6 +26,8 @@ func (s *Server) llmRoutes(route func(string, rbac.Permission, http.HandlerFunc)
 	route("PUT /api/v1/llm/providers/{id}", rbac.LLMAdmin, s.withLLM(s.handleUpdateProvider))
 	route("DELETE /api/v1/llm/providers/{id}", rbac.LLMAdmin, s.withLLM(s.handleDeleteProvider))
 	route("POST /api/v1/llm/providers/{id}/test", rbac.LLMAdmin, s.withLLM(s.handleTestProvider))
+	// 基础能力：按已填的地址与密钥探测可用模型清单（供提供方表单「获取模型列表」按钮）。
+	route("POST /api/v1/llm/models/probe", rbac.LLMAdmin, s.withLLM(s.handleProbeModels))
 	route("GET /api/v1/llm/usage", rbac.LLMUse, s.withLLM(s.handleUsage))
 	route("GET /api/v1/llm/conversations", rbac.LLMUse, s.withLLM(s.handleListConversations))
 	route("POST /api/v1/llm/conversations", rbac.LLMUse, s.withLLM(s.handleCreateConversation))
@@ -63,6 +65,12 @@ func (s *Server) failLLM(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, llm.ErrFull):
 		writeError(w, http.StatusInsufficientStorage, "full", err.Error())
 	default:
+		var callErr *llm.CallError
+		if errors.As(err, &callErr) {
+			// 上游模型接口拒绝（密钥无效 / 限流 / 地址不对…）：不是本服务的内部错误。
+			writeError(w, http.StatusBadGateway, "provider_error", err.Error())
+			return
+		}
 		s.fail(w, r, err)
 	}
 }
@@ -142,6 +150,29 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(r, p, "llm.provider.test", id, result, res.Model+" · "+res.Error)
 	writeJSON(w, http.StatusOK, map[string]any{"result": res, "provider": view})
+}
+
+// handleProbeModels：用表单里已填的地址与密钥（或既有提供方保存的密钥）调上游 /models，
+// 返回可用模型清单。只读探测：不改存储、不进 token 账本（/models 不产生计费调用）。
+func (s *Server) handleProbeModels(w http.ResponseWriter, r *http.Request) {
+	p := principalOf(r)
+	var body struct {
+		ProviderID string `json:"provider_id"`
+		BaseURL    string `json:"base_url"`
+		APIKey     string `json:"api_key"`
+	}
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	models, err := s.cfg.LLM.ProbeModels(r.Context(), llm.ProbeInput{BaseURL: body.BaseURL, APIKey: body.APIKey, ProviderID: body.ProviderID})
+	if err != nil {
+		// 审计只记地址与失败（错误信息已 scrub，不含密钥）
+		s.record(r, p, "llm.models.probe", body.BaseURL, "failed", err.Error())
+		s.failLLM(w, r, err)
+		return
+	}
+	s.record(r, p, "llm.models.probe", body.BaseURL, "ok", fmt.Sprintf("%d 个模型", len(models)))
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // handleUsage：管理员看全部并附按人明细；运维角色只看自己的用量。

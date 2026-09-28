@@ -11,7 +11,7 @@ import (
 	"shen/modules/console/internal/rbac"
 )
 
-const providerKey = "sk-apitest0123456789abcdefQRST"
+const providerKey = "sk-api-test0123456789abcdefQRST"
 
 // recordingCaller 是假服务商：记下发出的消息，固定回答。
 type recordingCaller struct {
@@ -27,6 +27,13 @@ func (c *recordingCaller) Chat(_ context.Context, _, key, _ string, msgs []llm.M
 		return llm.Reply{}, &llm.CallError{Status: 401, Msg: "API Key 无效"}
 	}
 	return llm.Reply{Content: "OK：这是扫描器行为", Usage: llm.Usage{Prompt: 300, Completion: 40, Total: 340}}, nil
+}
+
+func (c *recordingCaller) ListModels(_ context.Context, _, key string) ([]string, error) {
+	if key != providerKey {
+		return nil, &llm.CallError{Status: 401, Msg: "API Key 无效"}
+	}
+	return []string{"deepseek-chat", "deepseek-reasoner"}, nil
 }
 
 func (c *recordingCaller) last() []llm.Message {
@@ -53,7 +60,7 @@ func createProvider(t *testing.T, c *client) map[string]any {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("登记提供方失败：%d %s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "apitest0123") {
+	if strings.Contains(rec.Body.String(), "api-test0123") {
 		t.Fatalf("接口回显了密钥：%s", rec.Body.String())
 	}
 	return decode[map[string]any](t, rec)
@@ -69,21 +76,21 @@ func TestLLMProviderLifecycleNeverExposesKey(t *testing.T) {
 	}
 	test := admin.do("POST", "/api/v1/llm/providers/"+id+"/test", map[string]any{})
 	body := test.Body.String()
-	if test.Code != http.StatusOK || !strings.Contains(body, `"ok":true`) || strings.Contains(body, "apitest0123") {
+	if test.Code != http.StatusOK || !strings.Contains(body, `"ok":true`) || strings.Contains(body, "api-test0123") {
 		t.Fatalf("连通测试失败或泄露密钥：%d %s", test.Code, body)
 	}
 	list := admin.do("GET", "/api/v1/llm/providers", nil).Body.String()
-	if strings.Contains(list, "apitest0123") || strings.Contains(list, "key_sealed") {
+	if strings.Contains(list, "api-test0123") || strings.Contains(list, "key_sealed") {
 		t.Fatalf("列表泄露密文或明文：%s", list)
 	}
 	// 审计里只记「换没换」，不记密钥
 	upd := admin.do("PUT", "/api/v1/llm/providers/"+id, map[string]any{"name": "DeepSeek", "base_url": "https://api.deepseek.com",
-		"api_key": "sk-rotated00000000000000ZZZZ", "models": []string{"deepseek-chat"}, "enabled": true, "version": p["version"]})
+		"api_key": "sk-rotated-00000000000000ZZZZ", "models": []string{"deepseek-chat"}, "enabled": true, "version": p["version"]})
 	if upd.Code != http.StatusOK {
 		t.Fatalf("更新失败：%d %s", upd.Code, upd.Body.String())
 	}
 	for _, e := range h.srv.audit.Recent(50, "") {
-		if strings.Contains(e.Detail, "rotated000") || strings.Contains(e.Detail, "apitest0123") {
+		if strings.Contains(e.Detail, "rotated-000") || strings.Contains(e.Detail, "api-test0123") {
 			t.Fatalf("审计记录里出现了密钥：%+v", e)
 		}
 	}
@@ -185,6 +192,45 @@ func TestLLMDisabledReturns503(t *testing.T) {
 	admin := h.login("admin", adminPass, adminNewPass)
 	if rec := admin.do("GET", "/api/v1/llm/providers", nil); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("未装配大模型服务时应 503，实际 %d", rec.Code)
+	}
+}
+
+// 「获取模型列表」按钮的后端：按已填信息探测可用模型；只允许管理员（会带凭据出站）。
+func TestLLMProbeModels(t *testing.T) {
+	h, _ := newLLMHarness(t)
+	admin := h.login("admin", adminPass, adminNewPass)
+	if rec := admin.do("POST", "/api/v1/users", map[string]any{"username": "ops.deception", "role": rbac.DeceptionOperator, "password": "Temporary-Pass-2026"}); rec.Code != http.StatusCreated {
+		t.Fatalf("创建运维账号失败：%d %s", rec.Code, rec.Body.String())
+	}
+	ops := h.login("ops.deception", "Temporary-Pass-2026", "Deception-Ops-2026!")
+	pid := createProvider(t, admin)["id"].(string)
+
+	// ① 表单直填：地址 + 密钥 → 模型清单
+	res := decode[struct {
+		Models []string `json:"models"`
+	}](t, admin.do("POST", "/api/v1/llm/models/probe", map[string]any{"base_url": "https://api.deepseek.com", "api_key": providerKey}))
+	if len(res.Models) != 2 || res.Models[0] != "deepseek-chat" {
+		t.Fatalf("探测应返回模型清单：%+v", res.Models)
+	}
+	// ② 编辑既有提供方、密钥留空 → 用已存密钥
+	res = decode[struct {
+		Models []string `json:"models"`
+	}](t, admin.do("POST", "/api/v1/llm/models/probe", map[string]any{"base_url": "https://api.deepseek.com", "provider_id": pid}))
+	if len(res.Models) != 2 {
+		t.Fatalf("密钥留空应回落到已存密钥：%+v", res.Models)
+	}
+	// ③ 密钥不对：502 provider_error，错误里绝无密钥
+	rec := admin.do("POST", "/api/v1/llm/models/probe", map[string]any{"base_url": "https://api.deepseek.com", "api_key": "sk-wrong-0123456789abcdef"})
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "provider_error") {
+		t.Fatalf("上游拒绝应 502 provider_error：%d %s", rec.Code, rec.Body.String())
+	}
+	// ④ 非管理员（llm:use）不得探测
+	if rec := ops.do("POST", "/api/v1/llm/models/probe", map[string]any{"base_url": "https://api.deepseek.com", "api_key": providerKey}); rec.Code != http.StatusForbidden {
+		t.Fatalf("探测只允许管理员：%d", rec.Code)
+	}
+	// ⑤ 缺地址与密钥：400 字段校验
+	if rec := admin.do("POST", "/api/v1/llm/models/probe", map[string]any{}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("空请求应 400：%d %s", rec.Code, rec.Body.String())
 	}
 }
 

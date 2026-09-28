@@ -145,6 +145,38 @@ func (s *Service) call(ctx context.Context, user, providerID, model, kind, convI
 	return p, reply, callErr
 }
 
+// ProbeInput 是「按已填信息探测可用模型」的参数：编辑既有提供方且密钥留空时，
+// 用 ProviderID 解出的已存密钥；新建时（或填了新密钥时）用 APIKey 原文（只在调用那一刻存在）。
+type ProbeInput struct {
+	BaseURL    string
+	APIKey     string
+	ProviderID string
+}
+
+// ProbeModels 调 GET {base}/models 返回该接口支持的模型清单（只读探测）：
+// 不改任何存储、不进 token 账本（/models 不是计费调用）；同样受在途调用信号量约束。
+func (s *Service) ProbeModels(ctx context.Context, in ProbeInput) ([]string, error) {
+	base, err := NormalizeBaseURL(in.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	key := strings.TrimSpace(in.APIKey)
+	if key == "" {
+		if strings.TrimSpace(in.ProviderID) == "" {
+			return nil, &ValidationError{"api_key", "请填写 API Key（或编辑既有提供方时使用已保存的密钥）"}
+		}
+		_, key, err = s.providers.Credentials(in.ProviderID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := s.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer s.release()
+	return s.caller.ListModels(ctx, base, key)
+}
+
 // Test 发一条极短的请求验证「地址 + 密钥 + 模型」三者都通，并把结论记到提供方上。
 func (s *Service) Test(ctx context.Context, user, providerID, model string) (TestResult, ProviderView, error) {
 	p, ok := s.providers.Get(providerID)

@@ -335,6 +335,15 @@ export interface LLMProviderInput {
   note: string
   version?: number
 }
+/** 「获取模型列表」探测：按已填的地址与密钥（或既有提供方保存的密钥）拉取上游 /models。 */
+export interface LLMModelProbeInput {
+  base_url: string
+  api_key?: string
+  provider_id?: string
+}
+export interface LLMModelProbeResult {
+  models: string[]
+}
 export interface LLMUsage {
   prompt_tokens: number
   completion_tokens: number

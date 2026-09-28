@@ -14,6 +14,7 @@
 | [`internal/geoip/`](internal/geoip/) | ip2region 离线归属地（数据内嵌 `data/`，内网 / 保留地址单独分类） |
 | [`internal/audit/`](internal/audit/) | 操作审计：JSONL 追加 + 轮转 + 内存环形查询 |
 | [`internal/topology/`](internal/topology/) | 内存计数 → 拓扑视图 |
+| [`internal/llm/`](internal/llm/) | **大模型接入（基础能力）**：提供方登记（密钥 AES-256-GCM 落盘、只回脱敏提示）、连通测试、按已填信息探测可用模型（`/models`）、token 账本；出站调用经开源库 [go-openai](https://github.com/sashabaranov/go-openai)（Apache-2.0）——**不跟随重定向、错误回显 scrub、响应体积上限**等安全不变量在 `client.go` 里自持。供分析与后续 AI 模块统一调用（UI 入口在「系统 · 大模型接入」），不与任何消费方耦合 |
 | [`ui/`](ui/) | Vue 3 + Vite + TS 前端（独立工程；两套主题：蜃海（深色）/ 晨雾（亮色），点击才切换；动效恒开，仅尊重系统「减少动态效果」；`npm run build` 产物由 `deploy/docker/console-ui.Dockerfile` 打进 nginx） |
 
 接口契约（**权威**）：[`console-api.md`](../../docs/spec/console-api.md)（分开发布）
