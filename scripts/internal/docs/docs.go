@@ -21,4 +21,4 @@ func Present(root string) bool {
 }
 
 // SkipNote 是跳过时打印的那一行。统一文案，免得各工具各说各话、让人以为门禁坏了。
-const SkipNote = "跳过：设计文档不在本仓库（docs/ 不入库；见 README §3.3 与 .gitignore）—— 本项检查依赖它"
+const SkipNote = "跳过：设计文档不在本仓库（docs/ 不入库；见 README §8 与 .gitignore）—— 本项检查依赖它"
