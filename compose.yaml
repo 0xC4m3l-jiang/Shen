@@ -46,6 +46,7 @@ services:
       # 所有对宿主发布的端口都写在这里（发布的是共享命名空间里的监听）。默认只绑本机回环。
       - "${SHEN_BIND_ADDR:-127.0.0.1}:${SHEN_HTTP_PORT:-18080}:8080" # 业务入口（proxy 监听）
       - "${SHEN_BIND_ADDR:-127.0.0.1}:${SHEN_CONSOLE_PORT:-19444}:9444" # 管控台（console-ui / nginx 监听）
+      - "${SHEN_BIND_ADDR:-127.0.0.1}:${SHEN_GATEWAY_PORT:-19446}:9446" # 连接器拨入（gateway TLS；默认仅本机，生产经 L0/LB 暴露）
     extra_hosts:
       # Linux 下让容器能用 host.docker.internal 访问宿主（macOS / Windows 的 Docker Desktop 自带）。
       # 共享命名空间的服务不能各自设置 extra_hosts —— 只能写在 core 上。
@@ -116,6 +117,27 @@ services:
       SHEN_PROXY_LISTEN: 0.0.0.0:8080
       SHEN_PROXY_SHADOW: ${SHEN_PROXY_SHADOW:-true}
       SHEN_PROXY_LOG_REQUESTS: ${SHEN_PROXY_LOG_REQUESTS:-true} # 逐请求定位日志（生产叠加文件关闭）
+      # 反向隧道分流（可选）：指向网关字节桥（同命名空间回环）。空 = 全部直连 Upstream。
+      SHEN_PROXY_TUNNEL_GATEWAY: ${SHEN_PROXY_TUNNEL_GATEWAY:-}
+    <<: *restart
+
+  # ── 后端：连接器网关（反向隧道平台侧；业务侧用 shen-connector 拨入，零入站暴露）──────────
+  gateway:
+    build: { <<: *go-build, args: { SERVICE: ./modules/connector/gateway/cmd/gateway } }
+    image: ${SHEN_IMAGE_PREFIX:-shen}/gateway:${SHEN_VERSION:-dev}
+    profiles: [all, backend, connector]
+    network_mode: service:core
+    depends_on:
+      core: { condition: service_started }
+      console-api: { condition: service_healthy }
+    environment:
+      SHEN_GATEWAY_LISTEN: 0.0.0.0:9446 # 连接器拨入（TLS）；生产由 L0/LB 终结或直暴，证书经 secrets 挂载
+      SHEN_GATEWAY_TLS_CERT: /run/secrets/gateway_tls_cert
+      SHEN_GATEWAY_TLS_KEY: /run/secrets/gateway_tls_key
+      SHEN_GATEWAY_BRIDGE: 127.0.0.1:9447 # 供 proxy 取流的回环字节桥（只绑回环）
+      SHEN_GATEWAY_CONSOLE: http://127.0.0.1:9445
+      SHEN_GATEWAY_INTEGRATION_TOKEN: ${SHEN_GATEWAY_INTEGRATION_TOKEN:-} # 控制台集成令牌（生产必须显式设置）
+      SHEN_GATEWAY_NODE: ${SHEN_GATEWAY_NODE:-gateway-1}
     <<: *restart
 
   # ── 后端：L4 近线分析（读遥测 → 结论上报；不在业务路径上）────────────────────────────

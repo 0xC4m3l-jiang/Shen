@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>蜃楼 · 视角二：流量如何被欺骗与导流</title>
+<!--
+  阅读顺序（自上而下 / 自左向右）：
+    ① 外部流量从左侧进入 Shen 平台的入口（L1 适配器 = 反向代理前置，即「流量检测管控」的执行点）
+    ② 卡片内是请求处理链 ①..⑤（会话身份 → 专属诱饵路由 → 白名单/缓存短路 → 调核心判定 → 三值执行），⑥ 为异步遥测
+    ③ 判定结果三值分流（主干 bus + 三条彩色支线）：
+         route_origin → 业务落点：反向代理把请求送到后台服务（隧道回源 或 直连上游）
+         route_mirage → 欺骗落点：恶意流量被引进蜜罐（蜜罐是「被访问方」，不是平台主动去访问）
+         block        → 拦截：明确恶意直接 403，不落地任何后端
+  排版约定（页内 layoutReport() 会检查）：
+    1) 通道：纵向 x=315（平台左内缘走线）、x=1150（三值分流主干）、横向 y=690/990（底部行线）；
+    2) 连线一律正交折线（wp 显式给折点），端点锚在框边界；分流用「主干 + 支线」避免异色线叠压；
+    3) 标签 lp 显式定位，禁止压框或互相重叠。
+-->
+<style>
+  :root{ --ink:#0f172a; --sub:#64748b; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;background:#eef2f7;padding:24px}
+  #canvas{position:relative;width:1700px;height:1256px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;
+    background-image:radial-gradient(#e6ecf3 1px,transparent 1px);background-size:24px 24px;box-shadow:0 18px 50px rgba(15,23,42,.14)}
+  .head{position:absolute;left:40px;top:34px;width:1620px;height:56px;display:flex;align-items:center;gap:14px}
+  .head .h1{font-size:19px;font-weight:800;color:#0f172a}
+  .head .h2{font-size:12.5px;color:#64748b}
+  .head .badge{margin-left:auto;font-size:11.5px;font-weight:600;color:#6d28d9;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:999px;padding:4px 12px}
+  .zone{position:absolute;border-radius:18px;border:1px solid}
+  .zone>.zl{position:absolute;top:14px;left:18px;font-size:13px;font-weight:700;letter-spacing:.08em}
+  .zone>.zs{position:absolute;top:34px;left:18px;font-size:11px;color:var(--sub)}
+  .z-entry{background:rgba(148,163,184,.08);border-color:rgba(148,163,184,.5);border-style:dashed} .z-entry>.zl{color:#475569}
+  .z-platform{background:linear-gradient(180deg,rgba(8,145,178,.06),rgba(124,58,237,.05));border-color:rgba(8,145,178,.38)} .z-platform>.zl{color:#0e7490}
+  .z-obs{background:rgba(37,99,235,.05);border-color:rgba(37,99,235,.35)} .z-obs>.zl{color:#1d4ed8}
+  .card{position:absolute;background:#fff;border:1px solid rgba(8,145,178,.5);border-radius:16px;box-shadow:0 10px 26px rgba(15,23,42,.1)}
+  .chip{position:absolute;background:#f8fbff;border:1px solid #bae6fd;border-radius:11px;padding:7px 9px;text-align:center;display:flex;flex-direction:column;justify-content:center;gap:3px}
+  .chip .n{font-size:10px;font-weight:800;color:#0284c7;letter-spacing:.06em}
+  .chip .t{font-size:11.5px;font-weight:600;color:#0f172a;line-height:1.3}
+  .chip.alt{background:#f8fafc;border-color:#e2e8f0}
+  .chip.alt .n{color:#64748b}
+  .fallback{position:absolute;font-size:11px;color:#64748b;line-height:1.7}
+  .fallback b{color:#334155}
+  .node{position:absolute;background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:10px 12px;box-shadow:0 6px 18px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:5px}
+  .node .nt{font-size:13.5px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:6px;line-height:1.25}
+  .node .nt .dot{width:9px;height:9px;border-radius:3px;flex:none}
+  .node .mod{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:#64748b;overflow-wrap:anywhere}
+  .node .ns{font-size:10.5px;color:var(--sub);line-height:1.5}
+  .node .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:auto}
+  .node .chips span{font-size:10px;color:#334155;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:7px;padding:2px 6px}
+  .mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  .k-client{border-color:rgba(100,116,139,.5)} .k-client .dot{background:#64748b}
+  .k-core{border-color:rgba(8,145,178,.6);background:linear-gradient(180deg,#f0fdff,#fff)} .k-core .dot{background:#0891b2}
+  .k-mirage{border-color:rgba(124,58,237,.6);background:linear-gradient(180deg,#faf5ff,#fff)} .k-mirage .dot{background:#7c3aed}
+  .k-decoy{border-color:rgba(217,119,6,.6);background:linear-gradient(180deg,#fffbeb,#fff)} .k-decoy .dot{background:#d97706}
+  .k-block{border-color:rgba(220,38,38,.6);background:linear-gradient(180deg,#fef2f2,#fff)} .k-block .dot{background:#dc2626}
+  .k-tunnel{border-color:rgba(5,150,105,.6);background:linear-gradient(180deg,#ecfdf5,#fff)} .k-tunnel .dot{background:#059669}
+  .k-direct{border-color:rgba(5,150,105,.4)} .k-direct .dot{background:#34d399}
+  .k-console{border-color:rgba(37,99,235,.55);background:linear-gradient(180deg,#eff6ff,#fff)} .k-console .dot{background:#2563eb}
+  .k-analysis{border-color:rgba(79,70,229,.55);background:linear-gradient(180deg,#eef2ff,#fff)} .k-analysis .dot{background:#4f46e5}
+  svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .elabel{font-size:11.5px;font-weight:600;fill:#334155;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+  .flow{stroke-dasharray:9 7;animation:dash 1.1s linear infinite}
+  @keyframes dash{to{stroke-dashoffset:-32}}
+  .legend{position:absolute;left:40px;bottom:26px;width:1620px;height:60px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;display:flex;align-items:center;gap:22px;padding:0 22px;box-shadow:0 6px 18px rgba(15,23,42,.06)}
+  .legend .grp{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;font-weight:600;white-space:nowrap}
+  .legend .sw{width:26px;height:0;border-top-width:3px;border-top-style:solid}
+  .legend .swd{width:26px;height:0;border-top-width:3px;border-top-style:dashed}
+  .legend .sep{width:1px;height:32px;background:#e2e8f0}
+</style>
+</head>
+<body>
+<div id="canvas">
+
+  <div class="head">
+    <span class="h1">视角二 · 流量进入 Shen 后如何被检测、分流与导流</span>
+    <span class="h2">外部流量 → 反向代理检测管控 → 正常流量连后台服务 · 恶意流量被引进蜜罐</span>
+    <span class="badge">流量视角</span>
+  </div>
+
+  <div class="zone z-entry" style="left:40px;top:130px;width:240px;height:870px">
+    <div class="zl">外部流量</div><div class="zs">不可信来源</div>
+  </div>
+  <div class="zone z-platform" style="left:300px;top:130px;width:1360px;height:800px">
+    <div class="zl">蜃楼平台 · Shen（流量检测与管控）</div><div class="zs">判定只发生在核心；反向代理只执行；任何异常一律放行业务</div>
+  </div>
+  <div class="zone z-obs" style="left:300px;top:960px;width:1360px;height:180px">
+    <div class="zl">观测与分析 · 旁路只读</div><div class="zs">不参与请求路径：判定流、告警与近线结论只用于观测</div>
+  </div>
+
+  <!-- 外部流量 -->
+  <div class="node k-client" id="u1" style="left:60px;top:240px;width:180px;height:100px">
+    <div class="nt"><i class="dot"></i>正常用户</div>
+    <div class="ns">浏览器访问真实域名，期望正常业务</div>
+  </div>
+  <div class="node k-client" id="u2" style="left:60px;top:390px;width:180px;height:100px">
+    <div class="nt"><i class="dot"></i>扫描器 / AI Agent</div>
+    <div class="ns">批量探测，伪装成无头浏览器</div>
+  </div>
+  <div class="node k-client" id="u3" style="left:60px;top:540px;width:180px;height:100px">
+    <div class="nt"><i class="dot"></i>攻击探针</div>
+    <div class="ns">敏感路径 / 注入 / 路径穿越组合拳</div>
+  </div>
+
+  <!-- 入口 + 处理链卡片 -->
+  <div class="card" id="proxy" data-container="1" style="left:330px;top:190px;width:780px;height:260px"></div>
+  <div style="position:absolute;left:348px;top:190px;font-size:14px;font-weight:700;color:#0f172a">反向代理 · L1 适配器（流量检测管控的执行点）</div>
+  <div style="position:absolute;left:348px;top:212px;font-size:11px;color:#64748b">模块 modules/deception/proxy · 内嵌 Caddy：按序走处理链，产出「决策 + 后端地址」，转发不产生判定</div>
+  <div class="chip" id="s1" style="left:348px;top:260px;width:134px;height:64px"><span class="n">①</span><span class="t">会话身份</span></div>
+  <div class="chip" id="s2" style="left:496px;top:260px;width:134px;height:64px"><span class="n">②</span><span class="t">专属诱饵路由</span></div>
+  <div class="chip" id="s3" style="left:644px;top:260px;width:134px;height:64px"><span class="n">③</span><span class="t">白名单 / 缓存短路</span></div>
+  <div class="chip" id="s5" style="left:792px;top:260px;width:134px;height:64px"><span class="n">④</span><span class="t">调核心判定</span></div>
+  <div class="chip" id="s6" style="left:940px;top:260px;width:134px;height:64px"><span class="n">⑤</span><span class="t">三值执行</span></div>
+  <div class="chip alt" id="s7" style="left:348px;top:356px;width:200px;height:52px"><span class="n">⑥ 异步遥测（旁路）</span><span class="t">有界队列 · 满即丢弃</span></div>
+  <div class="fallback" style="left:330px;top:660px;width:270px">
+    <b>兜底纪律</b>：判定超时 / 核心故障 / 未识别 ⇒ 一律放行业务；幻境不可用 ⇒ 回落业务；诱饵故障 ⇒ 固定 502、绝不回源。
+  </div>
+
+  <!-- 核心判定 -->
+  <div class="node k-core" id="core" style="left:740px;top:520px;width:340px;height:150px">
+    <div class="nt"><i class="dot"></i>核心 · 判定与三值</div>
+    <div class="mod">common/core</div>
+    <div class="ns">风险分 → 三值决策 + 灰度；策略面 Pull/Ack</div>
+    <div class="chips"><span>judge</span><span>director</span><span>shadow 影子</span></div>
+  </div>
+
+  <!-- 业务落点（正常流量） -->
+  <div class="node k-direct" id="direct" style="left:620px;top:720px;width:300px;height:130px">
+    <div class="nt"><i class="dot"></i>直接放行上游后端</div>
+    <div class="ns">未接入隧道的服务：反向代理直连 nginx / Sidecar</div>
+    <div class="chips"><span class="mono">route_origin · 否</span><span>白名单 / 缓存命中</span></div>
+  </div>
+  <div class="node k-tunnel" id="tunnel" style="left:1180px;top:636px;width:480px;height:146px">
+    <div class="nt"><i class="dot"></i>经隧道回源 → 连接器 → 真实业务</div>
+    <div class="mod">modules/connector/gateway → sdk</div>
+    <div class="ns">反向代理把请求交给网关字节桥，经 yamux 流送达连接器，回环转发 127.0.0.1 的业务</div>
+    <div class="chips"><span class="mono">route_origin · 是</span><span>字节桥 :9447</span><span>yamux 流</span><span>回环转发</span></div>
+  </div>
+
+  <!-- 欺骗落点（恶意流量被送进去） -->
+  <div class="node k-decoy" id="decoy" style="left:355px;top:501px;width:255px;height:130px">
+    <div class="nt"><i class="dot"></i>专属诱饵投递</div>
+    <div class="mod">common/core/internal/decoy</div>
+    <div class="ns">命中专属诱饵路径即投递蜜罐层</div>
+    <div class="chips"><span>被恶意流量访问</span><span>故障固定 502</span></div>
+  </div>
+  <div class="node k-mirage" id="mirage" style="left:1180px;top:466px;width:480px;height:126px">
+    <div class="nt"><i class="dot"></i>幻境后端 · honeypot-web</div>
+    <div class="mod">modules/honeypot/web</div>
+    <div class="ns">合成管理台 + AI 欺骗内容注入：恶意流量在此继续操作，攻击链被完整记录</div>
+    <div class="chips"><span class="mono">route_mirage</span><span>被恶意流量访问</span><span>以假乱真</span></div>
+  </div>
+
+  <!-- 拦截 -->
+  <div class="node k-block" id="block" style="left:1180px;top:822px;width:480px;height:96px">
+    <div class="nt"><i class="dot"></i>403 拦截</div>
+    <div class="ns">只用于明确恶意 · 默认不产出：不落地任何后端，直接结束请求</div>
+    <div class="chips"><span class="mono">block</span><span>恶意流量终结</span></div>
+  </div>
+
+  <!-- 观测与分析 -->
+  <div class="node k-console" id="console" style="left:330px;top:1014px;width:340px;height:116px">
+    <div class="nt"><i class="dot"></i>管控台 · 判定流 / 告警</div>
+    <div class="ns">逐请求一行（决策 / 信号 / 风险分），点行看逐跳链路 DAG</div>
+  </div>
+  <div class="node k-analysis" id="analysis" style="left:740px;top:1014px;width:400px;height:116px">
+    <div class="nt"><i class="dot"></i>AI 能力 · L4 近线分析</div>
+    <div class="ns">意图 / 攻击链 / 策略结论回写控制台</div>
+    <div class="chips"><span>内容清单（护栏）</span></div>
+  </div>
+
+  <div class="legend">
+    <div class="grp"><span class="sw" style="border-top-color:#334155"></span>进入平台</div>
+    <div class="grp"><span class="sw" style="border-top-color:#0891b2"></span>判定 · 处理链</div>
+    <div class="grp"><span class="sw" style="border-top-color:#059669"></span>放行 → 后台服务（隧道 / 直连）</div>
+    <div class="grp"><span class="sw" style="border-top-color:#d97706"></span>诱饵投递（蜜罐层）</div>
+    <div class="grp"><span class="sw" style="border-top-color:#7c3aed"></span>改道幻境（蜜罐）</div>
+    <div class="grp"><span class="sw" style="border-top-color:#dc2626"></span>拦截 403</div>
+    <div class="sep"></div>
+    <div class="grp"><span class="swd" style="border-top-color:#64748b"></span>遥测 · 观测（旁路只读）</div>
+  </div>
+
+  <!-- 连线层放在最末：绘制在分区底色与框之上，箭头/连线不会被遮挡 -->
+  <svg class="wires" id="wires"></svg>
+</div>
+
+<script>
+const N = (id) => document.getElementById(id);
+const Z = () => parseFloat(document.body.style.zoom || '1') || 1;
+const rect = (id) => { const r = N(id).getBoundingClientRect(), c = N('canvas').getBoundingClientRect(), z = Z();
+  return { x:(r.left-c.left)/z, y:(r.top-c.top)/z, w:r.width/z, h:r.height/z }; };
+// a/b = 显式端点（主干/分支线）；noArrow = 主干不带箭头；own = 该线允许贴住的框
+const endOf = (e, which, x, side, off) => (which === 'a' ? e.a : e.b) || anchor(x, side, off);
+const anchor = (id, side, off = .5) => { const r = rect(id);
+  if (side === 'l') return [r.x, r.y + r.h * off];
+  if (side === 'r') return [r.x + r.w, r.y + r.h * off];
+  if (side === 't') return [r.x + r.w * off, r.y];
+  return [r.x + r.w * off, r.y + r.h]; };
+
+const COLOR = { bus:'#64748b', client:'#334155', judge:'#0891b2', bypass:'#059669', mirage:'#7c3aed', decoy:'#d97706',
+  block:'#dc2626', tunnel:'#059669', telemetry:'#64748b', obs:'#2563eb' };
+const WIDTH = { bus:2.8, client:3, judge:3.2, bypass:2.6, mirage:3, decoy:3, block:2.8, tunnel:4, telemetry:2, obs:2.4 };
+
+const EDGES = [
+  // ① 外部流量进入 Shen（反向代理前置）
+  { f:'u1', fs:'r', fo:.5, t:'proxy', ts:'l', to:.25, k:'client', lp:[285,272], label:'HTTPS',
+    wp:[[285,290],[285,255]] },
+  { f:'u2', fs:'r', fo:.5, t:'proxy', ts:'l', to:.5, k:'client', lp:[297,375], label:'扫描',
+    wp:[[297,440],[297,320]] },
+  { f:'u3', fs:'r', fo:.5, t:'proxy', ts:'l', to:.75, k:'client', lp:[309,478], label:'探针',
+    wp:[[309,590],[309,385]] },
+
+  // ② 处理链内部：④ 调核心判定 / 核心回执
+  { f:'s5', fs:'b', fo:.5, t:'core', ts:'t', to:.35, k:'judge', lp:[700,470], label:'④ 判定 ≤3ms（gRPC）', own:['proxy'] },
+  { f:'core', fs:'t', fo:.79, t:'s6', ts:'b', to:.5, k:'judge', lp:[1007,470], label:'三值决策回执', own:['proxy'] },
+
+  // ③ 短路：②专属诱饵 → 蜜罐层；③白名单/缓存 → 直连上游
+  { f:'s2', fs:'b', fo:.5, t:'decoy', ts:'t', to:.83, k:'decoy', lp:[470,472], label:'② 命中专属诱饵路径', own:['proxy'] },
+  { f:'s3', fs:'b', fo:.5, t:'direct', ts:'t', to:.5, k:'bypass', lp:[640,690], label:'③ 白名单 / 缓存命中 ⇒ 直连',
+    wp:[[711,690],[770,690]], own:['proxy'] },
+
+  // ④ 三值分流：主干（bus，无箭头）+ 三条彩色支线
+  { a:[1074,282], b:[1150,870], wp:[[1150,282]], k:'bus', lp:[1215,262], label:'三值分流', noArrow:1, own:['s6','proxy'] },
+  { a:[1150,529], t:'mirage', ts:'l', to:.5, k:'mirage', label:'' },
+  { a:[1150,709], t:'tunnel', ts:'l', to:.5, k:'tunnel', label:'' },
+  { a:[1150,870], t:'block', ts:'l', to:.5, k:'block', label:'' },
+
+  // ⑥ 遥测（旁路）：⑥ 芯片 → 管控台；核心 → 近线分析
+  { f:'s7', fs:'l', fo:.5, t:'console', ts:'t', to:.5, k:'telemetry', lp:[400,900], label:'⑥ 异步遥测',
+    wp:[[325,382],[325,908],[500,908]], own:['proxy'] },
+  { f:'core', fs:'b', fo:.88, t:'analysis', ts:'t', to:.9, k:'obs', lp:[1010,900], label:'遥测（近线分析）',
+    wp:[[1039,908],[1100,908]] },
+  { f:'analysis', fs:'l', fo:.5, t:'console', ts:'r', to:.5, k:'obs', lp:[705,1028], label:'结论回写' },
+];
+
+function pathOf(e) {
+  const a = endOf(e, 'a', e.f, e.fs, e.fo), b = endOf(e, 'b', e.t, e.ts, e.to);
+  if (e.wp) {
+    const pts = [[a[0], a[1]], ...e.wp.map(p => [p[0], p[1]]), [b[0], b[1]]];
+    const clean = pts.filter((p, i) => i === 0 || Math.abs(p[0]-pts[i-1][0]) > .5 || Math.abs(p[1]-pts[i-1][1]) > .5);
+    return { d: 'M' + clean.map(p => p.join(',')).join(' L') };
+  }
+  // 同轴或端点很近时走直线：贝塞尔在短间隙里会绕成 S 形
+  if (Math.abs(b[0]-a[0]) < 1.5 || Math.abs(b[1]-a[1]) < 1.5 || Math.hypot(b[0]-a[0], b[1]-a[1]) < 90)
+    return { d:`M${a[0]},${a[1]} L${b[0]},${b[1]}` };
+  const c = 55;
+  const c1 = e.fs === 'l' ? [a[0]-c, a[1]] : e.fs === 'r' ? [a[0]+c, a[1]] : [a[0], a[1]+(e.fs === 't' ? -c : c)];
+  const c2 = e.ts === 'l' ? [b[0]-c, b[1]] : e.ts === 'r' ? [b[0]+c, b[1]] : [b[0], b[1]+(e.ts === 't' ? -c : c)];
+  return { d:`M${a[0]},${a[1]} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${b[0]},${b[1]}` };
+}
+
+function draw() {
+  const svg = N('wires');
+  const mk = (tag, attrs) => { const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]); return el; };
+  svg.innerHTML = '';
+  const defs = mk('defs');
+  for (const k in COLOR) {
+    const m = mk('marker', { id:'t-'+k, viewBox:'0 0 10 10', refX:10, refY:5, markerWidth:9.5, markerHeight:9.5,
+      markerUnits:'userSpaceOnUse', orient:'auto-start-reverse' });
+    m.appendChild(mk('path', { d:'M0,0 L10,5 L0,10 z', fill:COLOR[k] }));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+  window.__drawErrors = [];
+  EDGES.forEach((e, ei) => {
+    let d;
+    try { ({ d } = pathOf(e)); }
+    catch (err) { window.__drawErrors.push('edge'+ei+'('+e.f+'→'+e.t+'): '+err.message); return; }
+    const p = mk('path', { d, fill:'none', stroke:COLOR[e.k], 'stroke-width':WIDTH[e.k],
+      'stroke-linecap':'round', 'stroke-linejoin':'round' });
+    if (!e.noArrow) p.setAttribute('marker-end', 'url(#t-' + e.k + ')');
+    if (e.k === 'telemetry') p.setAttribute('stroke-dasharray', '3 6');
+    if (e.k === 'obs') p.setAttribute('stroke-dasharray', '9 7');
+    if (e.k === 'tunnel' || e.k === 'client' || e.k === 'mirage') p.classList.add('flow');
+    svg.appendChild(p);
+    if (e.a) svg.appendChild(mk('circle', { cx:e.a[0], cy:e.a[1], r:3.4, fill:COLOR[e.k], stroke:'#fff', 'stroke-width':1.4 }));
+    if (!e.label) return;
+    const lines = Array.isArray(e.label) ? e.label : [e.label];
+    lines.forEach((text, i) => {
+      const t = mk('text', { x:e.lp[0], y:e.lp[1] + i * 14, 'text-anchor':'middle', class:'elabel', 'data-edge':ei });
+      t.textContent = text; svg.appendChild(t);
+    });
+  });
+}
+
+// ── 排版判据：连线穿框 / 贴框 / 线线叠压 / 线线交叉 / 标签重叠 / 标签压框 / 渲染条数 / 锚点缺失 ──
+function layoutReport() {
+  const cv = N('canvas'), cr = cv.getBoundingClientRect(), z = Z();
+  const boxes = [...cv.querySelectorAll('.node,.chip,.card')].map((el) => {
+    const r = el.getBoundingClientRect();
+    return { id: el.id || 'box', x:(r.left-cr.left)/z, y:(r.top-cr.top)/z, w:r.width/z, h:r.height/z };
+  });
+  const issues = [];
+  const drawn = [...N('wires').children].filter((el) => el.tagName === 'path');
+  const name = (i) => EDGES[i] ? (EDGES[i].f + '→' + EDGES[i].t) : ('#' + i);
+  const lbl = (i) => { const l = EDGES[i] && EDGES[i].label; return Array.isArray(l) ? l.join('') : (l || name(i)); };
+  if (drawn.length !== EDGES.length) issues.push({ renderMismatch:{ want:EDGES.length, got:drawn.length } });
+  for (const msg of (window.__drawErrors || [])) issues.push({ drawError: msg });
+  for (const e of EDGES) {
+    if (!e.a && !N(e.f)) issues.push({ missingAnchor: e.f });
+    if (!e.b && !N(e.t)) issues.push({ missingAnchor: e.t });
+  }
+
+  const samples = drawn.map((p) => { const len = p.getTotalLength(), pts = [];
+    for (let d = 0; d <= len; d += 3) pts.push(p.getPointAtLength(d)); return pts; });
+
+  // ① 穿框 / 贴框（距框边界 < 7px；两端 12px 接线区不计）
+  samples.forEach((pts, i) => {
+    const E = EDGES[i];
+    const own = new Set(E.own || []);
+    if (!E.a) own.add(E.f);
+    if (!E.b) own.add(E.t);
+    const hits = new Map(), hug = new Map();
+    pts.forEach((pt, pi) => {
+      const atEnd = pi < 4 || pi > pts.length - 5;   // 接线区：贴着自己出发/到达的框属正常
+      for (const b of boxes) {
+        if (own.has(b.id)) continue;
+        const dx = Math.max(b.x - pt.x, 0, pt.x - (b.x + b.w));
+        const dy = Math.max(b.y - pt.y, 0, pt.y - (b.y + b.h));
+        if (dx === 0 && dy === 0) { hits.set(b.id, (hits.get(b.id) || 0) + 1); continue; }
+        const dist = Math.hypot(dx, dy);
+        if (!atEnd && dist < 7 && (!hug.has(b.id) || hug.get(b.id) > dist)) hug.set(b.id, dist);
+      }
+    });
+    for (const [id, n] of hits) issues.push({ edge:name(i), label:lbl(i), crosses:id, samples:n });
+    for (const [id, dist] of hug) issues.push({ edge:name(i), label:lbl(i), hugs:id, gap:+dist.toFixed(1) });
+  });
+
+  // ② 线线叠压（长期共处同一 5px 格）
+  const grids = samples.map((pts) => { const m = new Map();
+    for (const pt of pts) { const k = Math.round(pt.x / 5) + ':' + Math.round(pt.y / 5); m.set(k, 1); } return m; });
+  for (let i = 0; i < grids.length; i++) for (let j = i + 1; j < grids.length; j++) {
+    let shared = 0; for (const k of grids[i].keys()) if (grids[j].has(k)) shared++;
+    if (shared > 3) issues.push({ lineOverlap:[name(i), name(j)], cells:shared });
+  }
+
+  // ③ 线线交叉（端点附近的相交是「接头」，不算交叉）
+  const segs = samples.map((pts) => { const c = pts.filter((_, k) => k % 2 === 0), out = [];
+    for (let k = 1; k < c.length; k++) out.push([c[k - 1], c[k]]); return out; });
+  const sgn = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const segHit = (a, b, c, d) => ((sgn(c, d, a) > 0) !== (sgn(c, d, b) > 0)) && ((sgn(a, b, c) > 0) !== (sgn(a, b, d) > 0));
+  const near = (p, q, t) => Math.abs(p.x - q.x) <= t && Math.abs(p.y - q.y) <= t;
+  let crossings = 0; const crossPairs = new Set();
+  for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++)
+    for (const s1 of segs[i]) for (const s2 of segs[j]) {
+      if (!segHit(s1[0], s1[1], s2[0], s2[1])) continue;
+      if (near(s1[0], s2[0], 4) || near(s1[0], s2[1], 4) || near(s1[1], s2[0], 4) || near(s1[1], s2[1], 4)) continue;
+      crossings++; crossPairs.add(name(i) + ' × ' + name(j));
+    }
+
+  // ⑥ 框必须完整落在所属分区内（中心在分区内 ⇒ 必须整体在内）
+  const zones = [...cv.querySelectorAll('.zone')];
+  for (const zEl of zones) {
+    const zr = zEl.getBoundingClientRect();
+    const Zc = { x:(zr.left-cr.left)/z, y:(zr.top-cr.top)/z, w:zr.width/z, h:zr.height/z };
+    for (const el of [...cv.querySelectorAll('.node,.chip,.note')]) {
+      if (zEl.contains(el)) continue;
+      const r = el.getBoundingClientRect();
+      const A = { x:(r.left-cr.left)/z, y:(r.top-cr.top)/z, w:r.width/z, h:r.height/z };
+      const cx = A.x + A.w / 2, cy = A.y + A.h / 2;
+      if (cx < Zc.x || cx > Zc.x + Zc.w || cy < Zc.y || cy > Zc.y + Zc.h) continue;
+      const over = Math.max(Zc.x - A.x, (A.x + A.w) - (Zc.x + Zc.w), Zc.y - A.y, (A.y + A.h) - (Zc.y + Zc.h));
+      if (over > 2) issues.push({ outOfZone:[el.id || el.className, zEl.querySelector('.zl') ? zEl.querySelector('.zl').textContent : 'zone'], over:+over.toFixed(0) });
+    }
+  }
+
+  // ⑤ 文字撑出框：内容高/宽超过框体（视觉上被截断或溢出到框外）
+  for (const el of [...cv.querySelectorAll('.node,.chip,.note,.walltag,.bl,.zl,.zs,.diamond')]) {
+    const dy = el.scrollHeight - el.clientHeight, dx = el.scrollWidth - el.clientWidth;
+    if (dy > 2 || dx > 2) issues.push({ textOverflow: el.id || el.className, overH:dy, overW:dx,
+      box:[el.clientWidth, el.clientHeight] });
+  }
+
+  // ④ 框压框（排除同一容器内的父子关系）
+  const els = [...cv.querySelectorAll('.node,.chip,.card,.walltag,.diamond,.note,.zl,.zs,.bl')];
+  for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+    const a = els[i], b = els[j];
+    if (a.contains(b) || b.contains(a)) continue;
+    if (a.dataset.container || b.dataset.container) continue; // 容器（卡片）与其上叠放的芯片不算压框
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const A = { x:(ra.left-cr.left)/z, y:(ra.top-cr.top)/z, w:ra.width/z, h:ra.height/z };
+    const B = { x:(rb.left-cr.left)/z, y:(rb.top-cr.top)/z, w:rb.width/z, h:rb.height/z };
+    const ox = Math.min(A.x+A.w, B.x+B.w) - Math.max(A.x, B.x);
+    const oy = Math.min(A.y+A.h, B.y+B.h) - Math.max(A.y, B.y);
+    if (ox > 2 && oy > 2) issues.push({ boxOverlap:[a.id || a.className, b.id || b.className], ox:+ox.toFixed(0), oy:+oy.toFixed(0) });
+  }
+
+  const labels = [...N('wires').querySelectorAll('text')].map((t) => {
+    const r = t.getBoundingClientRect();
+    return { group:t.getAttribute('data-edge'), txt:t.textContent,
+      x:(r.left-cr.left)/z, y:(r.top-cr.top)/z, w:r.width/z, h:r.height/z };
+  });
+  for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
+    const a = labels[i], b = labels[j];
+    if (a.group === b.group) continue;
+    if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h)
+      issues.push({ labelOverlap:[a.txt, b.txt] });
+  }
+  for (const l of labels) for (const b of boxes) {
+    if (l.x < b.x + b.w && b.x < l.x + l.w && l.y < b.y + b.h && b.y < l.y + l.h)
+      issues.push({ labelOnBox:[l.txt, b.id] });
+  }
+  return { boxes:boxes.length, edges:EDGES.length, rendered:drawn.length, crossings, crossPairs:[...crossPairs], issues };
+}
+window.layoutReport = layoutReport;
+
+window.addEventListener('load', draw);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+if (location.hash.includes('2x')) document.body.style.zoom = '2';
+</script>
+</body>
+</html>

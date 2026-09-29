@@ -94,7 +94,7 @@ docker compose -f compose.yaml -f deploy/docker/compose.verify-mirage.yaml up -d
 | `SHEN_CONSOLE_ALLOWED_ORIGINS` | 本机 19444 两个来源 | 浏览器 Origin 白名单（写请求还要过 CSRF 与 Sec-Fetch-Site 校验） |
 | `SHEN_CONSOLE_COOKIE_SECURE` | false（生产 true） | 会话 Cookie 的 Secure 属性 |
 | `SHEN_CONSOLE_BOOTSTRAP_PASSWORD` | admin（验证缺省） | 初始管理员口令：默认 admin/admin 便于验证（首登强制改密）；`random` = 随机生成写 `/data/bootstrap-admin.txt`；生产用 `*_FILE`/secrets 强制注入 |
-| `SHEN_CONSOLE_API_TOKEN` | 空 = 不启用 | 只读自动化令牌（`scripts/traffic/send.py` 等脚本用） |
+| `SHEN_CONSOLE_API_TOKEN` | 空 = 不启用 | 只读自动化令牌（`demo/traffic/send.py` 等脚本用） |
 | `SHEN_WEB_SCENARIO` / `SHEN_WEB_SCENARIOS_FILE` | contoso / 示例场景包 | 蜜罐场景 |
 | `SHEN_IMAGE_PREFIX` / `SHEN_VERSION` | shen / dev | 镜像命名；生产叠加要求**显式**设置 |
 

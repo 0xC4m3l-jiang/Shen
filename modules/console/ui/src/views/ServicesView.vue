@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowRight, Castle, Network, Plus, Search, TriangleAlert, UserRound } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import ServiceForm from '@/components/ServiceForm.vue'
 import StatePanel from '@/components/StatePanel.vue'
@@ -18,7 +18,9 @@ import { useLiveStore } from '@/stores/live'
 const auth = useAuthStore()
 const live = useLiveStore()
 const router = useRouter()
-const keyword = ref('')
+const route = useRoute()
+// 接入管理页「查看流量」跳转：用 focus 参数预填搜索（聚焦到该服务）。
+const keyword = ref(typeof route.query.focus === 'string' ? route.query.focus : '')
 const formOpen = ref(false)
 const presetHost = ref('')
 
@@ -86,7 +88,10 @@ function onSaved() {
           <div class="flex min-w-0 items-center gap-3">
             <div class="rounded-xl bg-gradient-to-br from-primary/25 to-accent/10 p-2.5 text-primary"><Network class="h-5 w-5" /></div>
             <div class="min-w-0">
-              <h3 class="truncate text-base font-semibold">{{ svc.name }}</h3>
+              <div class="flex items-center gap-2">
+                <h3 class="truncate text-base font-semibold">{{ svc.name }}</h3>
+                <Badge v-if="svc.source === 'connector'" tone="primary">连接器</Badge>
+              </div>
               <p class="truncate font-mono text-xs text-muted-foreground">{{ svc.upstream }}</p>
             </div>
           </div>

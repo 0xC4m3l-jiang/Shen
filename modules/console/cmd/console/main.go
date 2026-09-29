@@ -33,6 +33,7 @@ import (
 	"shen/modules/console/internal/api"
 	"shen/modules/console/internal/audit"
 	"shen/modules/console/internal/auth"
+	"shen/modules/console/internal/connector"
 	"shen/modules/console/internal/geoip"
 	"shen/modules/console/internal/llm"
 	"shen/modules/console/internal/registry"
@@ -88,6 +89,15 @@ func run(cfg config) error {
 	if llmSvc.MasterKeyGenerated() {
 		log.Printf("console: WARN 未设置 SHEN_CONSOLE_SECRET_KEY ⇒ 已在数据目录生成大模型密钥的主密钥 %s（与密文同卷；生产请经 secrets 注入 SHEN_CONSOLE_SECRET_KEY_FILE）", llm.MasterKeyFile)
 	}
+	// 连接器接入：凭证表落盘（key 只存 SHA-256 哈希）；会话观测表内存态。
+	// 集成令牌未配置时集成面统一 503（管理面仍可用，只是网关连不上）。
+	connectorSvc, err := connector.Open(filepath.Join(cfg.DataDir, "connector-credentials.json"), nil)
+	if err != nil {
+		return err
+	}
+	if cfg.IntegrationToken == "" {
+		log.Printf("console: WARN 未设置 SHEN_CONSOLE_INTEGRATION_TOKEN ⇒ 连接器集成面未启用（网关无法拉取凭证；接入管理页的签发功能不受影响）")
+	}
 
 	// 与核心之间走本机明文 gRPC（同一网络命名空间的回环；跨节点必须换 mTLS）。
 	conn, err := grpc.NewClient(cfg.CoreAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -99,7 +109,8 @@ func run(cfg config) error {
 	server := api.New(telemetryv1.NewDeceptionTelemetryClient(conn), authSvc, reg, geo, aud, api.Config{
 		AllowedOrigins: cfg.AllowedOrigins, TrustedProxies: cfg.TrustedProxies, TokenSources: cfg.TokenSources,
 		CookieSecure: cfg.CookieSecure, SessionAbsolute: cfg.SessionTTL, AlertScore: cfg.AlertScore,
-		MaxStreams: cfg.MaxStreams, LLM: llmSvc, Logf: log.Printf,
+		MaxStreams: cfg.MaxStreams, LLM: llmSvc, Connector: connectorSvc,
+		IntegrationToken: cfg.IntegrationToken, Logf: log.Printf,
 	})
 	warnings(cfg)
 

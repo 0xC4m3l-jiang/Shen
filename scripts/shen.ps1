@@ -174,7 +174,7 @@ switch ($Command) {
     # 伪造流量 + 从观测面核对判定（完整验证；参数原样传给 send.py，如 --check-l4 --explain）
     # 赋值加括号：值是函数引用（环境变量透传），不是实值 —— 也不该长成密钥赋值的形态（secrets-check 规则②）。
     $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
-    python (Join-Path $Root 'scripts/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
+    python (Join-Path $Root 'demo/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
     if ($LASTEXITCODE -ne 0) { Fail 'traffic 验证未通过（详见上方输出）' }
   }
   'doctor' {
@@ -189,7 +189,7 @@ switch ($Command) {
     $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
     Invoke-Compose @('ps')
     $report = Join-Path $RunDir ("verify-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    python (Join-Path $Root 'scripts/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl), '--check-l4', '--check-graph', '--explain', '--report', $report) + $Rest
+    python (Join-Path $Root 'demo/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl), '--check-l4', '--check-graph', '--explain', '--report', $report) + $Rest
     if ($LASTEXITCODE -ne 0) { Fail "verify 未通过；报告：$report" }
     Write-Host "报告：$report"
   }

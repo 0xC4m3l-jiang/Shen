@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>蜃楼 · 视角一：真实业务接入并运行</title>
+<!--
+  排版约定（页内 layoutReport() 会检查）：
+  1) 双域布局：客户网络 x=40..600，防火墙 x=612..624，蜃楼平台 x=640..1660；
+     右侧纵向通道 x=1050（网关/引擎 ↔ 管控台）、x=1420（管控台 ↔ 管理员）；
+     横向通道 y=110（域外交付线）、y=365 / y=585（管控台列之间的横向连接）。
+  2) 连线一律正交折线（wp 显式给折点），端点锚在框边界上，箭头尖端精确落在端点。
+  3) 标签用 lp 定位，禁止压框或互相重叠；①..⑩ 与正文步骤表一一对应。
+-->
+<style>
+  :root{ --ink:#0f172a; --sub:#64748b; }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;background:#eef2f7;padding:24px}
+  #canvas{position:relative;width:1700px;height:905px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;overflow:hidden;
+    background-image:radial-gradient(#e6ecf3 1px,transparent 1px);background-size:24px 24px;box-shadow:0 18px 50px rgba(15,23,42,.14)}
+  .head{position:absolute;left:40px;top:34px;width:1620px;height:56px;display:flex;align-items:center;gap:14px}
+  .head .h1{font-size:19px;font-weight:800;color:#0f172a}
+  .head .h2{font-size:12.5px;color:#64748b}
+  .head .badge{margin-left:auto;font-size:11.5px;font-weight:600;color:#0369a1;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:999px;padding:4px 12px}
+  .zone{position:absolute;border-radius:18px;border:1px solid}
+  .zone>.zl{position:absolute;top:14px;left:18px;font-size:13px;font-weight:700;letter-spacing:.08em}
+  .zone>.zs{position:absolute;top:34px;left:18px;font-size:11px;color:var(--sub)}
+  .z-left{background:rgba(5,150,105,.06);border-color:rgba(5,150,105,.42)} .z-left>.zl{color:#047857}
+  .z-right{background:linear-gradient(180deg,rgba(8,145,178,.06),rgba(37,99,235,.06));border-color:rgba(8,145,178,.38)} .z-right>.zl{color:#0e7490}
+  .wall{position:absolute;border-radius:6px;background:repeating-linear-gradient(45deg,rgba(220,38,38,.18) 0 8px,rgba(220,38,38,.05) 8px 16px);border:1px solid rgba(220,38,38,.35)}
+  .walltag{position:absolute;background:#fff5f5;border:1px solid rgba(220,38,38,.4);color:#b91c1c;border-radius:10px;padding:6px 10px;font-size:11px;font-weight:600;text-align:center;line-height:1.4}
+  .node{position:absolute;background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:11px 13px;box-shadow:0 6px 18px rgba(15,23,42,.08);display:flex;flex-direction:column;gap:5px}
+  .node .nt{font-size:14px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:7px;line-height:1.25}
+  .node .nt .dot{width:9px;height:9px;border-radius:3px;flex:none}
+  .node .mod{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:10px;color:#64748b;overflow-wrap:anywhere}
+  .node .ns{font-size:11px;color:var(--sub);line-height:1.5}
+  .node .chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:auto}
+  .node .chips span{font-size:10px;color:#334155;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:7px;padding:2px 6px}
+  .mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  .k-dev{border-color:rgba(100,116,139,.5)} .k-dev .dot{background:#64748b}
+  .k-gateway{border-color:rgba(13,148,136,.6)} .k-gateway .dot{background:#0d9488}
+  .k-engine{border-color:rgba(8,145,178,.6)} .k-engine .dot{background:#0891b2}
+  .k-console{border-color:rgba(37,99,235,.55)} .k-console .dot{background:#2563eb}
+  .k-store{border-color:rgba(37,99,235,.4)} .k-store .dot{background:#60a5fa}
+  .k-biz{border-color:rgba(5,150,105,.6);background:linear-gradient(180deg,#ecfdf5,#fff)} .k-biz .dot{background:#059669}
+  .note{position:absolute;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:10px 12px;font-size:11px;color:#475569;line-height:1.75}
+  .note b{color:#0f172a}
+  svg.wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .elabel{font-size:11.5px;font-weight:600;fill:#334155;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+  .flow{stroke-dasharray:9 7;animation:dash 1.1s linear infinite}
+  @keyframes dash{to{stroke-dashoffset:-32}}
+  .legend{position:absolute;left:40px;bottom:25px;width:1620px;height:60px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;display:flex;align-items:center;gap:26px;padding:0 22px;box-shadow:0 6px 18px rgba(15,23,42,.06)}
+  .legend .grp{display:flex;align-items:center;gap:9px;font-size:12px;color:#334155;font-weight:600;white-space:nowrap}
+  .legend .sw{width:28px;height:0;border-top-width:3px;border-top-style:solid}
+  .legend .swd{width:28px;height:0;border-top-width:3px;border-top-style:dashed}
+  .legend .sep{width:1px;height:32px;background:#e2e8f0}
+</style>
+</head>
+<body>
+<div id="canvas">
+
+  <div class="head">
+    <span class="h1">视角一 · 真实业务如何接入并运行</span>
+    <span class="h2">业务零改造 · 零入站暴露：接入的全部工作发生在业务之外</span>
+    <span class="badge">开发者视角</span>
+  </div>
+
+  <div class="zone z-left" style="left:40px;top:120px;width:560px;height:680px">
+    <div class="zl">客户网络 · 业务侧</div><div class="zs">开发者维护的进程与资产</div>
+  </div>
+  <div class="zone z-right" style="left:640px;top:120px;width:1020px;height:680px">
+    <div class="zl">蜃楼平台 · Shen</div><div class="zs">管控台（控制台运行位置）· 连接器网关 · 欺骗引擎</div>
+  </div>
+  <div class="wall" style="left:612px;top:150px;width:12px;height:630px"></div>
+  <div class="walltag" style="left:462px;top:138px;width:140px;height:46px">防火墙<br>入站全拒 · 仅出站</div>
+
+  <div class="node k-dev" id="dev" style="left:80px;top:200px;width:480px;height:90px">
+    <div class="nt"><i class="dot"></i>业务开发者 / 实施</div>
+    <div class="ns">拿到控制台签发的一次性密钥与接入代码（线下交付，不经过网络）</div>
+  </div>
+  <div class="node k-gateway" id="connector" style="left:80px;top:340px;width:480px;height:130px">
+    <div class="nt"><i class="dot"></i>连接器 / Go SDK</div>
+    <div class="mod">modules/connector/sdk · cmd/shen-connector</div>
+    <div class="ns mono">shen-connector 进程，或业务进程内嵌入 SDK</div>
+    <div class="chips"><span>外拨长连接</span><span>凭证 shc-…</span><span>断线退避重连</span><span>回环转发</span></div>
+  </div>
+  <div class="node k-biz" id="business" style="left:80px;top:515px;width:480px;height:120px">
+    <div class="nt"><i class="dot"></i>真实业务（原样运行）</div>
+    <div class="ns mono">127.0.0.1:9001 · 只听回环</div>
+    <div class="chips"><span>零入站暴露</span><span>零改造</span><span>不感知引擎</span></div>
+  </div>
+  <div class="note" style="left:80px;top:685px;width:480px;height:92px">
+    <b>零信任要点</b>：业务不开放任何入站端口；一 key 一服务、绑定域名白名单；吊销后 30 秒内连接被拒。
+  </div>
+
+  <div class="node k-gateway" id="gateway" style="left:700px;top:180px;width:300px;height:165px">
+    <div class="nt"><i class="dot"></i>连接器网关</div>
+    <div class="mod">modules/connector/gateway</div>
+    <div class="ns mono">TLS 拨入 :9446 · 回环字节桥 :9447</div>
+    <div class="chips"><span>凭证校验（恒定时间）</span><span>hosts 白名单</span><span>会话池</span><span>按 Host 路由</span></div>
+  </div>
+  <div class="node k-engine" id="engine" style="left:700px;top:395px;width:300px;height:240px">
+    <div class="nt"><i class="dot"></i>欺骗引擎（代理 + 核心）</div>
+    <div class="mod">modules/deception/proxy · common/core</div>
+    <div class="ns">proxy 执行三值 · 核心产生判定</div>
+    <div class="chips"><span>route_origin → 隧道放行</span><span>route_mirage → 幻境</span><span>block → 403</span></div>
+  </div>
+  <div class="node k-console" id="consoleUI" style="left:1100px;top:180px;width:280px;height:125px">
+    <div class="nt"><i class="dot"></i>管控台 · 前端</div>
+    <div class="mod">modules/console/ui</div>
+    <div class="ns">接入管理页：签发向导 · 连接卡片 · 接入指南</div>
+    <div class="chips"><span>在线 / 心跳 / RTT</span><span>吊销 · 重置</span></div>
+  </div>
+  <div class="node k-console" id="consoleAPI" style="left:1100px;top:375px;width:280px;height:125px">
+    <div class="nt"><i class="dot"></i>管控台 · API</div>
+    <div class="mod">modules/console/internal/connector</div>
+    <div class="ns mono">/api/v1/connectors · 集成面 /integration</div>
+    <div class="chips"><span>凭证签发 / 吊销</span><span>自动登记上报</span></div>
+  </div>
+  <div class="node k-store" id="store" style="left:1100px;top:540px;width:280px;height:115px">
+    <div class="nt"><i class="dot"></i>存储</div>
+    <div class="mod">modules/console/internal/filestore</div>
+    <div class="ns">凭证 SHA-256（不可逆）· 登记表 · 审计</div>
+  </div>
+  <div class="node k-dev" id="admin" style="left:1460px;top:180px;width:200px;height:120px">
+    <div class="nt"><i class="dot"></i>管理员</div>
+    <div class="ns">在管控台签发凭证、观测连接、处置异常</div>
+  </div>
+  <div class="note" style="left:700px;top:665px;width:680px;height:100px">
+    <b>接入完成后的运行态</b><br>
+    ① 连接器长期在线（心跳 15s），会话注册在网关与控制台；<br>
+    ② 外部访问「业务入口 + Host: demo.shop.local」→ 引擎判定放行 → 经隧道回到连接器 → 回环转发真实业务；<br>
+    ③ 控制台可随时吊销 / 重置密钥：旧连接在一个心跳周期内被拒，重连需要新 key。
+  </div>
+
+  <div class="legend">
+    <div class="grp"><span class="swd" style="border-top-color:#2563eb"></span>接入调用（签发 / 交付 / 握手 / 登记）</div>
+    <div class="grp"><span class="sw" style="border-top-color:#059669"></span>流量路径（放行 → 隧道 → 业务）</div>
+    <div class="grp"><span class="sw" style="border-top-color:#0891b2"></span>引擎内部（网关 → 欺骗引擎）</div>
+    <div class="sep"></div>
+    <div class="grp"><span class="sw" style="border-top-color:#2563eb"></span>管控（观测 / 吊销）</div>
+  </div>
+  <!-- 连线层放在最末：绘制在分区底色与框之上，箭头/连线不会被遮挡；
+       判据 layoutReport() 保证没有连线进入任何框内部，所以放上层不会盖住内容 -->
+  <svg class="wires" id="wires"></svg>
+</div>
+
+<script>
+const N = (id) => document.getElementById(id);
+const Z = () => parseFloat(document.body.style.zoom || '1') || 1;
+const rect = (id) => { const r = N(id).getBoundingClientRect(), c = N('canvas').getBoundingClientRect(), z = Z();
+  return { x:(r.left-c.left)/z, y:(r.top-c.top)/z, w:r.width/z, h:r.height/z }; };
+const anchor = (id, side, off = .5) => { const r = rect(id);
+  if (side === 'l') return [r.x, r.y + r.h * off];
+  if (side === 'r') return [r.x + r.w, r.y + r.h * off];
+  if (side === 't') return [r.x + r.w * off, r.y];
+  return [r.x + r.w * off, r.y + r.h]; };
+
+const COLOR = { dev:'#2563eb', flow:'#059669', internal:'#0891b2', manage:'#2563eb' };
+const WIDTH = { dev:2.4, flow:4, internal:3, manage:2.4 };
+
+// ①..⑩ 与 README 步骤表一一对应
+const EDGES = [
+  { f:'admin', fs:'l', fo:.5, t:'consoleUI', ts:'r', to:.46, k:'manage', lp:[1420,200], label:'① 签发凭证' },
+  { f:'consoleUI', fs:'b', fo:.3, t:'consoleAPI', ts:'t', to:.3, k:'manage', lp:[1120,330], label:'② 落库（SHA-256）' },
+  { f:'consoleUI', fs:'t', fo:.3, t:'dev', ts:'t', to:.458, k:'dev', lp:[740,97], label:'③ 一次性密钥 + 接入代码（线下交付）',
+    wp:[[1184,105],[300,105]] },
+  { f:'dev', fs:'b', fo:.458, t:'connector', ts:'t', to:.458, k:'dev', lp:[300,315], label:'④ 部署连接器（env / SDK 三行）' },
+  { f:'connector', fs:'r', fo:.3, t:'gateway', ts:'l', to:.727, k:'dev', lp:[300,492], label:'⑤ 外拨 TLS + 凭证握手（唯一出站）',
+    wp:[[660,379],[660,300]] },
+  { f:'gateway', fs:'r', fo:.5, t:'consoleAPI', ts:'l', to:.5, k:'dev', lp:[1030,366], label:'⑥ 校验 · key 拉取 · 自动登记 · 会话',
+    wp:[[1050,262],[1050,440]] },
+  { f:'consoleAPI', fs:'b', fo:.5, t:'store', ts:'t', to:.5, k:'dev', lp:[1290,522], label:'⑦ 登记 · 审计' },
+  { f:'gateway', fs:'b', fo:.5, t:'engine', ts:'t', to:.5, k:'internal', lp:[760,370], label:'⑧ 交给欺骗引擎（Host → 会话）' },
+  { f:'connector', fs:'b', fo:.5, t:'business', ts:'t', to:.5, k:'flow', lp:[500,492], label:'⑨ 回环转发 127.0.0.1' },
+  { f:'consoleAPI', fs:'t', fo:.64, t:'consoleUI', ts:'b', to:.64, k:'manage', lp:[1330,346], label:'⑩ 观测 / 吊销 / 重置' },
+];
+
+function pathOf(e) {
+  const a = anchor(e.f, e.fs, e.fo), b = anchor(e.t, e.ts, e.to);
+  if (e.wp) {
+    const pts = [[a[0], a[1]], ...e.wp.map(p => [p[0], p[1]]), [b[0], b[1]]];
+    const clean = pts.filter((p, i) => i === 0 || Math.abs(p[0]-pts[i-1][0]) > .5 || Math.abs(p[1]-pts[i-1][1]) > .5);
+    return { d: 'M' + clean.map(p => p.join(',')).join(' L') };
+  }
+  // 端点很近时直接直线：贝塞尔在短间隙里会绕成 S 形，看着像画歪了
+  if (Math.hypot(b[0]-a[0], b[1]-a[1]) < 90) return { d:`M${a[0]},${a[1]} L${b[0]},${b[1]}` };
+  const c = 55;
+  const c1 = e.fs === 'l' ? [a[0]-c, a[1]] : e.fs === 'r' ? [a[0]+c, a[1]] : [a[0], a[1]+(e.fs === 't' ? -c : c)];
+  const c2 = e.ts === 'l' ? [b[0]-c, b[1]] : e.ts === 'r' ? [b[0]+c, b[1]] : [b[0], b[1]+(e.ts === 't' ? -c : c)];
+  return { d:`M${a[0]},${a[1]} C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${b[0]},${b[1]}` };
+}
+
+function draw() {
+  const svg = N('wires');
+  const mk = (tag, attrs) => { const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]); return el; };
+  svg.innerHTML = '';
+  const defs = mk('defs');
+  for (const k in COLOR) {
+    const m = mk('marker', { id:'a-'+k, viewBox:'0 0 10 10', refX:10, refY:5, markerWidth:9.5, markerHeight:9.5,
+      markerUnits:'userSpaceOnUse', orient:'auto-start-reverse' });
+    m.appendChild(mk('path', { d:'M0,0 L10,5 L0,10 z', fill:COLOR[k] }));
+    defs.appendChild(m);
+  }
+  svg.appendChild(defs);
+  window.__drawErrors = [];
+  EDGES.forEach((e, ei) => {
+    let d;
+    try { ({ d } = pathOf(e)); }
+    catch (err) { window.__drawErrors.push('edge'+ei+'('+e.f+'→'+e.t+'): '+err.message); return; }
+    const p = mk('path', { d, fill:'none', stroke:COLOR[e.k], 'stroke-width':WIDTH[e.k],
+      'stroke-linecap':'round', 'stroke-linejoin':'round', 'marker-end':'url(#a-'+e.k+')' });
+    if (e.k === 'dev' || e.k === 'manage') p.setAttribute('stroke-dasharray', '9 7');
+    if (e.k === 'flow') p.classList.add('flow');
+    svg.appendChild(p);
+    if (!e.label) return;
+    const lines = Array.isArray(e.label) ? e.label : [e.label];
+    lines.forEach((text, i) => {
+      const t = mk('text', { x:e.lp[0], y:e.lp[1] + i * 14, 'text-anchor':'middle', class:'elabel', 'data-edge':ei });
+      t.textContent = text; svg.appendChild(t);
+    });
+  });
+}
+
+function layoutReport() {
+  const cv = N('canvas'), cr = cv.getBoundingClientRect(), z = Z();
+  const boxes = [...cv.querySelectorAll('.node,.note,.walltag')].map((el) => {
+    const r = el.getBoundingClientRect();
+    return { id: el.id || 'note', x:(r.left-cr.left)/z, y:(r.top-cr.top)/z, w:r.width/z, h:r.height/z };
+  });
+  const issues = [];
+  const drawn = [...N('wires').children].filter((el) => el.tagName === 'path'); // 只看连线，排除 <defs> 里的箭头
+  const name = (i) => EDGES[i] ? (EDGES[i].f + '→' + EDGES[i].t) : ('#' + i);
+  const lbl = (i) => { const l = EDGES[i] && EDGES[i].label; return Array.isArray(l) ? l.join('') : (l || name(i)); };
+  if (drawn.length !== EDGES.length) issues.push({ renderMismatch:{ want:EDGES.length, got:drawn.length } });
+  for (const msg of (window.__drawErrors || [])) issues.push({ drawError: msg });
+  if (drawn.length !== EDGES.length) issues.push({ renderMismatch:{ want:EDGES.length, got:drawn.length } });
+  for (const msg of (window.__drawErrors || [])) issues.push({ drawError: msg });
+  for (const e of EDGES) for (const id of [e.f, e.t]) { if (!N(id)) issues.push({ missingAnchor: id }); }
+
+  const samples = drawn.map((p) => { const len = p.getTotalLength(), pts = [];
+    for (let d = 0; d <= len; d += 3) pts.push(p.getPointAtLength(d)); return pts; });
+
+  // ① 穿框 / 贴框：点落框内 = 穿框；点距框边界 < 7px = 蹭着框走线
+  samples.forEach((pts, i) => {
+    const own = new Set([EDGES[i].f, EDGES[i].t]), hits = new Map(), hug = new Map();
+    for (const pt of pts) for (const b of boxes) {
+      if (own.has(b.id)) continue;
+      const dx = Math.max(b.x - pt.x, 0, pt.x - (b.x + b.w)), dy = Math.max(b.y - pt.y, 0, pt.y - (b.y + b.h));
+      if (dx === 0 && dy === 0) { hits.set(b.id, (hits.get(b.id) || 0) + 1); continue; }
+      const dist = Math.hypot(dx, dy);
+      if (dist < 7 && (!hug.has(b.id) || hug.get(b.id) > dist)) hug.set(b.id, dist);
+    }
+    for (const [id, n] of hits) issues.push({ edge:name(i), label:lbl(i), crosses:id, samples:n });
+    for (const [id, dist] of hug) issues.push({ edge:name(i), label:lbl(i), hugs:id, gap:+dist.toFixed(1) });
+  });
+
+  // ② 线线重叠：长期共处同一 5px 格 ⇒ 共线叠压（单纯交叉只碰 1~2 格，不算）
+  const grids = samples.map((pts) => { const m = new Map();
+    for (const pt of pts) { const k = Math.round(pt.x / 5) + ':' + Math.round(pt.y / 5); m.set(k, 1); } return m; });
+  for (let i = 0; i < grids.length; i++) for (let j = i + 1; j < grids.length; j++) {
+    let shared = 0; for (const k of grids[i].keys()) if (grids[j].has(k)) shared++;
+    if (shared > 3) issues.push({ lineOverlap:[name(i), name(j)], cells:shared });
+  }
+
+  // ③ 线线交叉（信息性：允许少量必要交叉，但成对交叉要能逐条说清）
+  const segs = samples.map((pts) => { const c = pts.filter((_, k) => k % 2 === 0), out = [];
+    for (let k = 1; k < c.length; k++) out.push([c[k - 1], c[k]]); return out; });
+  const sgn = (p, q, r) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); // SVGPoint 取 .x/.y，勿用下标
+  const segHit = (a, b, c, d) => ((sgn(c, d, a) > 0) !== (sgn(c, d, b) > 0)) && ((sgn(a, b, c) > 0) !== (sgn(a, b, d) > 0));
+  let crossings = 0; const crossPairs = new Set();
+  for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++)
+    for (const s1 of segs[i]) for (const s2 of segs[j])
+      if (segHit(s1[0], s1[1], s2[0], s2[1])) { crossings++; crossPairs.add(name(i) + ' × ' + name(j)); }
+
+  // ⑥ 框必须完整落在所属分区内（中心在分区内 ⇒ 必须整体在内）
+  const zones = [...cv.querySelectorAll('.zone')];
+  for (const zEl of zones) {
+    const zr = zEl.getBoundingClientRect();
+    const Zc = { x:(zr.left-cr.left)/z, y:(zr.top-cr.top)/z, w:zr.width/z, h:zr.height/z };
+    for (const el of [...cv.querySelectorAll('.node,.chip,.note')]) {
+      if (zEl.contains(el)) continue;
+      const r = el.getBoundingClientRect();
+      const A = { x:(r.left-cr.left)/z, y:(r.top-cr.top)/z, w:r.width/z, h:r.height/z };
+      const cx = A.x + A.w / 2, cy = A.y + A.h / 2;
+      if (cx < Zc.x || cx > Zc.x + Zc.w || cy < Zc.y || cy > Zc.y + Zc.h) continue;
+      const over = Math.max(Zc.x - A.x, (A.x + A.w) - (Zc.x + Zc.w), Zc.y - A.y, (A.y + A.h) - (Zc.y + Zc.h));
+      if (over > 2) issues.push({ outOfZone:[el.id || el.className, zEl.querySelector('.zl') ? zEl.querySelector('.zl').textContent : 'zone'], over:+over.toFixed(0) });
+    }
+  }
+
+  // ⑤ 文字撑出框：内容高/宽超过框体（视觉上被截断或溢出到框外）
+  for (const el of [...cv.querySelectorAll('.node,.chip,.note,.walltag,.bl,.zl,.zs,.diamond')]) {
+    const dy = el.scrollHeight - el.clientHeight, dx = el.scrollWidth - el.clientWidth;
+    if (dy > 2 || dx > 2) issues.push({ textOverflow: el.id || el.className, overH:dy, overW:dx,
+      box:[el.clientWidth, el.clientHeight] });
+  }
+
+  // ④ 框压框（排除同一容器内的父子关系）
+  const els = [...cv.querySelectorAll('.node,.chip,.card,.walltag,.diamond,.note,.zl,.zs,.bl')];
+  for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+    const a = els[i], b = els[j];
+    if (a.contains(b) || b.contains(a)) continue;
+    const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+    const A = { x:(ra.left-cr.left)/z, y:(ra.top-cr.top)/z, w:ra.width/z, h:ra.height/z };
+    const B = { x:(rb.left-cr.left)/z, y:(rb.top-cr.top)/z, w:rb.width/z, h:rb.height/z };
+    const ox = Math.min(A.x+A.w, B.x+B.w) - Math.max(A.x, B.x);
+    const oy = Math.min(A.y+A.h, B.y+B.h) - Math.max(A.y, B.y);
+    if (ox > 2 && oy > 2) issues.push({ boxOverlap:[a.id || a.className, b.id || b.className], ox:+ox.toFixed(0), oy:+oy.toFixed(0) });
+  }
+
+  const labels = [...N('wires').querySelectorAll('text')].map((t) => {
+    const r = t.getBoundingClientRect();
+    return { group:t.getAttribute('data-edge'), txt:t.textContent,
+      x:(r.left-cr.left)/z, y:(r.top-cr.top)/z, w:r.width/z, h:r.height/z };
+  });
+  for (let i = 0; i < labels.length; i++) for (let j = i + 1; j < labels.length; j++) {
+    const a = labels[i], b = labels[j];
+    if (a.group === b.group) continue;
+    if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h)
+      issues.push({ labelOverlap:[a.txt, b.txt] });
+  }
+  for (const l of labels) for (const b of boxes) {
+    if (l.x < b.x + b.w && b.x < l.x + l.w && l.y < b.y + b.h && b.y < l.y + l.h)
+      issues.push({ labelOnBox:[l.txt, b.id] });
+  }
+  return { boxes:boxes.length, edges:EDGES.length, rendered:drawn.length, crossings, crossPairs:[...crossPairs], issues };
+}
+window.layoutReport = layoutReport;
+
+window.addEventListener('load', draw);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(draw);
+if (location.hash.includes('2x')) document.body.style.zoom = '2';
+</script>
+</body>
+</html>

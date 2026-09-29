@@ -21,6 +21,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'password', name: 'password', component: () => import('@/views/PasswordView.vue'), meta: { title: '修改口令' } },
       { path: 'overview', name: 'overview', component: () => import('@/views/OverviewView.vue'), meta: { perm: 'overview:read', title: '总览' } },
       { path: 'services', name: 'services', component: () => import('@/views/ServicesView.vue'), meta: { perm: 'registry:read', title: '反向链接器' } },
+      { path: 'connectors', name: 'connectors', component: () => import('@/views/ConnectorsView.vue'), meta: { perm: 'registry:read', title: '接入管理' } },
       {
         path: 'services/:id',
         name: 'service-detail',

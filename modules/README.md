@@ -1,4 +1,4 @@
-# `modules/` —— 产品功能模块（三个大模块）
+# `modules/` —— 产品功能模块（四个大模块）
 
 > **开发从这里进去**：一个子目录 = 一个大模块。先看第一张表找到你要改的那件事在哪个子目录。
 
@@ -9,6 +9,7 @@
 | ① **欺骗层** —— 反向代理转发与 TLS · 响应改写注入 · 假路径 / 蜜饵 · 旁路镜像 · DNS 引流 · 网络欺骗声明式产物 | [`deception/`](deception/README.md) | [`adapter-proxy.md`](../docs/modules/adapter-proxy.md) · [`edge-injection.md`](../docs/modules/edge-injection.md) · [`adapter-mirror.md`](../docs/modules/adapter-mirror.md) · [`adapter-dns.md`](../docs/modules/adapter-dns.md) · [`netpolicy.md`](../docs/modules/netpolicy.md) | `go test ./modules/deception/...` |
 | ② **AI 蜜罐层** —— 蜜罐协议仿真入口 · 假 shell（未建） · 后端池对接 | [`honeypot/`](honeypot/README.md) | [`honeypot-protocol.md`](../docs/modules/honeypot-protocol.md) · [`honeypot-shell.md`](../docs/modules/honeypot-shell.md) | `go test ./modules/honeypot/...` |
 | ③ **管控平台** —— 只读观测台 · 页面与 HTTP 接口 · 流量日志视图 | [`console/`](console/README.md) | [`console.md`](../docs/modules/console.md) · [`console-api.md`](../docs/spec/console-api.md) | `go test ./modules/console/...` |
+| ④ **连接器** —— 反向隧道网关（连接器接入 · 会话池 · 字节桥）· 业务侧 SDK 与独立二进制 | [`connector/`](connector/README.md) | [`connector.md`](../docs/modules/connector.md)（发布树）· [`connector/README.md`](connector/README.md) | `go test ./modules/connector/...` |
 
 ## 这里**不**放什么（去隔壁）
 
@@ -28,6 +29,7 @@
 
 ## 索引
 
+- **看图**（架构 / 接入 / 流量）：[模块全景](../assets/architecture/panorama.html) · [开发者视角](../assets/architecture/developer-view.html) · [流量视角](../assets/architecture/traffic-view.html)
 - 分层 ↔ 目录 ↔ 用什么库 ↔ 怎么跑：[`_map.md`](../docs/modules/_map.md)
 - 三个大模块 ↔ 各平面的对应关系：[ADR-0028](../docs/background/decisions/0028-three-module-view.md)
 - 为什么是「两层容器 + 一个独立层」：[ADR-0030](../docs/background/decisions/0030-two-level-layout.md)

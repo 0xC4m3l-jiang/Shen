@@ -119,4 +119,10 @@ type Config struct {
 
 	// InjectContent 是 AI 欺骗内容的**本地兜底开关**（与策略面的 inject_enabled 取与，默认 false）。
 	InjectContent bool
+
+	// TunnelGateway 是反向隧道网关的回环字节桥地址（如 127.0.0.1:9447）。
+	// 配置后业务侧转发按请求 Host 分流：命中接入凭证白名单的域名经隧道送达
+	// 连接器背后的真实业务（零入站暴露）；未命中走 Upstream 直连（存量行为不变）。
+	// 空 = 隧道未启用，全部直连。
+	TunnelGateway string
 }

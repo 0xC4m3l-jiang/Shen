@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package connector.v1;
+
+option go_package = "shen/common/api/connector/v1;connectorv1";
+
+// 反向隧道连接器 · 控制信道契约（v1）
+//
+// ── 传输栈（数据面不走本契约，是裸 yamux 字节流）──────────────────────────
+//
+//   连接器 ──TLS 1.3──▶ 网关
+//     └─ yamux 会话
+//         ├─ 流 0：控制信道（本文件的消息，4 字节大端长度前缀分帧）
+//         └─ 流 N（N≥1）：数据面 —— 每条流是一个请求的裸字节管道，
+//                        网关与连接器两侧都是 io.Copy，零序列化。
+//
+// ── 为什么不是 gRPC（选型记录，详见 modules/connector/README.md）──────────
+//
+//   数据面要求最大吞吐与最小延迟：gRPC 会给每条消息叠加 protobuf 编码 + gRPC
+//   帧封装 + 双层流控，而字节管道让「HTTP 协议本身」直接成为隧道载荷。
+//   yamux 的流即 net.Conn，与标准库 http.Transport 的连接池（keepalive 即流
+//   复用）原生兼容 —— frp 的 TCP 面十年生产验证同款模式。控制信道是每连接
+//   一次的低频握手，proto 只在这里出现。
+//
+// ── 认证（v1：auth key；v2 预留 mTLS 第二因子）──────────────────────────
+//
+//   auth_key 由控制台签发（`shc-` 前缀 + 32 字节随机），仅在本握手的 TLS
+//   通道内出现一次明文；控制台只落 SHA-256 哈希，恒定时间比较防时序侧信道。
+//   key 与「服务名 + hosts 白名单」绑定：meta.hosts 必须是凭证白名单的子集，
+//   否则网关拒绝。字段 16 起为 v2 mTLS 预留位，v1 不填。
+
+// ServiceMeta 是连接器声明的服务元数据（握手时上报，网关校验后转发控制台自动登记）。
+message ServiceMeta {
+  // 服务名：与凭证绑定（凭证签发时声明，连接器不得改名）。
+  string name = 1;
+  // 本次接入声明的域名（必须是凭证 hosts 白名单的子集；网关按它建立 Host→会话路由）。
+  repeated string hosts = 2;
+  // 连接器侧真实业务地址（如 http://127.0.0.1:8080）——纯观测字段，控制台展示用。
+  string local_addr = 3;
+  // 连接器（SDK / shen-connector 二进制）版本——运维提示用。
+  string connector_version = 4;
+}
+
+// HandshakeRequest 是流 0 的第一条消息：认证 + 声明。
+message HandshakeRequest {
+  // shc- 开头的接入凭证；仅此一次跨线明文（TLS 内）。
+  string auth_key = 1;
+  ServiceMeta meta = 2;
+
+  // ── v2 预留：mTLS 第二因子（v1 不填）────────────────────────────────
+  // 客户端证书 PEM（网关持有 CA 时校验；与 auth_key 构成双因子）。
+  string client_cert_pem = 16;
+}
+
+// HandshakeResponse 是握手的应答。
+message HandshakeResponse {
+  bool ok = 1;
+  // 网关分配的会话 ID（观测面与日志对账用）。
+  string session_id = 2;
+  // 失败原因（面向运维的人话，**不含密钥**）。
+  string error = 3;
+  // 心跳间隔（秒；yamux keepalive ping 周期，0 = 网关默认）。
+  uint32 keepalive_seconds = 4;
+}
+
+// SessionEvent 是控制信道上的异步事件（握手成功后，双向皆可发）。
+//
+// v1 只定义一种用途：连接器主动告知「即将下线」（kind="closing"），
+// 让网关与会话观测面把「计划内下线」与「意外掉线」区分开——审计质量的关键。
+message SessionEvent {
+  string session_id = 1;
+  // closing：连接器主动下线。其余取值 v2 扩展。
+  string kind = 2;
+  string detail = 3;
+}

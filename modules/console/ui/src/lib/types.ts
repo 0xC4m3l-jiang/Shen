@@ -130,6 +130,8 @@ export interface Service {
   description: string
   enabled: boolean
   version: number
+  /** 登记来源：空/manual = 手动登记；connector = 连接器自动登记 */
+  source?: string
   created_at: string
   updated_at: string
   updated_by: string
@@ -417,4 +419,64 @@ export interface UsageResponse {
   summary: UsageSummary
   scope: 'all' | 'self'
   in_flight: number
+}
+
+// ── 接入管理（/api/v1/connectors）───────────────────────────────────────────
+export interface ConnectorCredential {
+  id: string
+  name: string
+  hosts: string[]
+  owner: string
+  /** 脱敏提示（shc-****末4位）；明文只在签发/重置响应出现一次 */
+  key_hint: string
+  revoked: boolean
+  version: number
+  created_by: string
+  created_at: string
+  updated_at: string
+  last_seen?: string
+  /** 前端聚合：该凭证当前是否有在线会话 */
+  online?: boolean
+}
+
+export interface ConnectorSession {
+  session_id: string
+  credential_id: string
+  name: string
+  hosts: string[]
+  local_addr: string
+  connector_ip: string
+  connector_version: string
+  gateway_node: string
+  online: boolean
+  planned_close: boolean
+  rtt_ms: number
+  since: string
+  last_heartbeat: string
+}
+
+export interface ConnectorSessionEvent {
+  at: string
+  session_id: string
+  name: string
+  kind: 'online' | 'reconnect' | 'offline' | string
+  detail?: string
+}
+
+export interface ConnectorOverview {
+  gateway: {
+    /** 网关是否曾联系过控制台（部署与令牌配置都正确才会出现联系记录） */
+    configured: boolean
+    last_seen: string
+  }
+  credentials: ConnectorCredential[]
+  sessions: ConnectorSession[]
+  events: ConnectorSessionEvent[]
+  kpi: {
+    online_connections: number
+    total_credentials: number
+    revoked_credentials: number
+    disconnects_today: number
+    rtt_median_ms: number
+  }
 }

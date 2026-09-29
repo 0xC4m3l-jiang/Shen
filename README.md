@@ -22,6 +22,86 @@
 
 ---
 
+## 0. 导览：模块全景 · 两种视角 · 界面速览
+
+> 本节是**高层导览**：先看全模块与调用关系，再用两种视角理解使用方式，最后以浅色主题界面速览收尾。
+> 项目背景见 §1，逐跳工作原理见 §2，模块逐个职责见 §3；动手跑通真实业务接入见 [`demo/`](demo/README.md)。
+
+### 项目背景与核心功能（三句话）
+
+| 问题 | 蜃楼的回答 |
+| --- | --- |
+| 自动化攻击者（扫描器 / 爬虫 / AI Agent）打进来怎么办？ | **不拦截**：把已识别的对手透明引进合成幻境，让它们在假世界里暴露工具、意图与攻击链 |
+| 真实业务怎么接入？ | **零改造、零入站暴露**：连接器从业务侧向外拨号建隧道，业务只听回环；或经反向代理前置 / Sidecar 接入 |
+| 看得见吗？ | 只读管控台：接入管理 · 实时会话 · 判定流逐跳链路 · 告警 · 审计——**只观测、只登记，不下发策略** |
+
+### 模块全景与调用关系
+
+四个产品大模块（`modules/` 下四个子目录）+ 支撑层（核心 / 契约 / 分析 / 部署）：
+
+[![模块全景](assets/architecture/panorama.png)](assets/architecture/panorama.html)
+
+<sub>上图把**两种视角叠在一起**：虚线是「建立接入」的调用（签发 → 交付 → 握手 → 登记），实线是「流量进入后」的流转（判定 → 三值 → 放行/改道/拦截）。分层带 = 数据面 / 决策与欺骗面 / 管控与分析面；右侧客户网络里业务只听回环，唯一通路是连接器外拨的隧道（防火墙仅放行出站）。[打开矢量源图 ↗](assets/architecture/panorama.html)</sub>
+
+<sub>三张图的源文件（`assets/architecture/*.html`）自带**可执行的排版自检**：在浏览器里打开并在控制台执行 `layoutReport()`，逐条报告「连线穿框 / 蹭着框走线 / 线线叠压 / 线线交叉 / 标签重叠 / 标签压框 / **框压框** / **文字撑出框** / **框越出分区** / 渲染条数不符 / 锚点缺失」。当前三图均为 **0 违规**（交叉数也归零：分流一律用「一条主干 + 彩色支线」，判定值写在目标框芯片里）。</sub>
+
+| 层 | 模块 | 一句话职责 |
+| --- | --- | --- |
+| 数据面 | `adapter-proxy` · `connector/gateway` | 收流与执行：白名单 → 缓存 → 判定 → 三值；隧道按 Host 回源 |
+| 决策与欺骗面 | `common/core` · `honeypot-web` · `decoy` | 判定与三值只在核心产生；幻境与诱饵承接改道流量 |
+| 管控与分析面 | `console` · `analysis/` · `connector` 凭证面 | 只读观测 + 登记：接入管理、判定流、告警、审计；AI 内容与近线结论 |
+| 业务侧 | `connector/sdk` · 真实业务 | 零改造、零入站暴露：外拨长连接 + 回环转发 |
+
+### 视角一：真实业务如何接入并运行（开发者视角）
+
+接入对业务**零改造**：业务照常监听回环，接入工作只有「跑一个连接器」。
+连接器持有控制台签发的凭证（`shc-` 开头，绑定服务名 + 域名白名单），向外拨号完成
+TLS 握手后**自动登记**到控制台登记表（来源=连接器）；密钥可随时吊销 / 重置，
+全程审计。完整步骤与配置项见 [`demo/README.md`](demo/README.md)。
+
+[![开发者视角](assets/architecture/developer-view.png)](assets/architecture/developer-view.html)
+
+<sub>左侧客户网络、右侧蜃楼平台，中间是防火墙（入站全拒、仅出站）；编号 ①→⑩ 与下表步骤一一对应（编号标在对应的连线上）。[打开矢量源图 ↗](assets/architecture/developer-view.html)</sub>
+
+| 步 | 做什么 | 在哪里发生 |
+| --- | --- | --- |
+| ① ② | 管理员签发凭证：绑定服务名 + 域名白名单，落库只存 **SHA-256**，明文一次性显示 | 管控台 · 接入管理 |
+| ③ ④ | 密钥 + 接入代码线下交付开发者；开发者部署连接器（独立二进制 env，或 SDK 三行代码） | 业务侧 |
+| ⑤ | 连接器**向外拨号** TLS 长连接并握手（唯一出站；防火墙入站可全拒） | 业务侧 → 网关 |
+| ⑥ ⑦ | 网关校验凭证与 hosts 白名单 → key 拉取 → **自动登记**（来源=连接器）→ 会话审计 | 网关 → 管控台 |
+| ⑧ | 网关把 Host→会话 映射交给欺骗引擎：业务从此在引擎之后运行 | 平台内 |
+| ⑨ | 放行流量经隧道回到连接器，**回环转发**给真实业务 | 业务侧 |
+| ⑩ | 控制台持续观测（在线 / 心跳 / RTT）；吊销后 30 秒内连接被拒 | 管控台 |
+
+### 视角二：流量进入系统后如何欺骗与导流（防守视角）
+
+所有外部流量先进引擎：**三值决策**决定这条请求去真实业务（隧道）、去幻境（欺骗）、还是 403：
+
+[![流量视角](assets/architecture/traffic-view.png)](assets/architecture/traffic-view.html)
+
+<sub>读图顺序：外部流量 → 进入 Shen 的反向代理（流量检测管控的执行点，卡片内 ①..⑤ 处理链 + ⑥ 异步遥测）→ 三值分流 → <b>正常流量</b>经隧道回源或直连上游送到后台服务，<b>恶意流量</b>被引进蜜罐（幻境后端 / 专属诱饵是「被访问方」，不是平台主动去访问），明确恶意的直接 403；兜底纪律写在卡片下方。[打开矢量源图 ↗](assets/architecture/traffic-view.html)</sub>
+
+| 决策 | 去向 | 对手看到的 | 业务受到的影响 |
+| --- | --- | --- | --- |
+| `route_origin` 放行 | 真实业务（隧道 / 直连） | 正常业务页面 | 无（正常用户原样通行） |
+| `route_mirage` 改道 | 合成幻境 + AI 内容 | 以假乱真的站点，攻击链被完整记录 | 零（请求根本没到业务） |
+| `block` 拦截 | 403 | 明确拒绝（只用于已知恶意） | 零 |
+
+判定只发生在核心（边缘只执行）；引擎故障 / 超时一律放行业务——欺骗建立在「业务永远可用」之上。
+
+### 界面速览（浅色主题 · 晨雾）
+
+| | |
+| --- | --- |
+| ![总览](demo/screenshots/ui-overview-light.png) | ![接入管理](demo/screenshots/ui-connectors-light.png) |
+| *总览：新流量 · 来源归属地 · 流入蜃楼占比* | *接入管理：反向隧道凭证与实时会话（在线 / 心跳 / RTT），可吊销 / 重置* |
+| ![反向链接器](demo/screenshots/ui-services-light.png) | ![欺骗层](demo/screenshots/ui-deception-light.png) |
+| *反向链接器：按服务观测（demo 服务为连接器自动登记）* | *欺骗层：判定流逐行（决策 / 信号 / 风险分），点行看逐跳链路* |
+
+> 界面默认深色主题「蜃海」，上图切换为浅色主题「晨雾」；主题按账号保存在服务端，点击才切换。
+
+---
+
 ## 1. 它是什么
 
 **它不拦截可疑流量，而是把已识别的自动化对手透明地送进幻境（mirage）。**
@@ -163,6 +243,7 @@ flowchart TB
 | `adapter-mirror` | 只读采集（旁路镜像，**不在请求路径**）：观测副本与流量记录 | ✅ |
 | `adapter-dns` | 按来源解析到引擎或真实服务（**纯配置，无源码**） | ✅ 配置 |
 | `edge-injection` | 响应改写 / 假路径 / 蜜饵注入（被适配器引用，**不独立部署**） | ✅ |
+| `connector` | **反向隧道连接器**（平台网关 + 业务侧 SDK / 二进制）：业务零入站暴露，凭证（`shc-`，一 key 一服务一域名白名单）校验、会话池、按 Host 经隧道转发；握手自动登记到控制台（来源=连接器） | ✅ |
 
 ### L2 幻境后端
 
@@ -182,7 +263,7 @@ flowchart TB
 | `intent` | 意图识别（引用的证据必须存在，否则结论作废） | ✅ |
 | `chain` | 攻击链还原 | ✅ |
 | `strategy` | 策略生成 | ✅ |
-| `console` | 管控台：登录鉴权（本地账号 + 管理员/欺骗运维/蜜罐运维/只读）· 总览（来源归属地）· 欺骗层 · 蜜罐层 · 反向链接器登记与按服务观测 · 分析 · 告警 · 系统审计（**观测+登记，不下发策略**） | 🟢 可用 |
+| `console` | 管控台：登录鉴权（本地账号 + 管理员/欺骗运维/蜜罐运维/只读）· 总览（来源归属地）· 欺骗层 · 蜜罐层 · 反向链接器登记与按服务观测 · **接入管理（反向隧道凭证签发/吊销/重置与实时会话观测）** · 分析（大模型对话/用量/L4 结论）· 告警 · 系统审计（**观测+登记，不下发策略**） | 🟢 可用 |
 
 ### 工程工具
 
@@ -260,6 +341,11 @@ curl -s -A "Mozilla/5.0"        http://127.0.0.1:18080/               # 正常�
 
 其它：`make docker-ps`（状态）· `make docker-log S=core`（日志尾部 50 行）· `make down`（停掉）·
 端口被占用时 `SHEN_HTTP_PORT=8080 SHEN_CONSOLE_PORT=9444 make start`。
+
+> **真实业务接入演示**：`demo/up.sh` 一键跑通「蜃景商城经反向隧道接入」全流程
+> （签发凭证 → 连接器拨入 → 自动登记 → 真流量验证），步骤 / 配置 / 截图见 [`demo/README.md`](demo/README.md)；
+> 恶意流量模拟：`demo/attack.sh`（七类攻击探针，结果看控制台「欺骗层 · 判定流」与「告警」）。
+> 伪造流量全场景核对：`make traffic`（场景定义在 `demo/traffic/`）。
 
 ### 5.2 验证档：合成管理台 + 诱饵路由（**不是默认启动项**）
 
@@ -359,15 +445,22 @@ make bench            # 延迟基准
 ## 7. 目录、文档与许可
 
 ```text
-common/api/            跨平面契约（.proto：judge / policy / telemetry）
-common/core/           核心（Go）：判定 · 决策 · 会话 · 策略 · 遥测 · 存储 · 控制面 · 诱饵 · 幻境入口
-modules/deception/     L1 边缘：反向代理前置与边车 · 旁路镜像 · DNS 模板 · 边缘注入
-modules/honeypot/      L2 幻境后端：合成 Web 管理台 · 协议仿真框架
-modules/console/       管控台（API + Vue3 UI；观测 + 登记，不下发策略）
-analysis/              L4（Python）：AI 能力护栏出口 · 意图/攻击链/策略 · 近线 worker
-deploy/                Docker Compose · 示例配置 · 验证档
-scripts/               门禁与工程工具（archcheck · tracecheck · leakcheck · verify · doctor …）
-assets/                项目 logo
+modules/            四个产品模块（一子目录 = 一大模块）
+  ├─ deception/     L1 边缘：反向代理前置与边车 · 旁路镜像 · DNS 模板 · 边缘注入
+  ├─ honeypot/      L2 幻境后端：合成 Web 管理台 · 协议仿真框架
+  ├─ console/       管控台（API + Vue 3 UI；观测 + 登记，不下发策略）
+  └─ connector/     连接器：网关（接入 · 会话 · 字节桥）+ 业务侧 SDK 与二进制
+common/
+  ├─ core/          判定与响应生成的唯一实现（judge · director · policy · session · telemetry · store · decoy）
+  └─ api/           跨进程契约（.proto：judge / policy / telemetry / connector）
+analysis/           L4（Python）：AI 能力护栏出口 · 意图/攻击链/策略 · 近线 worker
+deploy/            Docker Compose 叠加档 · 示例配置 · 验证档（deploy/docker · deploy/config）
+scripts/           门禁与工程工具（archcheck · tracecheck · leakcheck · verify · doctor · dev/local-stack.sh）
+demo/              可跑通的最小样例：假业务 + 连接器 + 界面截图（入口 demo/README.md）
+assets/            logo · 架构图（assets/architecture/：三张图的矢量源 HTML + 导出 PNG）
+compose.yaml       部署入口（根级基础档；dev / prod / verify 叠加档在 deploy/docker/）
+Makefile           统一入口：make gate · make dev · make traffic · make verify …
+vendor/            第三方依赖副本（vendor 模式构建；许可证台账见 make licensecheck）
 ```
 
 | 我要做的事 | 去哪 |
@@ -375,6 +468,7 @@ assets/                项目 logo
 | 理解设计与约束 | 设计文档（架构 · 接入 · 语言 · 模块 · 目录 · 硬约束 · 术语）—— 与仓库**分开发布** |
 | 查模块职责与契约 | 模块文档（一模块一文件）· 契约在 `common/api/` 与 `common/core/internal/contract/` |
 | 看它「现在能做什么」 | 本 README §6 + 变更日志 |
+| 看图（架构 / 接入 / 流量） | §0 的三张图；矢量源 `assets/architecture/*.html`（可点开交互，页内 `layoutReport()` 自检排版） |
 | 复现一次验证 | §5 的 `make gate` / `make dev` / `make traffic` / `make verify` |
 
 **许可**：Apache-2.0（见 [LICENSE](LICENSE)）。第三方依赖各受自身许可证约束（有意保持可审计，见依赖台账目标 `make licensecheck`）。

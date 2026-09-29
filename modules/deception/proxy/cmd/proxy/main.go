@@ -143,6 +143,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// 反向隧道网关（可选）：指向网关的回环字节桥。空 = 不启用（全部直连 Upstream，存量行为）。
+	tunnelGateway := strings.TrimSpace(os.Getenv("SHEN_PROXY_TUNNEL_GATEWAY"))
 
 	handler := &proxy.Handler{
 		Upstream:        upstream,
@@ -174,6 +176,9 @@ func run() error {
 		DegradedCacheTTL:   caddy.Duration(degradedTTL),
 		DecoyLease:         caddy.Duration(decoyLease),
 		ForwardCredentials: forwardCredentials,
+
+		// 反向隧道分流（modules/connector）：业务侧按 Host 走隧道或直连。
+		TunnelGateway: tunnelGateway,
 	}
 
 	cfg, err := proxy.BuildConfig(proxy.Options{

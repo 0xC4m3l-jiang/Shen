@@ -11,7 +11,7 @@
 #   scripts/shen.sh up [--env dev|prod|verify] [--profile P ...]   起栈（默认：全部模块、构建好的前端）
 #   scripts/shen.sh status      看容器状态 + 管控台概览
 #   scripts/shen.sh smoke       造三条流量并回显判定结果（快速验证链路）
-#   scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 scripts/traffic/）
+#   scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 demo/traffic/）
 #   scripts/shen.sh check       仓库级验证：make gate + make dev
 #   scripts/shen.sh doctor      接入自检（INT-17 五项）
 #   scripts/shen.sh verify      一键端到端验证：状态 + 全量伪造流量 + L4 核对 + 报告
@@ -212,7 +212,7 @@ with_token() {
 
 cmd_traffic() {
 	with_token
-	exec python3 "${ROOT}/scripts/traffic/send.py" --entry "$(entry_url)" --console "$(console_url)" "$@"
+	exec python3 "${ROOT}/demo/traffic/send.py" --entry "$(entry_url)" --console "$(console_url)" "$@"
 }
 
 cmd_restart() {
@@ -245,7 +245,7 @@ cmd_verify() {
 	echo
 	echo "== 2/3 伪造流量 + 判定核对（--check-l4）=="
 	set +e
-	python3 "${ROOT}/scripts/traffic/send.py" \
+	python3 "${ROOT}/demo/traffic/send.py" \
 		--entry "$(entry_url)" --console "$(console_url)" --check-l4 --check-graph --explain --report "${report}" "$@"
 	rc=$?
 	set -e

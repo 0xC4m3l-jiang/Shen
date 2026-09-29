@@ -7,6 +7,7 @@ package proxy
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,6 +69,10 @@ func (h *Handler) buildBackend(ctx caddy.Context, target string, isMirage bool, 
 		//
 		// 依赖的是 `injectionSource`（三个方法），不是整个 Handler —— 见 transform.go。
 		rt = &injectingTransport{src: h, base: tr, snapshotOf: h.policySnapshotOf}
+	} else if h.TunnelGateway != "" {
+		// 业务侧（origin）：反向隧道分流（tunnel.go）——命中接入凭证白名单的域名
+		// 经网关桥送达连接器背后的真实业务，其余直连 Upstream。幻境侧不经隧道。
+		rt = newTunnelTransport(tr, h.TunnelGateway, log.Printf)
 	}
 
 	rp := &reverseproxy.Handler{

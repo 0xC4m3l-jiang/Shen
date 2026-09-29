@@ -38,6 +38,7 @@ scripts/bin/
 /modules/deception/proxy/cmd/proxy/proxy
 /modules/console/cmd/console/console
 /modules/deception/mirror/cmd/mirror/mirror
+/verify   # 在仓库根手敲 `go build ./scripts/verify` 会留下同名二进制（Makefile 走 `go run`，不需要它）
 *.test
 coverage.out
 

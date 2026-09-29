@@ -45,7 +45,7 @@ doctor: ## 接入自检（INT-17 五项：body 可读 / TLS 方式 / 会话粘�
 app-smoke: ## 快速链路验证：经引擎造三条流量并回显判定
 	@scripts/shen.sh smoke
 
-traffic: ## 发伪造流量并从观测面核对判定（完整验证；场景见 scripts/traffic/scenarios.json）
+traffic: ## 发伪造流量并从观测面核对判定（完整验证；场景见 demo/traffic/scenarios.json）
 	@scripts/shen.sh traffic $(ARGS)
 
 verify: ## 仓库级验证：make gate + make dev

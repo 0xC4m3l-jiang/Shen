@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.4
+	github.com/hashicorp/yamux v0.1.2
 	github.com/sashabaranov/go-openai v1.42.1
 	golang.org/x/crypto v0.55.0
 	google.golang.org/grpc v1.83.2

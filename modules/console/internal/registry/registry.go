@@ -44,17 +44,19 @@ const (
 
 // Service 是一条登记。
 type Service struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Upstream    string    `json:"upstream"`
-	Hosts       []string  `json:"hosts"`
-	Owner       string    `json:"owner"`
-	Description string    `json:"description"`
-	Enabled     bool      `json:"enabled"`
-	Version     uint64    `json:"version"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	UpdatedBy   string    `json:"updated_by"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Upstream    string   `json:"upstream"`
+	Hosts       []string `json:"hosts"`
+	Owner       string   `json:"owner"`
+	Description string   `json:"description"`
+	Enabled     bool     `json:"enabled"`
+	Version     uint64   `json:"version"`
+	// Source 是登记来源：空与 "manual" 为手动；"connector" 为连接器自动登记（反向隧道接入时上报）。
+	Source    string    `json:"source,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedBy string    `json:"updated_by"`
 }
 
 // Input 是创建 / 修改时允许由调用方提供的字段。
@@ -143,7 +145,7 @@ func (s *Store) Create(in Input, actor string) (Service, error) {
 	now := s.now().UTC()
 	svc := Service{ID: id, Name: norm.Name, Upstream: norm.Upstream, Hosts: norm.Hosts,
 		Owner: norm.Owner, Description: norm.Description, Enabled: norm.Enabled,
-		Version: 1, CreatedAt: now, UpdatedAt: now, UpdatedBy: actor}
+		Source: "manual", Version: 1, CreatedAt: now, UpdatedAt: now, UpdatedBy: actor}
 	next := s.cloneLocked()
 	next[id] = svc
 	if err := s.commitLocked(next); err != nil {
@@ -196,6 +198,85 @@ func (s *Store) Delete(id string, expected uint64) error {
 	next := s.cloneLocked()
 	delete(next, id)
 	return s.commitLocked(next)
+}
+
+// UpsertConnector 是**连接器自动登记**的入口（来源=connector 的 upsert，与手动登记共存）。
+//
+// 语义（保守取向：运维的手动决策永远优先）：
+//   - 同名服务不存在 → 创建（Source=connector，Enabled=true，Upstream=连接器上报的本地地址）；
+//   - 同名且同为连接器来源 → 刷新域名与上游（版本+1，UpdatedBy=actor）；
+//   - 同名但是**手动登记** → **原样返回、不改动**（created=false）——运维手动登记的服务
+//     不被自动流程覆盖。
+//
+// 域名冲突仍然校验：声明域名若属于**其他**服务，拒绝（自动流程无权抢占）。
+func (s *Store) UpsertConnector(name string, hosts []string, upstream, actor string) (Service, bool, error) {
+	clean := Input{Name: name, Upstream: upstream, Hosts: hosts, Enabled: true}
+	clean.Name = strings.TrimSpace(clean.Name)
+	if clean.Name == "" {
+		return Service{}, false, &ValidationError{"name", "服务名不能为空"}
+	}
+	normalized := make([]string, 0, len(hosts))
+	seen := map[string]bool{}
+	for _, raw := range hosts {
+		h, err := NormalizePattern(raw)
+		if err != nil {
+			return Service{}, false, &ValidationError{"hosts", err.Error()}
+		}
+		if !seen[h] {
+			seen[h] = true
+			normalized = append(normalized, h)
+		}
+	}
+	if len(normalized) == 0 || len(normalized) > MaxHosts {
+		return Service{}, false, &ValidationError{"hosts", fmt.Sprintf("域名数量须为 1–%d 个", MaxHosts)}
+	}
+	sort.Strings(normalized)
+	clean.Hosts = normalized
+	up, err := normalizeUpstream(upstream)
+	if err != nil {
+		return Service{}, false, &ValidationError{"upstream", err.Error()}
+	}
+	clean.Upstream = up
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, svc := range s.services {
+		if strings.EqualFold(svc.Name, clean.Name) {
+			if svc.Source != "connector" {
+				return clone(svc), false, nil // 手动登记：不动
+			}
+			prev := svc
+			svc.Hosts, svc.Upstream = clean.Hosts, clean.Upstream
+			svc.Version++
+			svc.UpdatedAt, svc.UpdatedBy = s.now().UTC(), actor
+			next := s.cloneLocked()
+			next[id] = svc
+			if err := s.commitLocked(next); err != nil {
+				s.services[id] = prev
+				return Service{}, false, err
+			}
+			return clone(svc), false, nil
+		}
+	}
+	if len(s.services) >= MaxServices {
+		return Service{}, false, ErrFull
+	}
+	if err := s.checkUniqueLocked("", clean); err != nil {
+		return Service{}, false, err
+	}
+	id, err := newID()
+	if err != nil {
+		return Service{}, false, err
+	}
+	now := s.now().UTC()
+	svc := Service{ID: id, Name: clean.Name, Upstream: clean.Upstream, Hosts: clean.Hosts,
+		Enabled: true, Source: "connector", Version: 1, CreatedAt: now, UpdatedAt: now, UpdatedBy: actor}
+	next := s.cloneLocked()
+	next[id] = svc
+	if err := s.commitLocked(next); err != nil {
+		return Service{}, false, err
+	}
+	return clone(svc), true, nil
 }
 
 // Match 把请求 Host 归到登记的服务：精确域名优先，其次最长的通配后缀；未命中返回 ("", false)。
@@ -293,6 +374,10 @@ func NormalizeHost(raw string) string {
 }
 
 var labelPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// NormalizePattern 校验并规范化一个域名模式（小写、去端口、去尾点；支持最左一级通配）。
+// 供登记与接入凭证共用同一校验口径。
+func NormalizePattern(raw string) (string, error) { return normalizePattern(raw) }
 
 func normalizePattern(raw string) (string, error) {
 	h := NormalizeHost(raw)

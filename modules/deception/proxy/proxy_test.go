@@ -174,6 +174,9 @@ func newTestHandler(t *testing.T, cfg Config, judge JudgeClient, report Telemetr
 		BackendHealthInterval: caddy.Duration(cfg.BackendHealthInterval),
 		BackendHealthTimeout:  caddy.Duration(cfg.BackendHealthTimeout),
 
+		// 反向隧道分流（可选）：桥地址非空即启用。
+		TunnelGateway: cfg.TunnelGateway,
+
 		whitelist: cfg.Whitelist,
 		judge:     judge,
 		report:    report,

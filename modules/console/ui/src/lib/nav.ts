@@ -1,5 +1,5 @@
 import type { Component } from 'vue'
-import { Activity, BellRing, BrainCircuit, Castle, Network, Radar, Settings2 } from 'lucide-vue-next'
+import { Activity, BellRing, BrainCircuit, Cable, Castle, Network, Radar, Settings2 } from 'lucide-vue-next'
 import type { Permission } from './types'
 
 export interface NavItem {
@@ -14,6 +14,7 @@ export interface NavItem {
 export const navItems: NavItem[] = [
   { name: 'overview', label: '总览', desc: '新流量 · 来源 · 归属地', icon: Activity, perm: 'overview:read' },
   { name: 'services', label: '反向链接器', desc: '登记被保护的 Web 服务', icon: Network, perm: 'registry:read' },
+  { name: 'connectors', label: '接入管理', desc: '反向隧道连接器 · 凭证', icon: Cable, perm: 'registry:read' },
   { name: 'deception', label: '欺骗层', desc: '判定流 · 链路 · 策略快照', icon: Radar, perm: 'deception:read' },
   { name: 'honeypot', label: '蜜罐层', desc: '幻境 / 诱饵投递', icon: Castle, perm: 'honeypot:read' },
   { name: 'alerts', label: '告警', desc: '需要关注的请求', icon: BellRing, perm: 'alerts:read' },

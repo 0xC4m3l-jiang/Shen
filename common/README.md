@@ -11,6 +11,13 @@
 「只实现一次」就失去了结构支撑。依据 [ADR-0028](../docs/background/decisions/0028-three-module-view.md) 决定 1
 与 [ADR-0030](../docs/background/decisions/0030-two-level-layout.md) 决定 1。
 
+## 在整体架构里的位置
+
+`core/` 是「判定与响应生成」的唯一实现：边缘（`modules/deception/proxy`）只**执行**判定、
+不产生判定；管控台只读观测。想看它在请求路径与分流中的位置，看
+[流量视角图](../assets/architecture/traffic-view.html)（判定 → 三值 → 放行 / 幻境 / 拦截）
+与[模块全景图](../assets/architecture/panorama.html)。
+
 ## 怎么跑
 
 ```bash

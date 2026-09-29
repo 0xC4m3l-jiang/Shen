@@ -112,6 +112,10 @@ type Handler struct {
 	// CoreAddr 是核心判定/遥测面的 gRPC 地址。Provision 时据此建客户端。
 	CoreAddr string `json:"core_addr,omitempty"`
 
+	// TunnelGateway 是反向隧道网关的回环字节桥地址（SHEN_PROXY_TUNNEL_GATEWAY）。
+	// 空 = 不启用隧道（全部直连 Upstream，存量行为）。
+	TunnelGateway string `json:"tunnel_gateway,omitempty"`
+
 	// Inject 是注入片段（已按 `;;` 拆分）。空 = 不注入。
 	Inject []string `json:"inject,omitempty"`
 

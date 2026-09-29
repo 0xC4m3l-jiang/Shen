@@ -20,6 +20,7 @@ type config struct {
 	TrustedProxies    []netip.Prefix
 	TokenSources      []netip.Prefix
 	APIToken          string
+	IntegrationToken  string // 网关集成令牌（/api/v1/integration/* 专用；与只读令牌分权）
 	SecretKey         string // 大模型密钥的加密主密钥；空 = 数据目录自动生成
 	CookieSecure      bool
 	BootstrapUser     string
@@ -55,6 +56,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	var errs []error
 	var err error
 	if c.APIToken, err = secret(getenv, "SHEN_CONSOLE_API_TOKEN"); err != nil {
+		errs = append(errs, err)
+	}
+	if c.IntegrationToken, err = secret(getenv, "SHEN_CONSOLE_INTEGRATION_TOKEN"); err != nil {
 		errs = append(errs, err)
 	}
 	if c.BootstrapPassword, err = secret(getenv, "SHEN_CONSOLE_BOOTSTRAP_PASSWORD"); err != nil {

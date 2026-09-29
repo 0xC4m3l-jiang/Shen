@@ -17,6 +17,7 @@ import (
 	telemetryv1 "shen/common/api/telemetry/v1"
 	"shen/modules/console/internal/audit"
 	"shen/modules/console/internal/auth"
+	"shen/modules/console/internal/connector"
 	"shen/modules/console/internal/geoip"
 	"shen/modules/console/internal/llm"
 	"shen/modules/console/internal/rbac"
@@ -25,17 +26,19 @@ import (
 
 // Config 是接口层的运行参数。
 type Config struct {
-	AllowedOrigins  []string       // 浏览器 Origin 白名单；空 = 只接受与 Host 同源
-	TrustedProxies  []netip.Prefix // 只有来自这些网段的请求才采信 X-Forwarded-For
-	TokenSources    []netip.Prefix // 只读令牌允许的来源网段
-	CookieSecure    bool           // 生产必须为 true（TLS 由 L0 终结）
-	SessionAbsolute time.Duration  // 会话 Cookie 的 Max-Age
-	AlertScore      float64        // 「高风险」显示阈值（只影响标色）
-	MaxStreams      int            // 并发 SSE 连接上限
-	Heartbeat       time.Duration  // SSE 心跳间隔
-	LLM             *llm.Service   // 大模型分析；nil = 未启用（相关接口统一 503）
-	Now             func() time.Time
-	Logf            func(format string, args ...any)
+	AllowedOrigins   []string           // 浏览器 Origin 白名单；空 = 只接受与 Host 同源
+	TrustedProxies   []netip.Prefix     // 只有来自这些网段的请求才采信 X-Forwarded-For
+	TokenSources     []netip.Prefix     // 只读令牌允许的来源网段
+	CookieSecure     bool               // 生产必须为 true（TLS 由 L0 终结）
+	SessionAbsolute  time.Duration      // 会话 Cookie 的 Max-Age
+	AlertScore       float64            // 「高风险」显示阈值（只影响标色）
+	MaxStreams       int                // 并发 SSE 连接上限
+	Heartbeat        time.Duration      // SSE 心跳间隔
+	LLM              *llm.Service       // 大模型分析；nil = 未启用（相关接口统一 503）
+	Connector        *connector.Service // 连接器接入（凭证 + 会话观测）；nil = 未启用
+	IntegrationToken string             // 网关集成令牌（/api/v1/integration/* 的唯一凭证；空 = 集成面 503）
+	Now              func() time.Time
+	Logf             func(format string, args ...any)
 }
 
 // Server 是 v1 接口。
@@ -141,6 +144,8 @@ func (s *Server) routes() {
 	route("DELETE /api/v1/users/{name}", rbac.UsersAdmin, s.handleDeleteUser)
 	route("GET /api/v1/audit", rbac.AuditRead, s.handleAudit)
 	s.llmRoutes(route)
+	s.connectorRoutes(route)
+	s.integrationRoutes()
 
 	// 其余 /api/ 路径一律 404（不回落到任何页面）。
 	m.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {

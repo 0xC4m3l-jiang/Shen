@@ -238,7 +238,7 @@ func TestInjectionHopAppearsOnlyWhenApplied(t *testing.T) {
 	if hop == nil {
 		t.Fatalf("inject=applied 时应有注入跳：%+v", rg.Chain)
 	}
-	// 跳的三段文字必须齐全（scripts/traffic 的 --check-graph 按这四个字段核）。
+	// 跳的三段文字必须齐全（demo/traffic 的 --check-graph 按这四个字段核）。
 	for name, value := range map[string]string{
 		"label": hop.Label, "value": hop.Value, "request": hop.Request,
 		"response": hop.Response, "why": hop.Why,

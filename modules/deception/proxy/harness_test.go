@@ -79,6 +79,7 @@ func TestHandlerHarnessPropagatesConfig(t *testing.T) {
 		BackendHealthTimeout:  2 * time.Second,
 		LogRequests:           true,
 		InjectContent:         true,
+		TunnelGateway:         "127.0.0.1:9447",
 	}
 	h := newTestHandler(t, cfg, j, nil)
 

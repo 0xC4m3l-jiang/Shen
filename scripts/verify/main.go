@@ -62,12 +62,12 @@ type evidence struct {
 	DocNote   string   // 「无源码 / 没有单测」这类显式豁免的原文摘要
 	Rules     []string // §4 关键规则里引用的规则 ID
 	Targets   []target // §7 测试里解析出的测试目标
-	Scenarios []string // 遥测/流量场景（来自 scripts/traffic/scenarios.json 的 modules 标签）
+	Scenarios []string // 遥测/流量场景（来自 demo/traffic/scenarios.json 的 modules 标签）
 	Results   map[string]result
 	Problems  []string
 }
 
-// scenario 是 scripts/traffic/scenarios.json 的一条（只取我们关心的字段）。
+// scenario 是 demo/traffic/scenarios.json 的一条（只取我们关心的字段）。
 type scenario struct {
 	ID      string   `json:"id"`
 	Group   string   `json:"group"`
@@ -109,7 +109,7 @@ func main() {
 	mods, err := modules.Parse(filepath.Join(root, "docs/design/modules.md"))
 	fatalOn(err, "解析 modules.md §1.1 失败")
 
-	scenarios := loadScenarios(filepath.Join(root, "scripts/traffic/scenarios.json"))
+	scenarios := loadScenarios(filepath.Join(root, "demo/traffic/scenarios.json"))
 	onlySet := map[string]bool{}
 	for _, name := range strings.Split(*only, ",") {
 		if name = strings.TrimSpace(name); name != "" {
