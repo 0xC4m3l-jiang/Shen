@@ -22,11 +22,11 @@ deploy/config/*.local.yaml
 shen-console-data/
 
 # ── 门禁工具与产物（版本固定但不入库）────────────────────────────────────
-scripts/bin/
+scripts/check/bin/
 
 # ── 构建与运行产物 ────────────────────────────────────────────────────────
 # 我们的构建**不往源码树里写二进制**：`make build` 只做编译（产物进 Go 构建缓存），
-# `make up` 走 Docker，工具二进制进 scripts/bin/（已在上面忽略）。
+# `make up` 走 Docker，工具二进制进 scripts/check/bin/（已在上面忽略）。
 # 下面几条只是**兜底**：万一有人直接在包目录里手敲 `go build`，会在那里留下同名二进制
 # （如 common/core/cmd/core/core）—— 那是产物，不该入库。
 #
@@ -38,7 +38,7 @@ scripts/bin/
 /modules/deception/proxy/cmd/proxy/proxy
 /modules/console/cmd/console/console
 /modules/deception/mirror/cmd/mirror/mirror
-/verify   # 在仓库根手敲 `go build ./scripts/verify` 会留下同名二进制（Makefile 走 `go run`，不需要它）
+/verify   # 在仓库根手敲 `go build ./scripts/check/verify` 会留下同名二进制（Makefile 走 `go run`，不需要它）
 *.test
 coverage.out
 
@@ -72,7 +72,7 @@ dist/
 # （`make check-ignore` 会核这件事）。
 #
 # 后果（写在这里，免得被当成门禁坏了）：架构 / 追溯 / 逐模块证据三类检查依赖设计文档；
-# 文档不在时它们**跳过并打印一行说明**（不静默、也不算通过）。见 README §3.3。
+# 文档不在时它们**跳过并打印一行说明**（不静默、也不算通过）。见 README §3.7（常见卡点）。
 /docs/
 /AGENTS.md
 /.pi/

@@ -5,7 +5,7 @@
 FROM python:3.14-slim
 
 WORKDIR /app
-COPY scripts/demo/business.py /app/business.py
+COPY deploy/docker/business.py /app/business.py
 
 USER nobody
 CMD ["python", "/app/business.py", "19080"]

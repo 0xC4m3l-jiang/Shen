@@ -1,0 +1,14 @@
+[
+  {"id": "it-dev-api", "kind": "developer_api", "name": "开发者 API 提示",
+   "snippet": "<!-- 开发者调试接口：/portal/api/content（需在请求头携带 X-Debug-Token）-->", "marker": "</body>",
+   "description": "HTML 注释形态，人看不见；自动化 Agent 解析页面时会读到并去试这个接口。"},
+  {"id": "it-agents-md", "kind": "instruction_file", "name": "Agent 指令链接",
+   "snippet": "<link rel=\"help\" href=\"/AGENTS.md\" title=\"automation instructions\">", "marker": "</head>",
+   "description": "在 head 里声明一份给自动化工具的说明文件，引导 Agent 去读 AGENTS.md 诱饵。"},
+  {"id": "it-hidden-link", "kind": "hidden_link", "name": "隐藏链接",
+   "snippet": "<a href=\"/backup/\" style=\"display:none\" aria-hidden=\"true\">backup</a>", "marker": "</body>",
+   "description": "对人不可见、对爬虫可见的链接：命中它的几乎一定是自动化采集。"},
+  {"id": "it-dataset", "kind": "dataset", "name": "数据导出入口",
+   "snippet": "<meta name=\"x-data-export\" content=\"/api/v1/export/users?page=1\">", "marker": "</head>",
+   "description": "以 meta 形式暴露“数据导出”入口，把采集流量引向无限分页的消耗战数据集。"}
+]

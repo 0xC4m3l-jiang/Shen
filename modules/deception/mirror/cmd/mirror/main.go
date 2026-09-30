@@ -9,6 +9,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"shen/common/api/grpcauth"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -34,10 +36,16 @@ func main() {
 func run() error {
 	listen := env("SHEN_MIRROR_LISTEN", defaultListen)
 	coreAddr := env("SHEN_CORE_ADDR", defaultCoreAddr)
+	// 核心 gRPC 面的共享令牌（与核心 SHEN_CORE_GRPC_TOKEN 同值；空 = 服务端未启用）。
+	grpcToken := strings.TrimSpace(os.Getenv("SHEN_CORE_GRPC_TOKEN"))
 
 	// 与核心之间走本机明文 gRPC：TLS 在接入层（Envoy / Nginx）终结，
 	// 且两者同主机。跨节点部署时必须换成 mTLS。
-	conn, err := grpc.NewClient(coreAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if grpcToken != "" {
+		opts = append(opts, grpc.WithPerRPCCredentials(grpcauth.ClientCredentials(grpcToken)))
+	}
+	conn, err := grpc.NewClient(coreAddr, opts...)
 	if err != nil {
 		return err
 	}

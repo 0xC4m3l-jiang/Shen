@@ -2,7 +2,7 @@
 # 蜃景商城 · 反向隧道接入演示：一键跑通「真实业务 → 连接器 → 蜃楼」的完整接入。
 #
 # 前置：蜃楼栈已在跑（网关 + 管控台）。
-#   本地验证栈：scripts/dev/local-stack.sh up
+#   本地验证栈：scripts/dev.sh up
 #   容器栈：docker compose up -d（含 connector profile；gateway 端口按 .env 发布）
 #
 # 用法（仓库根执行）：

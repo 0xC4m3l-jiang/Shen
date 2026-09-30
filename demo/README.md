@@ -26,7 +26,7 @@ demo/
 
 ```sh
 # ① 起蜃楼栈（二选一）
-scripts/dev/local-stack.sh up          # 本机直跑（无需 Docker）
+scripts/dev.sh up          # 本机直跑（无需 Docker）
 docker compose up -d --build           # 容器栈
 
 # ② 跑演示（自动：编译业务 → 登录管控台签发凭证 → 起连接器 → 验证接入记录）

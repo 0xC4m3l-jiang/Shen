@@ -5,11 +5,29 @@ GO ?= go
 # 「parsing stopped here」——那是工具误用。make 自身已能正常解析并执行本文件的全部目标
 # （`make gate` / `make dev` 均在 CI 与本地实跑通过）。
 
-# ── 门禁工具：版本固定，装在 scripts/bin/（本地缓存，不进仓库）────────────────────────
+# ── 门禁工具：版本固定，装在 scripts/check/bin/（本地缓存，不进仓库）────────────────────────
 #
 # 为什么固定版本：门禁必须可复现。今天过、明天因为工具升级而挂，等于门禁失效。
 # 为什么装在本地：离线时门禁仍能跑；`go run pkg@version` 每次都依赖网络。
-TOOLBIN         := $(CURDIR)/scripts/bin
+TOOLBIN         := $(CURDIR)/scripts/check/bin
+
+# 工具链回退：PATH 里没有 go/npm 时（IDE 内置终端常见），把常见安装位置临时加进 PATH。
+# 只作用于本 make 进程树，不改用户环境；两处都找不到时后续 recipe 仍会给出原生报错。
+GO_DIR          := $(firstword $(wildcard $(HOME)/.workbuddy/binaries/go/go/bin) /usr/local/go/bin)
+NODE_DIR        := $(firstword $(wildcard $(HOME)/.workbuddy/binaries/node/versions/*/bin) /opt/homebrew/bin /usr/local/bin)
+ifeq ($(shell command -v go 2>/dev/null),)
+export PATH := $(GO_DIR):$(PATH)
+# GNU Make 3.81（macOS 自带）查找 recipe 里的命令时用的是**启动时**的 PATH，上面的 export 只影响子进程 ——
+# 所以 `$(GO) build` 仍会报 "go: No such file or directory"。这里直接给绝对路径。
+GO := $(GO_DIR)/go
+endif
+ifeq ($(shell command -v npm 2>/dev/null),)
+export PATH := $(NODE_DIR):$(PATH)
+endif
+PY3_DIR         := $(firstword $(wildcard $(HOME)/.workbuddy/binaries/python/versions/*/bin))
+ifneq ($(shell python3 -c 'import sys;print(1 if sys.version_info>=(3,13) else 0)' 2>/dev/null),1)
+export PATH := $(PY3_DIR):$(PATH)
+endif
 STATICCHECK_PKG := honnef.co/go/tools/cmd/staticcheck@v0.8.1
 ERRCHECK_PKG    := github.com/kisielk/errcheck@v1.20.0
 
@@ -22,7 +40,7 @@ PROTOS := $(shell find common/api -name '*.proto')
         check-config replay smoke dev ai-check ai-check-llm ai-dag verify-modules verify-evidence commit clean-check done fp-capture fp-diff bench caddy-surface console demo \
         pyenv pyfmt-check pylint pytest pygen check-pydeps analysis analysis-llm \
         docker-build up up-dev up-frontend up-backend up-honeypot up-prod compose-config down docker-ps docker-logs docker-log check-ignore \
-        start status app-smoke traffic verify
+        start status update ui-check app-smoke traffic verify
 
 # check-ignore 必须用 --no-index：默认行为下 git 认为已入库文件不受忽略规则影响，
 # 于是检查会永远通过 —— 那是**假的防线**（本仓库真的踩过：见 docs/log.md）。
@@ -38,6 +56,12 @@ start: ## 起全套并等就绪（= scripts/shen.sh up；只需 Docker）
 
 status: ## 看容器状态 + 控制台概览
 	@scripts/shen.sh status
+
+update: ## 改了代码 / 配置后：重建镜像 + 整栈重建容器（= scripts/shen.sh update；只改 UI 用 scripts/shen.sh update ui）
+	@scripts/shen.sh update
+
+ui-check: ## 验证管控台 UI 显示：HTTP → 登录 → 浏览器逐页渲染 + 截图（Docker 栈；本机栈用 scripts/dev.sh ui check）
+	@scripts/shen.sh ui-check $(ARGS)
 
 doctor: ## 接入自检（INT-17 五项：body 可读 / TLS 方式 / 会话粘性 / 实境与幻境 / 是否在路径上）
 	@scripts/shen.sh doctor $(ARGS)
@@ -116,10 +140,10 @@ build: ## 编译全部
 
 # ── 静态检查与结构检查：注释里标明每条对应的文档出处 ─────────────────────────
 fmt-check: ## 格式化检查，不改文件（依据 TB-15）
-	@scripts/gate/check-fmt.sh
+	@scripts/check/gate.sh fmt
 
 secrets-check: ## 密钥泄漏门禁：拦截 sk- 真值与密钥类变量的非占位赋值进入版本库
-	@scripts/gate/check-secrets.sh
+	@scripts/check/gate.sh secrets
 
 vet: ## go vet（依据 TB-15）
 	$(GO) vet ./...
@@ -133,16 +157,16 @@ errcheck: ## 未处理的错误返回值（依据 TB-14；需先跑 make tools�
 	$(TOOLBIN)/errcheck ./...
 
 archcheck: ## 架构与依赖方向：ST-1…ST-4 顶层目录与跨平面 import、MD-18…MD-20 store 唯一 I/O 出口与模块清单一致、TB-20/21/24 语言层数与 CGO
-	$(GO) run ./scripts/archcheck
+	$(GO) run ./scripts/check/archcheck
 
 trace: ## 追溯检查：模块文档↔代码↔单测（MD-2/17/22）、规则 ID 引用存在性（D-3/D-8）、变更包与变更日志（DEV-1/2）
-	$(GO) run ./scripts/tracecheck
+	$(GO) run ./scripts/check/tracecheck
 
 leakcheck: ## 泄漏检查：字符串字面量 ↔ OH-1 禁用清单、响应头 ↔ OH-5（决策与分数不回传）、豁免逐条登记（OH-4）
-	$(GO) run ./scripts/check-leak
+	$(GO) run ./scripts/check/leakcheck
 
 licensecheck: ## 依赖许可审计，拦 AGPL / SSPL / BUSL 等（依据 TB-16）
-	$(GO) run ./scripts/licensecheck
+	$(GO) run ./scripts/check/licensecheck
 
 # ── L4（Python）工具链与门禁 ────────────────────────────────────────────────
 # 依据 docs/design/language.md TB-15：CI 必须含 Python 的 ruff 检查。
@@ -171,7 +195,7 @@ pyenv: ## 建/更新 L4 的 analysis/.venv 并安装锁定依赖（首次或改�
 	@$(PY_VENV)/bin/pip install -q --upgrade pip
 	@$(PY_VENV)/bin/pip install -q -r $(ANALYSIS)/requirements-dev.txt -r $(ANALYSIS)/requirements.txt
 	@cd $(ANALYSIS) && .venv/bin/pip install -q -e .
-	@$(CURDIR)/scripts/gate/check-pydeps.sh
+	@$(CURDIR)/scripts/check/gate.sh pydeps
 	@echo "L4 环境就绪（$(PY_VENV)）：`$(PY) --version`、ruff `$(PY_VENV)/bin/ruff --version | cut -d' ' -f2`"
 
 define require_pyenv
@@ -194,13 +218,13 @@ pytest: ## L4 单测（pytest）
 	@echo "✓ L4 单测（pytest）"
 
 check-pydeps: ## 锁文件 ↔ venv 一致性（依据 TB-16；不一致即失败，指向 make pyenv）
-	@$(CURDIR)/scripts/gate/check-pydeps.sh
+	@$(CURDIR)/scripts/check/gate.sh pydeps
 
 lint: fmt-check secrets-check vet staticcheck errcheck pyfmt-check check-pydeps pylint check-ignore archcheck verify-evidence trace leakcheck licensecheck ## 全部静态、结构、逐模块证据与追溯检查（含密钥泄漏门禁）
 
 # ── 版本控制：把「提交」变成一轮收尾的一部分（不是可选项）────────────────────
 #
-# 为什么放进流程：没有提交就没有回退点。上一轮 `scripts/tracecheck` 被误删后无从恢复，
+# 为什么放进流程：没有提交就没有回退点。上一轮 `tracecheck` 被误删后无从恢复，
 # 只能从会话记录里考古 —— 有版本控制的话那只是一条 `git checkout` 的事。
 commit: ## 提交本轮改动（必须给 MSG="<一句话主题>"）
 	@if [ -z "$(MSG)" ]; then echo '用法：make commit MSG="<一句话主题>"'; echo "MSG 是必需的：提交信息要让半年后的人看懂这轮干了什么。"; exit 1; fi
@@ -221,11 +245,11 @@ done: gate commit clean-check ## 一轮的收尾：门禁 → 提交 → 校验�
 # 为什么单独给目标：E2 是 P0 实验（结论可能推翻欺骗命题），必须能一条命令复现。
 fp-capture: ## TLS 指纹采集（E2）：make fp-capture ADDR=host:443 [SNI=name] [OUT=x.json]
 	@if [ -z "$(ADDR)" ]; then echo '用法：make fp-capture ADDR=host:443 [SNI=name] [OUT=x.json]'; exit 1; fi
-	$(GO) run ./scripts/fingerprint -mode capture -addr "$(ADDR)" $(if $(SNI),-sni "$(SNI)",) $(if $(OUT),-out "$(OUT)",)
+	$(GO) run ./scripts/check/fingerprint -mode capture -addr "$(ADDR)" $(if $(SNI),-sni "$(SNI)",) $(if $(OUT),-out "$(OUT)",)
 
 fp-diff: ## TLS 指纹对比（E2）：make fp-diff A=real.json B=ours.json
 	@if [ -z "$(A)" ] || [ -z "$(B)" ]; then echo '用法：make fp-diff A=real.json B=ours.json'; exit 1; fi
-	$(GO) run ./scripts/fingerprint -mode diff -a "$(A)" -b "$(B)"
+	$(GO) run ./scripts/check/fingerprint -mode diff -a "$(A)" -b "$(B)"
 
 # ── 观测台（人工测试用）──────────────────────────────────────────────────────
 console: ## 只起观测控制台（核心需已在跑；地址取 SHEN_CORE_ADDR）
@@ -267,7 +291,7 @@ check: build fmt-check vet archcheck trace leakcheck ## 快速内循环检查（
 	@echo
 	@echo "快速检查通过。"
 
-tools: ## 预装门禁工具到 scripts/bin/（离线环境先跑这个）
+tools: ## 预装门禁工具到 scripts/check/bin/（离线环境先跑这个）
 	@mkdir -p $(TOOLBIN)
 	GOBIN=$(TOOLBIN) $(GO) install $(STATICCHECK_PKG)
 	GOBIN=$(TOOLBIN) $(GO) install $(ERRCHECK_PKG)
@@ -275,7 +299,7 @@ tools: ## 预装门禁工具到 scripts/bin/（离线环境先跑这个）
 
 # ── 产物与台账 ───────────────────────────────────────────────────────────────
 license-ledger: ## 重新生成依赖许可台账（依据 TB-16）
-	$(GO) run ./scripts/licensecheck -ledger > docs/spec/dependencies.md
+	$(GO) run ./scripts/check/licensecheck -ledger > docs/spec/dependencies.md
 	@echo "已写入 docs/spec/dependencies.md"
 
 # ── 运行与开发验证 ───────────────────────────────────────────────────────────
@@ -294,25 +318,25 @@ replay: ## 规则回放：打印「样本观测 → 分数 → 命中信号」�
 	$(GO) test -count=1 -run TestRuleReplay -v ./common/core/cmd/core
 
 smoke: ## 在线冒烟：对已在跑的核心发判定请求（地址取 SHEN_DEV_ADDR）
-	$(GO) run ./scripts/devcheck -addr "$${SHEN_DEV_ADDR:-127.0.0.1:19443}"
+	$(GO) run ./scripts/check/devcheck -addr "$${SHEN_DEV_ADDR:-127.0.0.1:19443}"
 
 dev: ## 一键开发验证：配置干跑 → 起核心 → 在线冒烟 → 规则回放 → 关核心
-	@scripts/dev/smoke.sh
+	@scripts/check/smoke.sh
 
 verify-modules: ## 逐模块功能测试流程：跑每个模块的单测并出表（约 30s；不需要 Docker）
-	@$(GO) run ./scripts/verify
+	@$(GO) run ./scripts/check/verify
 
 verify-evidence: ## 只核逐模块的证据链是否齐备（文档 · 规则依据 · 测试目标 · 功能场景；不跑测试）
-	@$(GO) run ./scripts/verify -no-run
+	@$(GO) run ./scripts/check/verify -no-run
 
 ai-check: ## 欺骗内容注入端到端验收（模板生成器；含拦截覆盖：关闭态字节一致 / 打开态注入 / AR-30 / 关卡 / 秒级关闭 / DAG / block）
-	@python3 scripts/dev/ai-inject-check.py --block
+	@python3 scripts/check/ai-inject.py --block
 
 ai-check-llm: ## 同上，但内容由**模型**生成（需 SHEN_AI_KEY；DAG 落盘到 DAG_OUT）
-	@python3 scripts/dev/ai-inject-check.py --llm --block --dag-out "$${DAG_OUT:-/tmp/shen-ai-dag}"
+	@python3 scripts/check/ai-inject.py --llm --block --dag-out "$${DAG_OUT:-/tmp/shen-ai-dag}"
 
 ai-dag: ## 把 DAG 原始 JSON 渲染成 Mermaid（DAG_DIR 默认 /tmp/shen-ai-dag）
-	@python3 scripts/dev/render-dag.py --dag-dir "$${DAG_DIR:-/tmp/shen-ai-dag}"
+	@python3 scripts/check/render-dag.py --dag-dir "$${DAG_DIR:-/tmp/shen-ai-dag}"
 
 clean: ## 清理构建缓存
 	$(GO) clean ./...

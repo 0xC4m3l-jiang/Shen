@@ -53,6 +53,43 @@ type Overview struct {
 	Recent   []TrafficRow `json:"recent"`
 	Services int          `json:"services_registered"`
 	GeoBuilt uint32       `json:"geo_db_built_at"`
+	// ConfigSync 是欺骗管控的版本对账与蜜罐健康摘要（未启用数据集时为 null）。
+	ConfigSync   *configSyncCard `json:"config_sync"`
+	SystemAlerts int             `json:"system_alerts"`
+}
+
+// configSyncCard 是总览页「配置同步」卡片的数据。
+type configSyncCard struct {
+	State          string `json:"state"`
+	DatasetVersion uint64 `json:"dataset_version"`
+	DatasetRev     uint64 `json:"dataset_rev"`
+	CoreRev        uint64 `json:"core_rev"`
+	EdgeInSync     int    `json:"edge_in_sync"`
+	EdgeTotal      int    `json:"edge_total"`
+	HoneypotsTotal int    `json:"honeypots_total"`
+	HoneypotsOK    int    `json:"honeypots_healthy"`
+	Initialized    bool   `json:"initialized"`
+}
+
+func (s *Server) configSyncCard() *configSyncCard {
+	st := s.configSyncSummary()
+	if st == nil {
+		return nil
+	}
+	ds := s.cfg.Deception.Get()
+	c := &configSyncCard{State: st.State, DatasetVersion: ds.Version, DatasetRev: st.DatasetRev, CoreRev: st.CoreRev,
+		EdgeInSync: st.EdgeInSync, EdgeTotal: st.EdgeTotal, Initialized: ds.Initialized}
+	for _, h := range ds.Honeypots {
+		if h.Enabled {
+			c.HoneypotsTotal++
+		}
+	}
+	for _, p := range st.Honeypots {
+		if p.Healthy {
+			c.HoneypotsOK++
+		}
+	}
+	return c
 }
 
 const trendBuckets = 30
@@ -158,6 +195,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, Overview{
 		Window: win, Stats: st, Trend: trend, Sources: sources, Geo: geos,
 		Recent: head(rows, 50), Services: len(s.registry.List()), GeoBuilt: s.geo.BuiltAt(),
+		ConfigSync: s.configSyncCard(), SystemAlerts: len(s.systemAlerts()),
 	})
 }
 

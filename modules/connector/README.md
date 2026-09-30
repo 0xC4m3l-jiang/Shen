@@ -61,7 +61,7 @@ keepalive ping**（心跳不用自己造）；**大响应天然流式**（yamux 
 生产验证同款（fatedier 维护的 fork），Teleport 反向隧道同路线。
 
 许可：hashicorp/yamux 为 MPL-2.0（文件级弱传染，只影响其自身文件），
-`scripts/licensecheck` 白名单 `ok` 档。
+`scripts/check/licensecheck` 白名单 `ok` 档。
 
 ## auth key 模型（v1：key；v2：+mTLS）
 
@@ -132,6 +132,6 @@ go test ./modules/connector/... -race
 端到端（本地栈，含真 TLS 与真隧道流量）：
 
 ```sh
-scripts/dev/local-stack.sh up        # 含 gateway + shen-connector
-scripts/dev/local-stack.sh seed      # 造判定流量（其中带隧道路由的 Host）
+scripts/dev.sh up        # 含 gateway + shen-connector
+scripts/dev.sh seed      # 造判定流量（其中带隧道路由的 Host）
 ```

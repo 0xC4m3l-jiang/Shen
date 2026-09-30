@@ -142,12 +142,29 @@ rules:
     weight: 0.5
     match: {field: "method", op: "equals", value: "PATCH"}
 
-# 白名单（INT-25 预留）—— 本期只解析与校验，不消费。
-# 消费方是 director 的引流判定前置：内部 IP / 健康检查 / 监控探针必须在引流判定前放行。
+# ── 欺骗管控数据集（管控台接管，方案 B）──────────────────────────────────────────
+#
+# 启用管控台同步（core: SHEN_CORE_CONSOLE_URL + SHEN_CORE_CONSOLE_TOKEN；compose 里设 SHEN_CORE_SYNC_TOKEN）后，
+# 下列五个域 —— whitelist / blacklist / decoys / honeypots / injects —— **以管控台为准**：
+#   · 管控台首次启动时自动从本文件读出这五个域作为初始数据（无需导入）；
+#   · 之后在管控台「欺骗管控」页修改，核心终检后热替换生效；本文件这五段再改**不会生效**（管控台会提示「基线漂移」）；
+#   · 管控台不可达 / 数据非法时，核心保留最后一份正确配置继续判定（业务不受影响）。
+# 规则 / 阈值 / 灰度 / 影子 / 存储等判定策略与部署参数**永远只来自本文件**。
+# 启用同步后策略版本 = policy.version × 1000000 + 管控台投影修订号（重启不倒退）；
+# 之后若关闭同步，请把 policy.version 调高到大于上述值，否则边缘会拒收版本回退。
+
+# 白名单（INT-25）：命中即直通，连判定都不做（内部 IP / 健康检查 / 监控探针）。
 whitelist:
   source_cidrs: []
   user_agents: []
   path_prefixes: []
+
+# 禁止欺骗路径（可选）：命中的请求**绝不**改道到幻境（仍然判定、可观测，信号 deception_excluded）。
+# 用于合规 / 法务指定的路径（如支付回调）。reason 必填；启用中的诱饵不得落在这些前缀之下。
+blacklist: []
+#  - id: "pay-callback"
+#    path_prefix: "/pay/callback"
+#    reason: "支付渠道回调：合规要求不做任何欺骗"
 
 # 诱饵面（ADR-0010：功能性伪装是欺骗的核心机制）。
 # 资产是**数据**（ST-24），不是代码分支。**可选段**：不写 = 不投诱饵。

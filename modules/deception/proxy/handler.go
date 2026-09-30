@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"shen/common/api/grpcauth"
 	judgev1 "shen/common/api/judge/v1"
 	policyv1 "shen/common/api/policy/v1"
 	telemetryv1 "shen/common/api/telemetry/v1"
@@ -111,6 +112,8 @@ type Handler struct {
 
 	// CoreAddr 是核心判定/遥测面的 gRPC 地址。Provision 时据此建客户端。
 	CoreAddr string `json:"core_addr,omitempty"`
+	// CoreGRPCToken 是核心 gRPC 面的共享令牌（SHEN_CORE_GRPC_TOKEN）。空 = 不携带（服务端未启用鉴权）。
+	CoreGRPCToken string `json:"core_grpc_token,omitempty"`
 
 	// TunnelGateway 是反向隧道网关的回环字节桥地址（SHEN_PROXY_TUNNEL_GATEWAY）。
 	// 空 = 不启用隧道（全部直连 Upstream，存量行为）。
@@ -200,7 +203,11 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 	}
 
 	// 与核心之间走明文 gRPC：TLS 由本进程（Caddy）或上游 L0 终结。
-	conn, err := grpc.NewClient(h.CoreAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if tok := strings.TrimSpace(h.CoreGRPCToken); tok != "" {
+		opts = append(opts, grpc.WithPerRPCCredentials(grpcauth.ClientCredentials(tok)))
+	}
+	conn, err := grpc.NewClient(h.CoreAddr, opts...)
 	if err != nil {
 		return fmt.Errorf("proxy: 建 gRPC 客户端失败：%w", err)
 	}

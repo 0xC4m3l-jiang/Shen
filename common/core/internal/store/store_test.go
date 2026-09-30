@@ -229,3 +229,25 @@ func TestMemStores_AllFiveImplementations(t *testing.T) {
 		t.Fatal("MemStores 不应有 nil 字段")
 	}
 }
+
+func TestDecoyReplaceIsWholeTable(t *testing.T) {
+	ctx := context.Background()
+	s := NewDecoyMemory()
+	_ = s.Put(ctx, contract.DecoyAsset{ID: "old"})
+	if err := s.Replace(ctx, []contract.DecoyAsset{{ID: "a"}, {ID: "b"}}); err != nil {
+		t.Fatal(err)
+	}
+	all, _ := s.List(ctx)
+	if len(all) != 2 {
+		t.Fatalf("整表替换后应只有 2 条：%d", len(all))
+	}
+	if _, ok, _ := s.Get(ctx, "old"); ok {
+		t.Error("被替换掉的资产必须消失")
+	}
+	if err := s.Replace(ctx, []contract.DecoyAsset{{ID: ""}}); err == nil {
+		t.Error("缺 id 必须拒绝")
+	}
+	if all, _ := s.List(ctx); len(all) != 2 {
+		t.Error("失败的替换不能改动现有表")
+	}
+}

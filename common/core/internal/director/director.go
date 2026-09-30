@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"shen/common/core/internal/contract"
@@ -42,6 +43,10 @@ type Config struct {
 	// 命中即直接 route_origin，**连判定都不做**（与适配器侧同语义）。
 	Whitelist contract.Whitelist
 
+	// NoDeception 是「禁止欺骗路径」（黑名单）：命中时 route_mirage 降级为放行，
+	// 并附加信号 `deception_excluded`（判定照常、可观测，只是不改道）。
+	NoDeception []contract.NoDeceptionRule
+
 	// Now 注入时钟。它**不参与判定**（灰度只依赖 decision_id，ST-10），
 	// 仅为将来的可观测留口。为空时用 time.Now。
 	Now func() time.Time
@@ -49,14 +54,38 @@ type Config struct {
 
 // Engine 是 Director 的实现。它**无状态**：决策是输入的纯函数，多副本天然一致（AR-9）。
 type Engine struct {
-	judge         judge.Judge
-	thr           ThresholdSource
-	gray          GraySource
-	backend       string
-	block         bool
+	judge   judge.Judge
+	thr     ThresholdSource
+	gray    GraySource
+	backend string
+	block   bool
+	// surf 是**可热替换**的路径面（诱饵前缀 / 白名单 / 禁止欺骗路径）：管控台同步时整体替换，
+	// 热路径每个请求只做一次原子读、零锁 —— 读到的永远是某一份完整的面（不会半新半旧）。
+	surf atomic.Pointer[surface]
+	now  func() time.Time
+}
+
+// surface 是一份不可变的路径面。
+type surface struct {
 	decoyPrefixes []string
 	whitelist     contract.Whitelist
-	now           func() time.Time
+	noDeception   []contract.NoDeceptionRule
+}
+
+func newSurface(decoyPrefixes []string, wl contract.Whitelist, nd []contract.NoDeceptionRule) *surface {
+	rules := make([]contract.NoDeceptionRule, 0, len(nd))
+	for _, r := range nd {
+		if strings.TrimSpace(r.PathPrefix) != "" { // 空前缀会匹配一切 ⇒ 等于关掉整个欺骗面，丢弃
+			r.PathPrefix = contract.NormalizePath(r.PathPrefix)
+			rules = append(rules, r)
+		}
+	}
+	return &surface{decoyPrefixes: normalizePrefixes(decoyPrefixes), whitelist: wl, noDeception: rules}
+}
+
+// UpdateSurface 原子替换路径面（管控台同步的落点）。并发安全：与 Decide 无锁并行。
+func (e *Engine) UpdateSurface(decoyPrefixes []string, wl contract.Whitelist, nd []contract.NoDeceptionRule) {
+	e.surf.Store(newSurface(decoyPrefixes, wl, nd))
 }
 
 // New 构造决策引擎。judge / thr / gray 任一为 nil 时返回错误。
@@ -78,16 +107,16 @@ func New(j judge.Judge, thr ThresholdSource, gray GraySource, cfg Config) (*Engi
 	if now == nil {
 		now = time.Now
 	}
-	return &Engine{
-		judge:         j,
-		thr:           thr,
-		gray:          gray,
-		backend:       backend,
-		block:         cfg.BlockEnabled,
-		decoyPrefixes: normalizePrefixes(cfg.DecoyPrefixes),
-		whitelist:     cfg.Whitelist,
-		now:           now,
-	}, nil
+	e := &Engine{
+		judge:   j,
+		thr:     thr,
+		gray:    gray,
+		backend: backend,
+		block:   cfg.BlockEnabled,
+		now:     now,
+	}
+	e.surf.Store(newSurface(cfg.DecoyPrefixes, cfg.Whitelist, cfg.NoDeception))
+	return e, nil
 }
 
 // normalizePrefixes 丢掉空串，避免空前缀匹配一切（那会让 block 彻底失效）。
@@ -108,7 +137,8 @@ func (e *Engine) Decide(ctx context.Context, req contract.JudgeRequest) (contrac
 	// INT-25：白名单**先于**引流判定 —— 命中即放行，连判定都不做。
 	//
 	// 返回零值 Verdict：白名单流量本就无需打分（也不该污染观测数据）。
-	if e.whitelisted(req.Observed) {
+	sf := e.surf.Load() // 本次决策只读这一份面
+	if sf.whitelisted(req.Observed) {
 		return contract.Decision{
 			DecisionID: req.DecisionID,
 			Action:     contract.ActionOrigin,
@@ -125,7 +155,7 @@ func (e *Engine) Decide(ctx context.Context, req contract.JudgeRequest) (contrac
 		return contract.Decision{}, err
 	}
 
-	action, backend := e.classify(v.Score, th, req.Observed.Path)
+	action, backend := e.classify(sf, v.Score, th, req.Observed.Path)
 
 	// 灰度只作用于「本会改道」的请求：按 decision_id 哈希确定性判定。
 	if action == contract.ActionMirage {
@@ -135,6 +165,16 @@ func (e *Engine) Decide(ctx context.Context, req contract.JudgeRequest) (contrac
 		}
 		if !grayAllows(req.DecisionID, gray) {
 			action, backend = contract.ActionOrigin, ""
+		}
+	}
+
+	// 禁止欺骗路径：本会改道 ⇒ 降级放行，并留下可观测的信号（不改变分数）。
+	if action == contract.ActionMirage {
+		if rule, hit := sf.excluded(req.Observed.Path); hit {
+			action, backend = contract.ActionOrigin, ""
+			v.Signals = append(append([]contract.Signal(nil), v.Signals...), contract.Signal{
+				ID: contract.SignalDeceptionExcluded, Detail: rule.ID,
+			})
 		}
 	}
 
@@ -156,19 +196,19 @@ func (e *Engine) Decide(ctx context.Context, req contract.JudgeRequest) (contrac
 // 原来的裸 `strings.HasPrefix` 会让配置的 `/admin` 命中 `/administrator`、`/admin.html` ——
 // 那是把**运维探针误判成内部来源**，也就是把判定面整块让给了一个同样以前缀开头的陌生路径。
 // 这个方向只会**收紧**（命中的更少），不会扩大白名单（`INT-25` 的护栏只增不减是针对策略下发说的）。
-func (e *Engine) whitelisted(o contract.Observation) bool {
-	for _, p := range e.whitelist.SourceCIDRs {
+func (sf *surface) whitelisted(o contract.Observation) bool {
+	for _, p := range sf.whitelist.SourceCIDRs {
 		if p.IsValid() && p.Contains(o.SourceIP) {
 			return true
 		}
 	}
-	for _, ua := range e.whitelist.UserAgents {
+	for _, ua := range sf.whitelist.UserAgents {
 		if ua != "" && ua == o.UserAgent {
 			return true
 		}
 	}
 	path := contract.NormalizePath(o.Path)
-	for _, pfx := range e.whitelist.PathPrefixes {
+	for _, pfx := range sf.whitelist.PathPrefixes {
 		if pfx == "" {
 			continue
 		}
@@ -185,8 +225,8 @@ func (e *Engine) whitelisted(o contract.Observation) bool {
 // 任何未落入已知分支的分数都得到 route_origin（NI-5 的唯一出口）。
 //
 // MD-25：**在诱饵面上禁止 block** —— 诱饵面是情报采集面，在那里阻断等于自断情报源。
-func (e *Engine) classify(score float64, th contract.Thresholds, path string) (contract.Action, string) {
-	if e.block && score >= th.Block && !e.onDecoy(path) {
+func (e *Engine) classify(sf *surface, score float64, th contract.Thresholds, path string) (contract.Action, string) {
+	if e.block && score >= th.Block && !sf.onDecoy(path) {
 		return contract.ActionBlock, ""
 	}
 	if score >= th.Mirage {
@@ -200,9 +240,9 @@ func (e *Engine) classify(score float64, th contract.Thresholds, path string) (c
 // MD-25 要求「集中常量 + 断言」：前缀集由装配层从**诱饵资产的同一份数据**汇总
 // （单一事实源，见 cmd/core 的 decoyPrefixes），本函数是该不变量的执行点；
 // 「诱饵面永不 block」由 director_test 与 cmd/core 的集成测试断言。
-func (e *Engine) onDecoy(path string) bool {
+func (sf *surface) onDecoy(path string) bool {
 	got := contract.NormalizePath(path)
-	for _, p := range e.decoyPrefixes {
+	for _, p := range sf.decoyPrefixes {
 		// 与白名单、与适配器的诱饵路由**同一个判据**（`N5`）：归一化 + 路径段边界。
 		// 三者口径不一致时，同一路径会在核心与边缘得到不同归类（"幻境面永不 block" 也会漏）。
 		if contract.PathSegmentPrefix(got, contract.NormalizePath(p)) {
@@ -210,6 +250,20 @@ func (e *Engine) onDecoy(path string) bool {
 		}
 	}
 	return false
+}
+
+// excluded 报告路径是否命中禁止欺骗路径（归一化 + 路径段边界，与白名单同一口径 N5）。
+func (sf *surface) excluded(path string) (contract.NoDeceptionRule, bool) {
+	if len(sf.noDeception) == 0 {
+		return contract.NoDeceptionRule{}, false
+	}
+	got := contract.NormalizePath(path)
+	for _, r := range sf.noDeception {
+		if contract.PathSegmentPrefix(got, r.PathPrefix) {
+			return r, true
+		}
+	}
+	return contract.NoDeceptionRule{}, false
 }
 
 // grayAllows 判断本会改道的请求是否落在灰度范围内。

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Castle, PlugZap, Radar, Undo2 } from 'lucide-vue-next'
+import { ArrowUpRight, Castle, PlugZap, Radar, Undo2 } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import DonutChart from '@/components/charts/DonutChart.vue'
 import KpiCard from '@/components/KpiCard.vue'
@@ -9,22 +9,33 @@ import RowDrawer from '@/components/RowDrawer.vue'
 import StatePanel from '@/components/StatePanel.vue'
 import TrafficTable from '@/components/TrafficTable.vue'
 import SpotlightCard from '@/components/fx/SpotlightCard.vue'
+import Badge from '@/components/ui/badge/Badge.vue'
 import { useLiveResource } from '@/composables/useLiveResource'
 import { api } from '@/lib/api'
 import { token } from '@/lib/charts'
 import { deliveryLabels, fmtAgo } from '@/lib/format'
 import type { BackendView, Deliveries, TrafficRow, Window } from '@/lib/types'
+import { honeypotTypeLabel, type RegisteredBackend } from '@/lib/config'
+import { useAuthStore } from '@/stores/auth'
 import { useLiveStore } from '@/stores/live'
 import { usePrefsStore } from '@/stores/prefs'
 
 const live = useLiveStore()
 const prefs = usePrefsStore()
+const auth = useAuthStore()
 const selected = ref<TrafficRow | null>(null)
 const deliveries = useLiveResource((signal) => api.get<Deliveries>('/api/v1/honeypot/deliveries', { window: live.span }, signal))
 const backends = useLiveResource((signal) =>
-  api.get<{ backends: BackendView[]; window: Window; note: string }>('/api/v1/honeypot/backends', { window: live.span }, signal),
+  api.get<{ backends: BackendView[]; registered?: RegisteredBackend[]; window: Window; note: string }>('/api/v1/honeypot/backends', { window: live.span }, signal),
 )
 const d = computed(() => deliveries.data.value)
+const registered = computed(() => backends.data.value?.registered ?? [])
+const healthBadge: Record<RegisteredBackend['health'], { tone: 'origin' | 'danger' | 'muted'; text: string }> = {
+  healthy: { tone: 'origin', text: '可用' },
+  unhealthy: { tone: 'danger', text: '不可用' },
+  unknown: { tone: 'muted', text: '待探测' },
+  disabled: { tone: 'muted', text: '未启用' },
+}
 const slices = computed(() => {
   void prefs.theme
   const tones: Record<string, string> = { delivered: 'mirage', backend_unavailable: 'warn', delivery_failed: 'danger', tombstoned: 'muted-foreground' }
@@ -75,6 +86,38 @@ const slices = computed(() => {
         <p v-if="!backends.data.value?.backends?.length" class="py-6 text-center text-sm text-muted-foreground">时间窗内没有请求进入幻境或诱饵</p>
       </SpotlightCard>
     </section>
+
+    <SpotlightCard v-if="registered.length" :interactive="false" class="overflow-x-auto p-5">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 class="text-base font-medium">蜜罐池 · 登记与健康</h2>
+          <p class="text-xs text-muted-foreground">来自欺骗管控数据集；健康由核心 TCP 探测上报。被启用诱饵引用却不可用的蜜罐会让命中请求回落业务。</p>
+        </div>
+        <RouterLink v-if="auth.can('config:read')" :to="{ name: 'config', query: { tab: 'honeypots' } }" class="flex items-center gap-1 text-xs text-primary hover:underline">
+          去配置<ArrowUpRight class="h-3.5 w-3.5" />
+        </RouterLink>
+      </div>
+      <table class="w-full min-w-[720px] text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wider text-muted-foreground">
+            <th class="py-2 font-medium">蜜罐</th><th class="py-2 font-medium">类型</th><th class="py-2 font-medium">地址</th><th class="py-2 font-medium">健康</th>
+            <th class="py-2 text-right font-medium">被引用</th><th class="py-2 text-right font-medium">时间窗请求</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="b in registered" :key="b.name" class="border-t border-border/50 hover:bg-primary/5" :class="b.health === 'unhealthy' && b.references ? 'bg-danger/5' : ''">
+            <td class="py-2.5 font-mono text-xs">{{ b.name }}</td>
+            <td class="py-2.5"><Badge tone="info">{{ honeypotTypeLabel[b.type] ?? b.type }}</Badge></td>
+            <td class="py-2.5 font-mono text-xs text-muted-foreground">{{ b.addr }}</td>
+            <td class="py-2.5"><Badge :tone="healthBadge[b.health].tone" dot :title="b.error">{{ b.health === 'healthy' ? `${b.latency_ms}ms` : healthBadge[b.health].text }}</Badge></td>
+            <td class="py-2.5 text-right tabular-nums">{{ b.references }}</td>
+            <td class="py-2.5 text-right tabular-nums">
+              {{ b.requests }}<span v-if="b.idle && b.enabled" class="ml-1.5 rounded bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">空闲</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </SpotlightCard>
 
     <SpotlightCard :interactive="false" class="p-5">
       <h2 class="mb-3 text-base font-medium">失败与回落 <span class="text-xs text-muted-foreground">（最近 100 条）</span></h2>

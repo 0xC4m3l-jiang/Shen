@@ -11,6 +11,8 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    /** 原始响应体（例如 validation_failed 时附带的逐字段校验报告）。 */
+    public body?: unknown,
   ) {
     super(message)
   }
@@ -69,7 +71,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   const data = text ? safeParse(text) : undefined
   if (!resp.ok) {
     const body = (data ?? {}) as { error?: string; code?: string }
-    const err = new ApiError(resp.status, body.code ?? 'http_' + resp.status, body.error ?? `请求失败（HTTP ${resp.status}）`)
+    const err = new ApiError(resp.status, body.code ?? 'http_' + resp.status, body.error ?? `请求失败（HTTP ${resp.status}）`, data)
     const authProblem = resp.status === 401 || err.code === 'password_change_required'
     if (authProblem && !opts.silentAuth) unauthorizedListeners.forEach((fn) => fn(err))
     throw err

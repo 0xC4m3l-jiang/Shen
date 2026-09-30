@@ -427,3 +427,46 @@ func TestOriginHasNoBackend(t *testing.T) {
 		t.Errorf("放行时后端名应为空，得到 %q", got)
 	}
 }
+
+// ── 禁止欺骗路径 + 路径面热替换 ──────────────────────────────────────────────
+
+func TestNoDeceptionDowngradesMirageWithSignal(t *testing.T) {
+	e, err := New(&stubJudge{v: contract.Verdict{Score: 0.8}}, &stubThresholds{th: testThr}, &stubGray{pct: 100},
+		Config{NoDeception: []contract.NoDeceptionRule{{ID: "pay", PathPrefix: "/pay", Reason: "合规"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := decidePath(t, e, "/pay/callback")
+	if d.Action != contract.ActionOrigin || d.Backend != "" {
+		t.Fatalf("命中禁止欺骗路径必须放行：%+v", d)
+	}
+	if n := len(d.Verdict.Signals); n != 1 || d.Verdict.Signals[0].ID != contract.SignalDeceptionExcluded || d.Verdict.Signals[0].Detail != "pay" {
+		t.Errorf("必须附加 deception_excluded 信号：%+v", d.Verdict.Signals)
+	}
+	if d.Verdict.Score != 0.8 {
+		t.Errorf("分数不应被改写：%v", d.Verdict.Score)
+	}
+	// 段边界：/payment 不命中 /pay。
+	if d := decidePath(t, e, "/payment"); d.Action != contract.ActionMirage {
+		t.Errorf("/payment 不应命中 /pay：%+v", d)
+	}
+}
+
+func TestUpdateSurfaceConcurrent(t *testing.T) {
+	e := newWhitelistEngine(t, contract.Whitelist{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			e.UpdateSurface([]string{"/decoy"}, contract.Whitelist{PathPrefixes: []string{"/healthz"}}, nil)
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		_, _ = e.Decide(context.Background(), contract.JudgeRequest{DecisionID: "x", Observed: contract.Observation{Path: "/healthz"}})
+	}
+	<-done
+	d, err := e.Decide(context.Background(), contract.JudgeRequest{DecisionID: "x", Observed: contract.Observation{Path: "/healthz"}})
+	if err != nil || d.Verdict.Score != 0 || d.Action != contract.ActionOrigin {
+		t.Fatalf("替换后的白名单应生效：%+v %v", d, err)
+	}
+}

@@ -39,9 +39,17 @@ services:
     environment:
       SHEN_CONFIG: /etc/shen/config.yaml
       SHEN_LISTEN: 127.0.0.1:9443 # 明文 gRPC 只绑回环（同命名空间的服务可达，宿主不可达）
+      SHEN_CORE_GRPC_TOKEN: ${SHEN_CORE_GRPC_TOKEN:-} # gRPC 面共享令牌：空 = 关闭（回环部署默认）；跨节点部署必须设置 + TLS
       SHEN_LOG_FORMAT: ${SHEN_LOG_FORMAT:-text}
+      # 管控台同步（欺骗管控数据集，方案 B）：核心定时拉取管控台的蜜罐池 / 诱饵 / 名单 / 注入并终检后热替换。
+      # 令牌为空 = 同步关闭（按部署配置运行）；两侧必须取同一个值（SHEN_CORE_SYNC_TOKEN）。
+      SHEN_CORE_CONSOLE_URL: http://127.0.0.1:9445
+      SHEN_CORE_CONSOLE_TOKEN: ${SHEN_CORE_SYNC_TOKEN:-}
+      SHEN_CORE_CONSOLE_SYNC_INTERVAL: ${SHEN_CORE_CONSOLE_SYNC_INTERVAL:-15s}
+      SHEN_CORE_SYNC_CACHE: /data/deception-sync.json # last-good 缓存：管控台暂时不可达时重启仍用最新配置
     volumes:
       - ${SHEN_CORE_CONFIG:-./deploy/config/config.example.yaml}:/etc/shen/config.yaml:ro
+      - core-state:/data
     ports:
       # 所有对宿主发布的端口都写在这里（发布的是共享命名空间里的监听）。默认只绑本机回环。
       - "${SHEN_BIND_ADDR:-127.0.0.1}:${SHEN_HTTP_PORT:-18080}:8080" # 业务入口（proxy 监听）
@@ -63,6 +71,7 @@ services:
       core: { condition: service_started }
     environment:
       SHEN_CORE_ADDR: 127.0.0.1:9443
+      SHEN_CORE_GRPC_TOKEN: ${SHEN_CORE_GRPC_TOKEN:-}
       SHEN_CONSOLE_LISTEN: 127.0.0.1:9445
       SHEN_CONSOLE_DATA_DIR: /data
       SHEN_CONSOLE_ALLOWED_ORIGINS: ${SHEN_CONSOLE_ALLOWED_ORIGINS:-http://127.0.0.1:${SHEN_CONSOLE_PORT:-19444},http://localhost:${SHEN_CONSOLE_PORT:-19444}}
@@ -74,8 +83,12 @@ services:
       # 宿主脚本经 Docker 端口转发到达时，来源是 Docker 网关（私有网段）；宿主端口只绑回环，外部不可达。
       SHEN_CONSOLE_API_TOKEN_SOURCES: ${SHEN_CONSOLE_API_TOKEN_SOURCES:-127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       SHEN_CONSOLE_ALERT_SCORE: ${SHEN_CONSOLE_ALERT_SCORE:-0.9}
+      # 欺骗管控数据集：启动时若尚未接管，自动从与核心**同一份**部署配置初始化（只读挂载，无需导入）。
+      SHEN_CONSOLE_SEED_CONFIG: /etc/shen/config.yaml
+      SHEN_CONSOLE_CORE_SYNC_TOKEN: ${SHEN_CORE_SYNC_TOKEN:-} # 核心同步令牌（与核心 SHEN_CORE_CONSOLE_TOKEN 同值；空 = 界面修改不下发）
     volumes:
-      - console-data:/data # 账号 / 反向链接器登记 / 审计：命名卷（跨平台无权限与性能问题）
+      - console-data:/data # 账号 / 反向链接器登记 / 审计 / 欺骗管控数据集：命名卷（跨平台无权限与性能问题）
+      - ${SHEN_CORE_CONFIG:-./deploy/config/config.example.yaml}:/etc/shen/config.yaml:ro
     healthcheck:
       test: ["CMD", "/usr/local/bin/shen", "-healthcheck"]
       interval: 10s
@@ -114,6 +127,7 @@ services:
     environment:
       SHEN_PROXY_UPSTREAM: ${SHEN_PROXY_UPSTREAM:-http://127.0.0.1:19080} # 换成你的真实业务地址
       SHEN_CORE_ADDR: 127.0.0.1:9443
+      SHEN_CORE_GRPC_TOKEN: ${SHEN_CORE_GRPC_TOKEN:-}
       SHEN_PROXY_LISTEN: 0.0.0.0:8080
       SHEN_PROXY_SHADOW: ${SHEN_PROXY_SHADOW:-true}
       SHEN_PROXY_LOG_REQUESTS: ${SHEN_PROXY_LOG_REQUESTS:-true} # 逐请求定位日志（生产叠加文件关闭）
@@ -185,3 +199,4 @@ services:
 
 volumes:
   console-data:
+  core-state: # 核心的管控台同步缓存（last-good）

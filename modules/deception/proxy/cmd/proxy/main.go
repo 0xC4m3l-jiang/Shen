@@ -63,6 +63,8 @@ func run() error {
 
 	listen := env("SHEN_PROXY_LISTEN", defaultListen)
 	coreAddr := env("SHEN_CORE_ADDR", defaultCoreAddr)
+	// 核心 gRPC 面的共享令牌：与核心同值时启用鉴权（空 = 服务端未启用，行为不变）。
+	coreGRPCToken := strings.TrimSpace(os.Getenv("SHEN_CORE_GRPC_TOKEN"))
 
 	mirage, err := parseMirage(os.Getenv("SHEN_PROXY_MIRAGE"))
 	if err != nil {
@@ -160,6 +162,7 @@ func run() error {
 		ReportQueue:     queue,
 		CacheMaxEntries: cacheMax,
 		CoreAddr:        coreAddr,
+		CoreGRPCToken:   coreGRPCToken,
 		Inject:          splitInject(os.Getenv("SHEN_PROXY_INJECT")),
 		// AI 欺骗内容注入的**本地兜底开关**（ADR-0023 决定 4）：默认 false，
 		// 与策略载荷的 inject_enabled **取与** —— 即使策略面说"开"，边缘也要一次本地同意。

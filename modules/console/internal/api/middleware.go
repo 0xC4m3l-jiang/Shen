@@ -33,7 +33,10 @@ func principalOf(r *http.Request) principal {
 	return p
 }
 
-const maxBodyBytes = 64 << 10
+const (
+	maxBodyBytes       = 64 << 10
+	maxConfigBodyBytes = 1 << 20
+)
 
 func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
 
@@ -53,7 +56,12 @@ func (s *Server) secure(next http.Handler) http.Handler {
 			return
 		}
 		if !safeMethod(r.Method) {
-			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+			limit := int64(maxBodyBytes)
+			// 欺骗管控数据集的写入 / 预检 / 核心上报可能较大（上千条诱饵）：单独放宽到 1 MiB。
+			if strings.HasPrefix(r.URL.Path, "/api/v1/config/") || r.URL.Path == "/api/v1/integration/deception/report" {
+				limit = maxConfigBodyBytes
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		next.ServeHTTP(w, r)
 	})

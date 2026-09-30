@@ -33,6 +33,17 @@ func TestMatrix(t *testing.T) {
 		{Viewer, UsersAdmin, false},
 		{Viewer, AuditRead, false},
 
+		// 欺骗管控数据集：按域授权。
+		{Admin, ConfigAdmin, true},
+		{DeceptionOperator, ConfigDeception, true},
+		{DeceptionOperator, ConfigHoneypot, false},
+		{DeceptionOperator, ConfigAdmin, false},
+		{HoneypotOperator, ConfigHoneypot, true},
+		{HoneypotOperator, ConfigDeception, false},
+		{Viewer, ConfigRead, true},
+		{Viewer, ConfigDeception, false},
+		{Viewer, ConfigHoneypot, false},
+
 		// 大模型：登记/密钥只给管理员；分析会计费，只读账号不给。
 		{Admin, LLMAdmin, true},
 		{Admin, LLMUse, true},

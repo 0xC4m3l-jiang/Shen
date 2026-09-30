@@ -15,6 +15,10 @@ export type Permission =
   | 'audit:read'
   | 'llm:use'
   | 'llm:admin'
+  | 'config:read'
+  | 'config:deception'
+  | 'config:honeypot'
+  | 'config:admin'
 
 export type ThemeId = 'mirage' | 'haze'
 export interface Preferences {
@@ -119,6 +123,8 @@ export interface Overview {
   recent: TrafficRow[]
   services_registered: number
   geo_db_built_at: number
+  config_sync?: import('./config').ConfigSyncCard | null
+  system_alerts?: number
 }
 
 export interface Service {
@@ -280,6 +286,8 @@ export interface SystemStatus {
   alert_score: number
   server_time: string
   interaction_events: { connected: boolean; note: string }
+  deception_sync?: import('./config').SyncStatus | null
+  seed?: import('./config').SeedOutcome
 }
 
 export interface EventView {

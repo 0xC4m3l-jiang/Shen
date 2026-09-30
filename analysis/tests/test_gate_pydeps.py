@@ -1,4 +1,4 @@
-"""门禁脚本 `scripts/gate/check-pydeps.sh`：锁文件 ↔ venv 一致性检查本身要能被验证。
+"""门禁脚本 `scripts/check/gate.sh pydeps`：锁文件 ↔ venv 一致性检查本身要能被验证。
 
 为什么用 fixture 目录而不是改真 venv：真 venv 是共享环境，改它会让别的检查一起失真；
 而这道检查的价值恰恰是「**环境与锁文件不一致时它必须红**」——
@@ -21,13 +21,13 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "gate" / "check-pydeps.sh"
+SCRIPT = REPO_ROOT / "scripts" / "check" / "gate.sh"
 
 
 def _sandbox(tmp_path: Path, *, lock: str, installed: str, dev_lock: str = "") -> Path:
-    """搭一个最小仓库骨架：`scripts/gate/` + `analysis/requirements*.txt` + 假 venv。"""
-    (tmp_path / "scripts" / "gate").mkdir(parents=True)
-    target = tmp_path / "scripts" / "gate" / "check-pydeps.sh"
+    """搭一个最小仓库骨架：`scripts/check/` + `analysis/requirements*.txt` + 假 venv。"""
+    (tmp_path / "scripts" / "check").mkdir(parents=True)
+    target = tmp_path / "scripts" / "check" / "gate.sh"
     shutil.copy2(SCRIPT, target)
 
     analysis = tmp_path / "analysis"
@@ -44,7 +44,7 @@ def _sandbox(tmp_path: Path, *, lock: str, installed: str, dev_lock: str = "") -
 
 def _run(script: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(script)],
+        [str(script), "pydeps"],
         capture_output=True,
         text=True,
         check=False,
@@ -104,8 +104,8 @@ def test_name_normalization_matches_pip(tmp_path: Path) -> None:
 
 def test_missing_venv_fails_loudly(tmp_path: Path) -> None:
     """缺 venv 必须**失败**，不能静默跳过（静默跳过等于假绿）。"""
-    (tmp_path / "scripts" / "gate").mkdir(parents=True)
-    target = tmp_path / "scripts" / "gate" / "check-pydeps.sh"
+    (tmp_path / "scripts" / "check").mkdir(parents=True)
+    target = tmp_path / "scripts" / "check" / "gate.sh"
     shutil.copy2(SCRIPT, target)
     (tmp_path / "analysis").mkdir()
     (tmp_path / "analysis" / "requirements.txt").write_text("protobuf==7.36.2\n", encoding="utf-8")

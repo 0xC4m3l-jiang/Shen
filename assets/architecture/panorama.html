@@ -94,7 +94,7 @@
   </div>
   <div class="node k-client" id="admin" style="left:70px;top:770px;width:200px;height:110px">
     <div class="nt"><i class="dot"></i>管理员 / 运维</div>
-    <div class="ns">在管控台签发与吊销接入凭证、看判定与告警</div>
+    <div class="ns">在管控台签发凭证、管欺骗管控数据集、看判定与告警</div>
   </div>
   <div class="note" style="left:70px;top:440px;width:200px;height:175px">
     <b>同一入口 · 两种身份</b><br>
@@ -120,8 +120,8 @@
   <div class="node k-core" id="core" style="left:395px;top:390px;width:360px;height:200px">
     <div class="nt"><i class="dot"></i>核心 · 判定与决策</div>
     <div class="mod">common/core</div>
-    <div class="ns">判定与响应生成的唯一实现：风险分 → 三值决策 + 灰度；策略面 Pull/Ack 下发</div>
-    <div class="chips"><span>judge</span><span>director 三值</span><span>policy</span><span>telemetry</span><span>session</span></div>
+    <div class="ns">判定与响应生成的唯一实现：风险分 → 三值决策 + 灰度；策略面 Pull/Ack 下发；管控台数据集终检后热替换（失败保留 last-good）</div>
+    <div class="chips"><span>judge</span><span>director 三值</span><span>policy</span><span>telemetry</span><span>session</span><span>管控同步</span></div>
   </div>
   <div class="node k-mirage" id="mirage" style="left:875px;top:372px;width:225px;height:110px">
     <div class="nt"><i class="dot"></i>幻境后端</div>
@@ -151,18 +151,18 @@
   <div class="node k-console" id="consoleUI" style="left:495px;top:750px;width:240px;height:125px">
     <div class="nt"><i class="dot"></i>管控台 · 前端</div>
     <div class="mod">modules/console/ui</div>
-    <div class="ns">接入管理 · 反向链接器 · 欺骗层 · 蜜罐层 · 告警 · 分析 · 系统</div>
+    <div class="ns">接入管理 · 反向链接器 · <b>欺骗管控</b>（蜜罐池 / 诱饵 / 黑白名单 / 注入 / 版本）· 欺骗层 · 蜜罐层 · 告警 · 分析 · 系统</div>
   </div>
   <div class="node k-console" id="consoleAPI" style="left:760px;top:750px;width:220px;height:125px">
     <div class="nt"><i class="dot"></i>管控台 · API</div>
     <div class="mod">modules/console/internal/api</div>
     <div class="ns mono">/api/v1（RBAC · CSRF · 审计）</div>
-    <div class="chips"><span>集成面 /integration</span></div>
+    <div class="chips"><span>集成面 /integration</span><span>欺骗管控数据集 /config</span></div>
   </div>
   <div class="node k-store" id="store" style="left:1005px;top:750px;width:160px;height:125px">
     <div class="nt"><i class="dot"></i>存储</div>
     <div class="mod">modules/console/internal/filestore</div>
-    <div class="ns">凭证 SHA-256 · 登记表 · 审计</div>
+    <div class="ns">凭证 SHA-256 · 登记表 · <b>欺骗管控数据集 + 50 版历史</b> · 审计</div>
   </div>
 
   <!-- 业务侧 -->
@@ -224,7 +224,7 @@ const EDGES = [
     wp:[[330,230],[330,255]] },
   { f:'attacker', fs:'r', fo:.5, t:'proxy', ts:'l', to:.9, k:'user', lp:[375,293], label:'扫描 / 自动化',
     wp:[[330,350],[330,300]] },
-  { f:'admin', fs:'r', fo:.5, t:'consoleUI', ts:'b', to:.5, k:'dev', lp:[460,888], label:'签发 / 吊销 · 观测告警',
+  { f:'admin', fs:'r', fo:.5, t:'consoleUI', ts:'b', to:.5, k:'dev', lp:[460,888], label:'签发 / 吊销 · 管控数据集 · 观测告警',
     wp:[[316,825],[316,896],[615,896]] },
 
   // 判定与策略（两条平行竖线，x=560 / x=640）
@@ -252,6 +252,11 @@ const EDGES = [
   // 网关 → 控制台（门/键盘表拉取与自动登记）
   { f:'gateway', fs:'b', fo:.82, t:'consoleAPI', ts:'t', to:.8, k:'dev', lp:[1060,716], label:'key 表拉取 · 自动登记 · 会话事件',
     wp:[[1030,365],[1130,365],[1130,706],[936,706]] },
+
+  // 核心 ⇄ 控制台（欺骗管控数据集：拉取合并 + 回执上报；方案 B）
+  { f:'core', fs:'b', fo:.85, t:'consoleAPI', ts:'t', to:.6, k:'dev', lp:[768,678],
+    label:['欺骗管控数据集拉取（304 免传输）','回执：结论 · 边缘确认 · 蜜罐健康'],
+    wp:[[700,707],[892,707]] },
 
   // 管控台内部（前端与 API 同属管控台，相邻摆放即可，不画短箭头）
   { f:'consoleAPI', fs:'r', fo:.5, t:'store', ts:'l', to:.5, k:'store', lp:[992,748], label:'登记' },

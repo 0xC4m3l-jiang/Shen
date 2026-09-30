@@ -2,6 +2,7 @@
 import { AlertOctagon, AlertTriangle, Info } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import GeoTag from '@/components/GeoTag.vue'
+import SystemAlertList from '@/components/config/SystemAlertList.vue'
 import LayerBadge from '@/components/LayerBadge.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import RowDrawer from '@/components/RowDrawer.vue'
@@ -11,6 +12,7 @@ import { useLiveResource } from '@/composables/useLiveResource'
 import { api } from '@/lib/api'
 import { fmtDateTime } from '@/lib/format'
 import type { AlertItem, TrafficRow, Window } from '@/lib/types'
+import type { SystemAlert } from '@/lib/config'
 import { useLiveStore } from '@/stores/live'
 
 type Level = AlertItem['level']
@@ -18,7 +20,7 @@ const live = useLiveStore()
 const level = ref<Level | 'all'>('all')
 const selected = ref<TrafficRow | null>(null)
 const { data, error, loading, refresh } = useLiveResource((signal) =>
-  api.get<{ alerts: AlertItem[]; counts: Partial<Record<Level, number>>; window: Window; alert_score: number }>(
+  api.get<{ alerts: AlertItem[]; counts: Partial<Record<Level, number>>; window: Window; alert_score: number; system_alerts?: SystemAlert[] }>(
     '/api/v1/alerts',
     { window: live.span },
     signal,
@@ -40,6 +42,8 @@ const filters = computed(() => [
   <div class="flex flex-col gap-6">
     <PageHeader title="告警" :subtitle="`需要关注的请求：拦截或 severity≠none（真实告警）、诱饵投递失败、风险分 ≥ ${data?.alert_score ?? 0.9}（仅显示，不改变处置）。`" />
     <StatePanel :error="error" :window="data?.window" :loading="loading" @retry="refresh" />
+    <SystemAlertList v-if="data?.system_alerts?.length" :alerts="data.system_alerts" />
+    <h2 v-if="data?.system_alerts?.length" class="-mb-3 text-base font-medium">流量告警</h2>
     <div class="flex flex-wrap gap-2">
       <button
         v-for="f in filters"

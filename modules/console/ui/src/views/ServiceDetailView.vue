@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Pencil, Trash2 } from 'lucide-vue-next'
+import { ArrowLeft, ArrowUpRight, Link2, Pencil, Trash2 } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BarList from '@/components/charts/BarList.vue'
@@ -19,6 +19,7 @@ import { useLiveResource } from '@/composables/useLiveResource'
 import { api, ApiError } from '@/lib/api'
 import { fmtDateTime, fmtPct } from '@/lib/format'
 import type { ServiceTraffic, TrafficRow } from '@/lib/types'
+import type { DatasetView } from '@/lib/config'
 import { useAuthStore } from '@/stores/auth'
 import { useLiveStore } from '@/stores/live'
 
@@ -38,6 +39,16 @@ const { data, error, loading, refresh } = useLiveResource(
   { deps: [id] },
 )
 const svc = computed(() => data.value?.service)
+// 该服务的诱饵绑定（替换语义）与下发后实际覆盖到它的诱饵。无 config:read 权限时不取。
+const config = useLiveResource(
+  (signal) => (auth.can('config:read') ? api.get<DatasetView>('/api/v1/config/dataset', undefined, signal) : Promise.resolve(null)),
+  { live: false, deps: [id] },
+)
+const binding = computed(() => config.data.value?.dataset.bindings.find((b) => b.service_id === id.value) ?? null)
+const coveringDecoys = computed(() => {
+  const hosts = new Set(svc.value?.hosts ?? [])
+  return (config.data.value?.projection.decoys ?? []).filter((p) => p.enabled && p.hosts.some((h) => hosts.has(h)))
+})
 const funnelMax = computed(() => Math.max(1, ...(data.value?.funnel ?? []).map((f) => f.count)))
 const sources = computed(() =>
   (data.value?.top_sources ?? []).map((s) => ({ label: `${s.ip}  ${s.geo.label}`, value: s.count, tone: 'accent' as const })),
@@ -71,7 +82,7 @@ async function remove() {
     </PageHeader>
     <StatePanel :error="error" :window="data?.window" :loading="loading" @retry="refresh" />
 
-    <SpotlightCard v-if="svc" :interactive="false" class="flex flex-wrap items-center gap-x-8 gap-y-3 p-5 text-sm">
+    <SpotlightCard v-if="svc" :interactive="false" body-class="flex flex-wrap items-center gap-x-8 gap-y-3 p-5 text-sm">
       <Badge :tone="svc.enabled ? 'mirage' : 'muted'" dot>{{ svc.enabled ? '观测中' : '已停用' }}</Badge>
       <div><span class="text-muted-foreground">上游 </span><span class="font-mono">{{ svc.upstream }}</span></div>
       <div class="flex flex-wrap items-center gap-1.5">
@@ -80,6 +91,24 @@ async function remove() {
       </div>
       <div><span class="text-muted-foreground">负责人 </span>{{ svc.owner || '—' }}</div>
       <div class="text-xs text-muted-foreground">v{{ svc.version }} · {{ svc.updated_by }} 更新于 {{ fmtDateTime(svc.updated_at) }}</div>
+    </SpotlightCard>
+
+    <SpotlightCard v-if="svc && config.data.value" :interactive="false" class="p-5 text-sm" body-class="flex flex-wrap items-start gap-x-8 gap-y-3">
+      <div class="flex min-w-[220px] flex-col gap-1">
+        <span class="flex items-center gap-2 font-medium"><Link2 class="h-4 w-4 text-primary" />诱饵绑定</span>
+        <span v-if="binding" class="text-xs text-muted-foreground"><Badge tone="warn">替换全局</Badge> 只使用绑定的 {{ binding.decoy_ids.length }} 条诱饵</span>
+        <span v-else class="text-xs text-muted-foreground">未绑定：使用全局诱饵集（按主机归属匹配）</span>
+      </div>
+      <div class="flex flex-1 flex-col gap-1.5">
+        <span class="text-xs text-muted-foreground">下发后覆盖本服务域名的启用诱饵</span>
+        <div class="flex flex-wrap gap-1.5">
+          <span v-for="p in coveringDecoys" :key="p.id" class="rounded-md border border-decoy/40 bg-decoy/10 px-2 py-0.5 font-mono text-xs">{{ p.id }} <span class="text-muted-foreground">{{ p.path }}</span></span>
+          <span v-if="!coveringDecoys.length" class="text-xs text-muted-foreground">无（本服务当前不会被投放诱饵）</span>
+        </div>
+      </div>
+      <RouterLink :to="{ name: 'config', query: { tab: 'decoys' } }" class="flex items-center gap-1 text-xs text-primary hover:underline">
+        {{ auth.can('config:deception') ? '去配置绑定' : '查看欺骗管控' }}<ArrowUpRight class="h-3.5 w-3.5" />
+      </RouterLink>
     </SpotlightCard>
 
     <section class="grid grid-cols-1 gap-4 xl:grid-cols-3">

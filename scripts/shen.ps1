@@ -8,7 +8,10 @@
   ./scripts/shen.ps1 up -Profile honeypot     # 只起蜜罐（core 永远随行）
   ./scripts/shen.ps1 up -Profile frontend,backend
   ./scripts/shen.ps1 up -Env dev              # 开发形态：Vite 热更新 + 调试端口
-  ./scripts/shen.ps1 status | logs console-api | restart | down
+  ./scripts/shen.ps1 update                   # 改了代码 / 配置后：重建镜像 + 整栈重建容器（= restart）
+  ./scripts/shen.ps1 update ui                # 只重建前端 console-ui，其余容器不动
+  ./scripts/shen.ps1 status | logs console-api | down
+  ./scripts/shen.ps1 ui-check                 # 验证 UI 显示：HTTP → 登录 → 浏览器逐页渲染 + 截图
   ./scripts/shen.ps1 smoke | traffic | doctor | verify   # 验证链路 / 完整流量 / 接入自检 / 端到端
 
 .NOTES
@@ -19,7 +22,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('up', 'down', 'ps', 'status', 'logs', 'restart', 'smoke', 'traffic', 'doctor', 'verify', 'help')]
+  [ValidateSet('up', 'update', 'restart', 'down', 'ps', 'status', 'logs', 'ui-check', 'smoke', 'traffic', 'doctor', 'verify', 'help')]
   [string]$Command = 'help',
 
   # 形态：dev / prod / verify（参数名 -Env；内部用 $Mode，避免与 $env: 驱动器混淆）
@@ -142,12 +145,26 @@ switch ($Command) {
     Wait-Ready
     Show-Urls
   }
-  'restart' {
-    # 整栈重建：core 是网络命名空间的持有者，单独重启它会让兄弟容器留在旧命名空间。
+  { $_ -in 'update', 'restart' } {
     Assert-Docker
-    Invoke-Compose (@('up', '-d', '--build', '--force-recreate') + $Rest)
-    Wait-Ready
-    Write-Host '✅ 已整栈重建' -ForegroundColor Green
+    if ($Rest.Count -gt 0 -and $Rest[0] -eq 'ui') {
+      # 只重建 console-ui：它加入 core 的**当前**网络命名空间，单独重建是安全的（反过来单独重建 core 才出问题）。
+      Invoke-Compose (@('up', '-d', '--build', '--no-deps', '--force-recreate', 'console-ui') + @($Rest | Select-Object -Skip 1))
+      Wait-Ready
+      Write-Host '✅ 前端已更新。验证页面显示：./scripts/shen.ps1 ui-check' -ForegroundColor Green
+    } else {
+      # 整栈重建：core 是网络命名空间的持有者，单独重启它会让兄弟容器留在旧命名空间。
+      Invoke-Compose (@('up', '-d', '--build', '--force-recreate') + $Rest)
+      Wait-Ready
+      Write-Host '✅ 已整栈重建' -ForegroundColor Green
+    }
+  }
+  'ui-check' {
+    # 验证 UI 显示（需要 python + agent-browser；没有浏览器时加 --http-only）
+    # 参数先拼成数组再 splat（命令模式下直接写 `@(..) + $Rest` 不会做数组相加）。
+    $pyArgs = @((Join-Path $Root 'scripts/check/ui.py')) + @('--url', (Get-ConsoleUrl)) + $Rest
+    python @pyArgs
+    if ($LASTEXITCODE -ne 0) { Fail 'UI 显示验证未通过（详见上方输出）' }
   }
   'down' { Assert-Docker; Invoke-Compose (@('down') + $Rest) }
   'ps' { Assert-Docker; Invoke-Compose @('ps') }
@@ -174,13 +191,15 @@ switch ($Command) {
     # 伪造流量 + 从观测面核对判定（完整验证；参数原样传给 send.py，如 --check-l4 --explain）
     # 赋值加括号：值是函数引用（环境变量透传），不是实值 —— 也不该长成密钥赋值的形态（secrets-check 规则②）。
     $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
-    python (Join-Path $Root 'demo/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
+    $pyArgs = @((Join-Path $Root 'demo/traffic/send.py')) + @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
+    python @pyArgs
     if ($LASTEXITCODE -ne 0) { Fail 'traffic 验证未通过（详见上方输出）' }
   }
   'doctor' {
     # 接入自检（INT-17 五项：body 可读性 / TLS 终结 / 会话粘性 / 后端可区分 / 引擎在路径上）
     $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
-    python (Join-Path $Root 'scripts/doctor/doctor.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
+    $pyArgs = @((Join-Path $Root 'scripts/check/doctor.py')) + @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl)) + $Rest
+    python @pyArgs
     if ($LASTEXITCODE -ne 0) { Fail 'doctor 自检未通过（详见上方输出）' }
   }
   'verify' {
@@ -189,7 +208,8 @@ switch ($Command) {
     $env:SHEN_CONSOLE_API_TOKEN = (Get-EnvValue 'SHEN_CONSOLE_API_TOKEN')
     Invoke-Compose @('ps')
     $report = Join-Path $RunDir ("verify-{0}.json" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    python (Join-Path $Root 'demo/traffic/send.py') @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl), '--check-l4', '--check-graph', '--explain', '--report', $report) + $Rest
+    $pyArgs = @((Join-Path $Root 'demo/traffic/send.py')) + @('--entry', (Get-EntryUrl), '--console', (Get-ConsoleUrl), '--check-l4', '--check-graph', '--explain', '--report', $report) + $Rest
+    python @pyArgs
     if ($LASTEXITCODE -ne 0) { Fail "verify 未通过；报告：$report" }
     Write-Host "报告：$report"
   }

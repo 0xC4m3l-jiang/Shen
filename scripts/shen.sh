@@ -1,5 +1,5 @@
 #!/bin/sh
-# Shen 的统一入口：启动 / 检查 / 冒烟 / 日志 / 停止（Linux / macOS / WSL；Windows 原生请用 scripts/shen.ps1）。
+# Shen 的 Docker 栈入口：启动 / 更新 / 状态 / 验证 / 日志 / 停止（Linux / macOS / WSL；Windows 原生请用 scripts/shen.ps1）。
 #
 # 为什么要有它（直接 docker compose 也能用）：
 #   ① 首次运行自动生成 .env（管理员默认 admin/admin；只读 API 令牌自动随机），不必手填；
@@ -8,16 +8,20 @@
 #   ④ 日志默认**不跟随**（取尾部即返回）—— `docker logs -f` 会挂住，人和自动化都不友好。
 #
 # 用法：
-#   scripts/shen.sh up [--env dev|prod|verify] [--profile P ...]   起栈（默认：全部模块、构建好的前端）
-#   scripts/shen.sh status      看容器状态 + 管控台概览
-#   scripts/shen.sh smoke       造三条流量并回显判定结果（快速验证链路）
-#   scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 demo/traffic/）
-#   scripts/shen.sh check       仓库级验证：make gate + make dev
-#   scripts/shen.sh doctor      接入自检（INT-17 五项）
-#   scripts/shen.sh verify      一键端到端验证：状态 + 全量伪造流量 + L4 核对 + 报告
-#   scripts/shen.sh logs [svc]  看日志尾部（不跟随；svc 如 core/proxy/console-api/console-ui/honeypot-web）
-#   scripts/shen.sh restart     整栈重建（改配置/换镜像后用；不要单独重启 core）
-#   scripts/shen.sh down        停掉并删容器（数据卷保留；彻底清理用 docker compose down -v）
+#   启停与更新
+#     scripts/shen.sh up [--env dev|prod|verify] [--profile P ...]   起栈并等就绪（默认：全部模块）
+#     scripts/shen.sh update      改了代码 / 配置后：重建镜像 + 整栈重建容器（= restart；不要单独重启 core）
+#     scripts/shen.sh update ui   只重建前端（console-ui）—— 只改了 UI 时用，其余容器不动
+#     scripts/shen.sh status      容器状态 + 管控台概览
+#     scripts/shen.sh logs [svc]  看日志尾部（不跟随；svc 如 core/proxy/console-api/console-ui/honeypot-web）
+#     scripts/shen.sh down        停掉并删容器（数据卷保留；彻底清理用 docker compose down -v）
+#   验证
+#     scripts/shen.sh ui-check    验证 UI 显示：HTTP → 登录 → 浏览器逐页渲染 + 截图（scripts/check/ui.py）
+#     scripts/shen.sh smoke       造三条流量并回显判定结果（快速验证链路）
+#     scripts/shen.sh traffic     发**伪造流量**并从观测面核对判定（完整验证；见 demo/traffic/）
+#     scripts/shen.sh doctor      接入自检（INT-17 五项）
+#     scripts/shen.sh verify      一键端到端：状态 + 全量伪造流量 + L4 核对 + 报告
+#     scripts/shen.sh check       仓库级验证：make gate + make dev
 #
 # 例：scripts/shen.sh up --profile honeypot        只起蜜罐（core 永远随行）
 #     scripts/shen.sh up --env dev                  开发形态（Vite 热更新 + 调试端口）
@@ -34,7 +38,7 @@ PROFILES=""
 die() { echo "shen: $*" >&2; exit 1; }
 
 need_docker() {
-	command -v docker >/dev/null 2>&1 || die "找不到 docker —— 本地模式请用 scripts/shen.sh local"
+	command -v docker >/dev/null 2>&1 || die "找不到 docker —— 不用 Docker 请改用 scripts/dev.sh up（本机直跑）"
 	docker info >/dev/null 2>&1 || die "Docker 守护进程没跑 —— 先启动 Docker Desktop / dockerd"
 	docker compose version >/dev/null 2>&1 || die "需要 Docker Compose v2（docker compose），旧版 docker-compose v1 不受支持"
 }
@@ -139,8 +143,8 @@ print_urls() {
      curl -s -A "HeadlessChrome/120" $(entry_url)/.git/config
      curl -s -A "Mozilla/5.0"        $(entry_url)/
 
-  看状态 / 日志 / 停止：
-     scripts/shen.sh status | scripts/shen.sh logs core | scripts/shen.sh down
+  看状态 / 验证页面 / 日志 / 停止：
+     scripts/shen.sh status | scripts/shen.sh ui-check | scripts/shen.sh logs core | scripts/shen.sh down
   临时产物目录（不在仓库里）：${RUNDIR}
 EOF
 }
@@ -215,7 +219,12 @@ cmd_traffic() {
 	exec python3 "${ROOT}/demo/traffic/send.py" --entry "$(entry_url)" --console "$(console_url)" "$@"
 }
 
-cmd_restart() {
+cmd_update() {
+	if [ "${1:-}" = ui ]; then
+		shift
+		cmd_update_ui "$@"
+		return
+	fi
 	# 两件必须一起做的事（都实测踩过）：
 	#   ① **整栈重建**：core 是网络命名空间的持有者，单独重启它会让兄弟服务留在旧命名空间 ⇒ 容器都 Up 但端口不通；
 	#   ② **带上 --build**：`--force-recreate` 只重建容器、**不重建镜像**。
@@ -223,15 +232,35 @@ cmd_restart() {
 	need_docker
 	ensure_env
 	mkdir -p "${RUNDIR}"
-	compose up -d --build --force-recreate >"${RUNDIR}/restart.log" 2>&1 ||
-		{ echo "重启失败，日志尾部："; tail -30 "${RUNDIR}/restart.log"; exit 1; }
+	echo "重建镜像并整栈重建容器（日志：${RUNDIR}/update.log）……"
+	compose up -d --build --force-recreate >"${RUNDIR}/update.log" 2>&1 ||
+		{ echo "更新失败，日志尾部："; tail -30 "${RUNDIR}/update.log"; exit 1; }
 	wait_ready || exit 1
 	echo "✅ 已整栈重建（不要单独 restart core：兄弟容器会留在旧网络命名空间）"
+	echo "   验证：scripts/shen.sh status · scripts/shen.sh ui-check · scripts/shen.sh smoke"
+}
+
+# 只重建 console-ui：它挂在 core 的网络命名空间上，单独重建它会加入**当前**命名空间，是安全的
+# （反过来单独重建 core 才会出问题）。--no-deps：不连带重建 core / console-api。
+cmd_update_ui() {
+	parse_opts "$@"
+	need_docker
+	ensure_env
+	mkdir -p "${RUNDIR}"
+	echo "重建前端镜像并替换 console-ui 容器（日志：${RUNDIR}/update-ui.log）……"
+	compose up -d --build --no-deps --force-recreate console-ui >"${RUNDIR}/update-ui.log" 2>&1 ||
+		{ echo "前端更新失败，日志尾部："; tail -30 "${RUNDIR}/update-ui.log"; exit 1; }
+	wait_ready || exit 1
+	echo "✅ 前端已更新。验证页面显示：scripts/shen.sh ui-check"
+}
+
+cmd_ui_check() {
+	exec python3 "${ROOT}/scripts/check/ui.py" --url "$(console_url)" "$@"
 }
 
 cmd_doctor() {
 	with_token
-	exec python3 "${ROOT}/scripts/doctor/doctor.py" --entry "$(entry_url)" --console "$(console_url)" "$@"
+	exec python3 "${ROOT}/scripts/check/doctor.py" --entry "$(entry_url)" --console "$(console_url)" "$@"
 }
 
 cmd_verify() {
@@ -271,21 +300,22 @@ cmd_logs() {
 }
 
 usage() {
-	sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-help}" in
 up) shift; cmd_up "$@" ;;
+update | restart) shift; cmd_update "$@" ;;
 status) shift; cmd_status "$@" ;;
-smoke) shift; cmd_smoke "$@" ;;
-traffic) shift; cmd_traffic "$@" ;;
-check) shift; cmd_check "$@" ;;
-doctor) shift; cmd_doctor "$@" ;;
-verify) shift; cmd_verify "$@" ;;
 logs) shift; cmd_logs "$@" ;;
-restart) shift; cmd_restart "$@" ;;
 down) shift; parse_opts "$@"; need_docker; compose down ;;
 ps) shift; parse_opts "$@"; need_docker; compose ps ;;
+ui-check) shift; cmd_ui_check "$@" ;;
+smoke) shift; cmd_smoke "$@" ;;
+traffic) shift; cmd_traffic "$@" ;;
+doctor) shift; cmd_doctor "$@" ;;
+verify) shift; cmd_verify "$@" ;;
+check) shift; cmd_check "$@" ;;
 help | -h | --help) usage ;;
-*) die "未知子命令：$1（可用：up status smoke traffic doctor verify check logs restart down ps help）" ;;
+*) die "未知子命令：$1（可用：up update status logs down ps ui-check smoke traffic doctor verify check help）" ;;
 esac

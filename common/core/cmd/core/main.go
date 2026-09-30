@@ -24,6 +24,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"shen/common/api/grpcauth"
 	judgev1 "shen/common/api/judge/v1"
 	policyv1 "shen/common/api/policy/v1"
 	telemetryv1 "shen/common/api/telemetry/v1"
@@ -106,7 +107,18 @@ func run() error {
 		return err
 	}
 
-	engine := judge.New(loader)
+	// 管控台同步（方案 B）：未配置 SHEN_CORE_CONSOLE_URL ⇒ 行为与今天逐字节一致。
+	syncCfg, err := loadSyncConfig(os.Getenv)
+	if err != nil {
+		return err
+	}
+	if syncCfg.Note != "" {
+		log.Printf("WARN %s", syncCfg.Note)
+	}
+
+	// live 是「当前生效的策略快照」：判定 / 决策 / 策略面 / 观测面都经它读，管控台同步时原子替换。
+	live := policy.NewLive(loader)
+	engine := judge.New(live)
 
 	// 欺骗面（阶段 2b）：诱饵 / 后端池 / 响应 / 隔离 —— 构造与自检集中在 assembleDeception。
 	surf, err := assembleDeception(ctx, loader, stores)
@@ -145,6 +157,7 @@ func run() error {
 	// 决策路径（阶段 2a）：影子模式用 ShadowDecider（恒放行，只算不处置）；
 	// 关闭影子后才用 director 产出真实三值（阈值 → 三值 + 灰度收敛）。
 	var decider control.Decider
+	var dir *director.Engine // 影子模式下为 nil（ShadowDecider 不看路径面）
 	if loader.Shadow() {
 		decider = control.NewShadowDecider(engine)
 	} else {
@@ -154,9 +167,14 @@ func run() error {
 		if werr != nil {
 			return werr
 		}
-		dir, derr := director.New(engine, loader, loader, director.Config{
+		bl, berr := loader.Blacklist(ctx)
+		if berr != nil {
+			return berr
+		}
+		d, derr := director.New(engine, live, live, director.Config{
 			DecoyPrefixes: decoyPrefixes(surf.assets),
 			Whitelist:     wl,
+			NoDeception:   bl,
 			// 拦截默认关（Q5）：只有显式打开才允许产出 block。
 			// 为什么要有这个开关：三值决策里的 block 否则**没有任何运行时途径可启用**，
 			// 于是"拦截路径"既验不了、也无法在灰度放开时逐级启用（INT-12）。
@@ -165,7 +183,7 @@ func run() error {
 		if derr != nil {
 			return derr
 		}
-		decider = dir
+		dir, decider = d, d
 	}
 
 	// 明文 gRPC 只允许回环监听：跨节点部署**必须**换 mTLS（见 docs/design/structure.md §4）。
@@ -182,7 +200,14 @@ func run() error {
 	// 已接受项（非缺陷）：明文 gRPC **只允许本机**，上面 assertPlaintextListenIsLocal 已做失败关闭；
 	// 跨节点部署必须换 mTLS（见 docs/design/structure.md §4）。
 	// nosemgrep: go.grpc.security.grpc-server-insecure-connection.grpc-server-insecure-connection
-	srv := grpc.NewServer()
+	// 共享令牌（grpcauth）：跨节点/共享网络部署时对 gRPC 面的最小鉴权防线，
+	// 与管控台 Bearer 同语义（常数时间比较）。空 = 关闭（回环部署行为不变）。
+	unaryAuth, streamAuth := grpcauth.ServerInterceptors(os.Getenv("SHEN_CORE_GRPC_TOKEN"))
+	srvOpts := make([]grpc.ServerOption, 0, 2)
+	if unaryAuth != nil {
+		srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(unaryAuth), grpc.ChainStreamInterceptor(streamAuth))
+	}
+	srv := grpc.NewServer(srvOpts...)
 	// 本期监听 127.0.0.1，明文 gRPC 可接受：TLS 在接入层（Envoy/Nginx）终结，
 	// 且 S1 只在同机内走（适配器与核心同主机）。
 	// 若改为跨节点部署，必须换成 mTLS（见 docs/design/structure.md §4 的部署形态对比）。
@@ -210,15 +235,22 @@ func run() error {
 		control.NewTelemetryServiceWith(collector,
 			control.WithEventLister(eventLister{events: stores.Event}),
 			control.WithEventHub(eventHub),
-			control.WithSnapshotProvider(coreSnapshot{loader: loader, content: content})))
+			control.WithSnapshotProvider(coreSnapshot{loader: live, content: content})))
 
 	// 策略面（S4）：把当前策略版本投影后下发给适配器，并接收它们的回执（AR-13 / ST-8）。
 	// 服务端落在 policy 模块（它持有快照与校验和）—— 不新增模块，见 ADR-0018。
-	policyServer := policy.NewServer(loader, stores.Policy)
+	policyServer := policy.NewServerLive(live, stores.Policy)
 	if content != nil {
 		policyServer.WithContent(*content)
 	}
 	policyv1.RegisterDeceptionPolicyServer(srv, policyServer)
+
+	// 管控台同步 + 蜜罐健康探测（仅在配置了 SHEN_CORE_CONSOLE_URL 时启动）。
+	syncCtx, stopSync := context.WithCancel(ctx)
+	defer stopSync()
+	if syncCfg.URL != "" {
+		startConsoleSync(syncCtx, syncCfg, loader, live, dir, surf, stores)
+	}
 
 	// 优雅退出：收到信号后停止接收新请求，给在途请求留出时间。
 	errCh := make(chan error, 1)
@@ -245,6 +277,7 @@ func run() error {
 	case sig := <-sigCh:
 		log.Printf("收到 %s，正在退出", sig)
 	}
+	stopSync()
 
 	stopped := make(chan struct{})
 	go func() {
@@ -266,9 +299,11 @@ func run() error {
 // assets 留着是因为 MD-25 的诱饵前缀集要从**同一份数据**汇总（单一事实源）。
 type deception struct {
 	surface decoy.Surface
-	pool    honeypot.Pool
-	isolate isolation.Isolation
-	assets  []contract.DecoyAsset
+	pool    *honeypot.Engine
+	// livePool 是**可热替换**的后端池（管控台同步重建后原子替换；健康探测写它）。
+	livePool atomic.Pointer[honeypot.Engine]
+	isolate  isolation.Isolation
+	assets   []contract.DecoyAsset
 }
 
 // assembleDeception 构造欺骗面的四个模块，并做启动期一致性自检。
@@ -312,7 +347,53 @@ func assembleDeception(ctx context.Context, loader *policy.Loader, stores *store
 		return nil, err
 	}
 
-	return &deception{surface: surface, pool: pool, isolate: iso, assets: assets}, nil
+	d := &deception{surface: surface, pool: pool, isolate: iso, assets: assets}
+	d.livePool.Store(pool)
+	return d, nil
+}
+
+// startConsoleSync 装配管控台同步与蜜罐健康探测。
+//
+// apply 是**唯一**的热替换落点，顺序：蜜罐类型终检 → 诱饵存储整表替换 → 决策层路径面 →
+// 后端池 → 策略快照（Live.Swap）→ 版本台账。任一步失败都在 Swap 之前返回 ⇒ last-good 不受影响。
+func startConsoleSync(ctx context.Context, cfg syncConfig, base *policy.Loader, live *policy.Live,
+	dir *director.Engine, surf *deception, stores *store.MemStores) {
+	apply := func(next *policy.Loader) error {
+		assets, err := next.Decoys(ctx)
+		if err != nil {
+			return err
+		}
+		backends, err := next.Honeypots(ctx)
+		if err != nil {
+			return err
+		}
+		pool, err := honeypot.New(backends, nil) // 类型成员资格的终检（policy 不反向依赖 honeypot）
+		if err != nil {
+			return err
+		}
+		if err := stores.Decoy.Replace(ctx, assets); err != nil {
+			return err
+		}
+		if dir != nil {
+			wl, _ := next.Whitelist(ctx)
+			bl, _ := next.Blacklist(ctx)
+			dir.UpdateSurface(decoyPrefixes(assets), wl, bl)
+		}
+		surf.livePool.Store(pool)
+		live.Swap(next)
+		if err := next.Publish(ctx, stores.Policy); err != nil {
+			log.Printf("WARN 版本台账未记录新版本（不影响生效）：%v", err)
+		}
+		return nil
+	}
+	prober := newHealthProber(live.Honeypots, func(ctx context.Context, name string, healthy bool) {
+		_ = surf.livePool.Load().SetHealthy(ctx, name, healthy) // 名字不在当前池（刚被删除）时忽略
+	})
+	syncer := newConsoleSync(cfg, base, apply, stores.Policy.Acks, prober.results)
+	log.Printf("管控台同步已启用：%s（每 %s 拉取；缓存 %q）—— 蜜罐池 / 诱饵 / 白名单 / 禁止欺骗路径 / 注入规则以管控台为准",
+		cfg.URL, cfg.Interval, cfg.CachePath)
+	go prober.run(ctx)
+	go syncer.run(ctx)
 }
 
 // ── 观测面适配器（把 store / telemetry 接到 control 定义的接口上）────────────
@@ -419,7 +500,7 @@ func (l eventLister) ListEvents(ctx context.Context, limit int, since time.Time,
 // **不含阈值 / 灰度 / 影子模式**：它们是核心运行参数，`thresholds.go` 明确禁止进 `api/*.proto`
 // （要看去部署配置）。字段取舍的完整规矩见 `docs/spec/console-api.md` §2.1。
 type coreSnapshot struct {
-	loader  *policy.Loader
+	loader  *policy.Live
 	content *policy.ContentSource // 可为 nil：未启用 AI，或启用但没配清单
 }
 

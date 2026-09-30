@@ -40,18 +40,25 @@ const (
 	// 用模型分析流量会消耗 token，给各运维角色，但**只读账号不给**（只读意味着零副作用，含计费）。
 	LLMUse   Permission = "llm:use"   // 选流量 → 选模型 → 对话分析；查看 token 用量
 	LLMAdmin Permission = "llm:admin" // 登记 / 修改 / 删除大模型提供方、测试连通性
+	// 欺骗管控数据集（方案 B）：按域授权 —— 欺骗运维改欺骗层、蜜罐运维改蜜罐池、回滚只给管理员。
+	// 这些权限只改**登记数据**（经核心终检后生效），不涉及判定策略。
+	ConfigRead      Permission = "config:read"      // 查看数据集 / 校验 / 版本 / 模板 / 同步状态
+	ConfigDeception Permission = "config:deception" // 改诱饵 / 白名单 / 禁止欺骗路径 / 注入 / 服务绑定
+	ConfigHoneypot  Permission = "config:honeypot"  // 改蜜罐池
+	ConfigAdmin     Permission = "config:admin"     // 版本回滚
 )
 
 // matrix 是唯一的授权事实源。
 var matrix = map[Role]map[Permission]bool{
 	Admin: set(OverviewRead, DeceptionRead, HoneypotRead, RegistryRead, RegistryWrite,
-		AnalysisRead, AlertsRead, StreamRead, SelfManage, UsersAdmin, AuditRead, LLMUse, LLMAdmin),
+		AnalysisRead, AlertsRead, StreamRead, SelfManage, UsersAdmin, AuditRead, LLMUse, LLMAdmin,
+		ConfigRead, ConfigDeception, ConfigHoneypot, ConfigAdmin),
 	DeceptionOperator: set(OverviewRead, DeceptionRead, RegistryRead, RegistryWrite,
-		AnalysisRead, AlertsRead, StreamRead, SelfManage, LLMUse),
+		AnalysisRead, AlertsRead, StreamRead, SelfManage, LLMUse, ConfigRead, ConfigDeception),
 	HoneypotOperator: set(OverviewRead, HoneypotRead, RegistryRead,
-		AnalysisRead, AlertsRead, StreamRead, SelfManage, LLMUse),
+		AnalysisRead, AlertsRead, StreamRead, SelfManage, LLMUse, ConfigRead, ConfigHoneypot),
 	Viewer: set(OverviewRead, DeceptionRead, HoneypotRead, RegistryRead,
-		AnalysisRead, AlertsRead, StreamRead, SelfManage),
+		AnalysisRead, AlertsRead, StreamRead, SelfManage, ConfigRead),
 }
 
 func set(perms ...Permission) map[Permission]bool {

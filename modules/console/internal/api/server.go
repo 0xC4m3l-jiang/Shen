@@ -2,7 +2,8 @@
 // 后端不再提供任何页面（前后端解耦，前端由独立的 nginx 容器同源提供）。
 //
 // 每条路由注册时声明所需权限；中间件统一执行来源校验、认证、首次改密闸门、授权与 CSRF，**默认拒绝**。
-// 边界：只读观测 + 反向链接器登记；不下发策略、不参与请求级判定（`AR-10`）。
+// 边界：只读观测 + 反向链接器登记 + **欺骗管控登记数据**（蜜罐池 / 诱饵 / 名单 / 注入 / 服务绑定，
+// 经核心终检后生效）；不下发判定策略（规则 / 阈值 / 灰度 / 影子）、不参与请求级判定（`AR-10`）。
 package api
 
 import (
@@ -18,6 +19,7 @@ import (
 	"shen/modules/console/internal/audit"
 	"shen/modules/console/internal/auth"
 	"shen/modules/console/internal/connector"
+	"shen/modules/console/internal/deception"
 	"shen/modules/console/internal/geoip"
 	"shen/modules/console/internal/llm"
 	"shen/modules/console/internal/rbac"
@@ -37,8 +39,14 @@ type Config struct {
 	LLM              *llm.Service       // 大模型分析；nil = 未启用（相关接口统一 503）
 	Connector        *connector.Service // 连接器接入（凭证 + 会话观测）；nil = 未启用
 	IntegrationToken string             // 网关集成令牌（/api/v1/integration/* 的唯一凭证；空 = 集成面 503）
-	Now              func() time.Time
-	Logf             func(format string, args ...any)
+	// 欺骗管控数据集（方案 B）。Deception/Sync 为 nil = 未启用（/api/v1/config/* 统一 503）。
+	Deception     *deception.Store
+	Sync          *deception.SyncState
+	Seed          deception.SeedOutcome
+	Templates     deception.Templates
+	CoreSyncToken string // 核心同步令牌（/api/v1/integration/deception*；空 = 同步通道 503）
+	Now           func() time.Time
+	Logf          func(format string, args ...any)
 }
 
 // Server 是 v1 接口。
@@ -145,6 +153,7 @@ func (s *Server) routes() {
 	route("GET /api/v1/audit", rbac.AuditRead, s.handleAudit)
 	s.llmRoutes(route)
 	s.connectorRoutes(route)
+	s.configRoutes(route)
 	s.integrationRoutes()
 
 	// 其余 /api/ 路径一律 404（不回落到任何页面）。
@@ -167,6 +176,10 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(locked.RetryAfter.Seconds())+1))
 		writeError(w, http.StatusTooManyRequests, "locked", err.Error())
 	case errors.Is(err, registry.ErrNotFound), errors.Is(err, auth.ErrUserNotFound):
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+	case errors.Is(err, deception.ErrConflict):
+		writeError(w, http.StatusConflict, "version_conflict", err.Error())
+	case errors.Is(err, deception.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, registry.ErrConflict):
 		writeError(w, http.StatusConflict, "version_conflict", err.Error())
@@ -217,6 +230,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"geo_db_built_at": s.geo.BuiltAt(),
 		"alert_score":     s.cfg.AlertScore,
 		"server_time":     s.now().UTC(),
+		"deception_sync":  s.configSyncSummary(),
+		"seed":            s.cfg.Seed,
 		"interaction_events": map[string]any{
 			"connected": false,
 			"note":      "合成交互事件（登录 / 浏览 / 受限写）目前只进蜜罐后端本地日志，尚未回流核心",

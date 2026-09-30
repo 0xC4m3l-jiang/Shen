@@ -106,6 +106,9 @@ type DecoyStore interface {
 	List(ctx context.Context) ([]contract.DecoyAsset, error)
 	Get(ctx context.Context, id string) (contract.DecoyAsset, bool, error)
 	Put(ctx context.Context, a contract.DecoyAsset) error
+	// Replace 用 as **整表**替换全部资产（原子：读侧要么看到旧表、要么看到新表）。
+	// 用于管控台同步：被删除的资产必须消失，逐条 Put 做不到。
+	Replace(ctx context.Context, as []contract.DecoyAsset) error
 }
 
 // ContentStore 承载**预生成的欺骗内容**（生产实现：PostgreSQL / Redis）。

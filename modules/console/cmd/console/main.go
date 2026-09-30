@@ -6,7 +6,8 @@
 //
 // 边界（不做的事）：
 //   - **不参与请求级判定**（`AR-10`）：它是旁观者，挂了不影响业务；
-//   - **不下发策略**：反向链接器只是「登记 + 按域名归类流量」，生效配置仍走核心配置与策略面；
+//   - **不下发判定策略**：反向链接器只是「登记 + 按域名归类流量」；欺骗管控数据集（蜜罐池 / 诱饵 /
+//     名单 / 注入 / 服务绑定）由核心**主动拉取**并终检后生效，规则 / 阈值 / 灰度仍只来自核心部署配置；
 //   - **不主动连接业务上游**：登记里的 upstream 只做格式校验与展示。
 //
 // 本进程只负责**装配**：配置 → 核心 gRPC 读面 → 账号 / 登记 / 归属地 / 审计 → v1 路由 → HTTP 服务。
@@ -29,11 +30,13 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"shen/common/api/grpcauth"
 	telemetryv1 "shen/common/api/telemetry/v1"
 	"shen/modules/console/internal/api"
 	"shen/modules/console/internal/audit"
 	"shen/modules/console/internal/auth"
 	"shen/modules/console/internal/connector"
+	"shen/modules/console/internal/deception"
 	"shen/modules/console/internal/geoip"
 	"shen/modules/console/internal/llm"
 	"shen/modules/console/internal/registry"
@@ -99,8 +102,24 @@ func run(cfg config) error {
 		log.Printf("console: WARN 未设置 SHEN_CONSOLE_INTEGRATION_TOKEN ⇒ 连接器集成面未启用（网关无法拉取凭证；接入管理页的签发功能不受影响）")
 	}
 
+	// 欺骗管控数据集（方案 B）：启动即可见 —— 尚未接管时自动从部署配置初始化，无需人工导入。
+	decStore, seed, templates, err := openDeception(cfg)
+	if err != nil {
+		return err
+	}
+	syncState := deception.NewSyncState(cfg.CoreSyncToken != "", nil)
+	syncState.NoteRev(decStore.Get().ProjectionRev)
+	if seed.Seeded {
+		_ = aud.Record(audit.Entry{Actor: "system", Action: "deception.dataset.initialized",
+			Target: "dataset", Result: "ok", Detail: "来源=" + seed.Source})
+	}
+
 	// 与核心之间走本机明文 gRPC（同一网络命名空间的回环；跨节点必须换 mTLS）。
-	conn, err := grpc.NewClient(cfg.CoreAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	connOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if cfg.CoreGRPCToken != "" {
+		connOpts = append(connOpts, grpc.WithPerRPCCredentials(grpcauth.ClientCredentials(cfg.CoreGRPCToken)))
+	}
+	conn, err := grpc.NewClient(cfg.CoreAddr, connOpts...)
 	if err != nil {
 		return fmt.Errorf("连接核心失败：%w", err)
 	}
@@ -111,6 +130,7 @@ func run(cfg config) error {
 		CookieSecure: cfg.CookieSecure, SessionAbsolute: cfg.SessionTTL, AlertScore: cfg.AlertScore,
 		MaxStreams: cfg.MaxStreams, LLM: llmSvc, Connector: connectorSvc,
 		IntegrationToken: cfg.IntegrationToken, Logf: log.Printf,
+		Deception: decStore, Sync: syncState, Seed: seed, Templates: templates, CoreSyncToken: cfg.CoreSyncToken,
 	})
 	warnings(cfg)
 
@@ -138,6 +158,38 @@ func run(cfg config) error {
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
+}
+
+// openDeception 打开数据集并做启动期自动初始化；数据集文件损坏时启动失败（坏配置不运行）。
+// 部署配置缺失 / 不可读**不阻断启动**：页面顶部会提示「未初始化」，首次保存即视为接管。
+func openDeception(cfg config) (*deception.Store, deception.SeedOutcome, deception.Templates, error) {
+	templates, err := deception.LoadTemplates()
+	if err != nil {
+		return nil, deception.SeedOutcome{}, deception.Templates{}, err
+	}
+	store, err := deception.Open(filepath.Join(cfg.DataDir, "deception"), nil)
+	if err != nil {
+		return nil, deception.SeedOutcome{}, deception.Templates{}, err
+	}
+	seed := deception.AutoSeed(store, cfg.SeedConfig)
+	cur := store.Get()
+	switch {
+	case seed.Seeded:
+		log.Printf("console: 欺骗管控数据集已从部署配置 %s 自动初始化（蜜罐 %d · 诱饵 %d · 黑名单 %d · 注入 %d）",
+			seed.Source, len(cur.Honeypots), len(cur.Decoys), len(cur.Blacklist), len(cur.Injects))
+	case seed.Error != "":
+		log.Printf("console: WARN 读取部署配置 %s 失败：%s（数据集保持现状）", seed.Source, seed.Error)
+	case !cur.Initialized:
+		log.Printf("console: WARN 未找到部署配置（SHEN_CONSOLE_SEED_CONFIG=%q）⇒ 欺骗管控数据集未初始化：核心继续按自己的部署配置运行，在界面首次保存即接管", cfg.SeedConfig)
+	case seed.Drifted:
+		log.Printf("console: WARN 部署配置 %s 的欺骗域在接管后被修改过 —— 这些修改**不会生效**，请在管控台修改", seed.Source)
+	default:
+		log.Printf("console: 欺骗管控数据集 v%d（投影修订 r%d）", cur.Version, cur.ProjectionRev)
+	}
+	if cfg.CoreSyncToken == "" {
+		log.Printf("console: WARN 未设置 SHEN_CONSOLE_CORE_SYNC_TOKEN ⇒ 核心同步通道未启用：界面上的欺骗配置修改不会下发到核心")
+	}
+	return store, seed, templates, nil
 }
 
 func openGeo(path string) (*geoip.DB, error) {

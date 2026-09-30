@@ -67,9 +67,9 @@ curl -s -A "Mozilla/5.0"        http://127.0.0.1:18080/               # 正常�
 | 文件 | 用途 |
 | --- | --- |
 | `compose.yaml`（仓库根） | base：全部服务、profiles、健康检查、卷 |
-| `deploy/docker/compose.dev.yaml` | 开发：Vite 热更新容器（挂载 `modules/console/ui` 源码）、发布调试端口 19445/5173、蜜罐直连口 |
+| `deploy/docker/compose.dev.yaml` | 开发：前端换 Vite 开发服务器（挂载 `modules/console/ui` 源码热更新）、发布调试端口 19445（管控台 API 直连）/ 19090（蜜罐后端直连） |
 | `deploy/docker/compose.prod.yaml` | 生产：镜像 tag（`${SHEN_IMAGE_PREFIX:?}/${SHEN_VERSION:?}`）、secrets 文件、只读根文件系统 + tmpfs、资源限制、日志轮转、无 demo、强制影子首发 |
-| `deploy/docker/compose.verify-mirage.yaml` | 验证档：非影子、登记改道与诱饵路由（见根 README §5.2） |
+| `deploy/docker/compose.verify-mirage.yaml` | 验证档：非影子、登记改道与诱饵路由（见根 README §5 架构） |
 
 叠加文件的路径一律**相对仓库根**书写（Compose 以第一个文件所在目录为项目目录）：
 
@@ -172,7 +172,7 @@ Windows / macOS **不要**把 `/data` 改成绑定挂载（权限与性能问题
 | proxy → core | gRPC | 判定（预算 ≤3ms，失败放行）、策略 Pull/Ack、异步遥测上报 |
 | proxy → business / honeypot-web | HTTP | 评分改道失败回落业务；专属诱饵失败固定 502，绝不回源 |
 | analysis → core | gRPC | 按游标增量读取，结论回写 |
-| honeypot-web → core | 暂无 | 合成交互事件只进本地日志（README §6.2 #4），页面如实标注「未接入」 |
+| honeypot-web → core | 暂无 | 合成交互事件只进本地日志（根 README §8 成熟度「明确还没做」），页面如实标注「未接入」 |
 
 ## 换成你自己的业务
 

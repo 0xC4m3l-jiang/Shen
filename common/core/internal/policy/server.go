@@ -134,9 +134,10 @@ type edgeWhitelist struct {
 type Server struct {
 	policyv1.UnimplementedDeceptionPolicyServer
 
-	loader *Loader
-	store  store.PolicyStore
-	now    func() time.Time
+	// live 是当前生效的策略快照（管控台同步会原子替换它；未启用同步时恒为装载时那份）。
+	live  *Live
+	store store.PolicyStore
+	now   func() time.Time
 	// content 是 AI 内容的投影输入；nil = 本实例未装配内容（inject_enabled=false，无清单）。
 	content *ContentSource
 }
@@ -168,14 +169,24 @@ func NewServer(l *Loader, ps store.PolicyStore) *Server {
 	if l == nil || ps == nil {
 		panic("policy: NewServer 需要 loader 与 PolicyStore")
 	}
-	return &Server{loader: l, store: ps, now: time.Now}
+	return NewServerLive(NewLive(l), ps)
+}
+
+// NewServerLive 与 NewServer 相同，但读**可热替换**的快照持有者（管控台同步用）。
+func NewServerLive(v *Live, ps store.PolicyStore) *Server {
+	if v == nil || ps == nil {
+		panic("policy: NewServerLive 需要 Live 与 PolicyStore")
+	}
+	return &Server{live: v, store: ps, now: time.Now}
 }
 
 // Pull 返回当前策略版本对边缘的投影。
 //
 // `checksum` 覆盖**下发的那串字节**（不是配置文件）—— 适配器据此先验完整性再应用（`ST-8`）。
 func (s *Server) Pull(ctx context.Context, req *policyv1.PolicyPullRequest) (*policyv1.PolicySnapshot, error) {
-	snap, err := s.loader.Snapshot(ctx)
+	// 整次 Pull 只取一次快照：版本、校验和与载荷必须来自**同一份**策略（并发 Swap 下也成立）。
+	l := s.live.Current()
+	snap, err := l.Snapshot(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "policy: 取快照失败：%v", err)
 	}
@@ -184,7 +195,7 @@ func (s *Server) Pull(ctx context.Context, req *policyv1.PolicyPullRequest) (*po
 		return nil, status.Errorf(codes.NotFound, "policy: 本实例只有策略集 %q（请求的是 %q）", snap.PolicyID, want)
 	}
 
-	payload, err := s.edgePayload(ctx, snap)
+	payload, err := s.edgePayload(ctx, l, snap)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "policy: 组装边缘策略失败：%v", err)
 	}
@@ -231,16 +242,16 @@ func (s *Server) Ack(ctx context.Context, in *policyv1.PolicyAck) (*policyv1.Pol
 //
 // 确定性：字段序固定（struct 序）+ 后端按名排序 ⇒ 同内容必得同一 checksum（`AR-30` 精神：
 // 下发的字节要可复现，否则适配器每次拉取都会以为策略变了）。
-func (s *Server) edgePayload(ctx context.Context, snap contract.PolicySnapshot) ([]byte, error) {
-	backends, err := s.loader.Honeypots(ctx)
+func (s *Server) edgePayload(ctx context.Context, l *Loader, snap contract.PolicySnapshot) ([]byte, error) {
+	backends, err := l.Honeypots(ctx)
 	if err != nil {
 		return nil, err
 	}
-	wl, err := s.loader.Whitelist(ctx)
+	wl, err := l.Whitelist(ctx)
 	if err != nil {
 		return nil, err
 	}
-	assets, err := s.loader.Decoys(ctx)
+	assets, err := l.Decoys(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +295,7 @@ func (s *Server) edgePayload(ctx context.Context, snap contract.PolicySnapshot) 
 	sort.Strings(doc.Whitelist.SourceCIDRs)
 
 	// 注入规则：**不排序**（执行顺序是配置的一部分），但保持「未配置」与「显式空」的区别。
-	if rules, provided, err := s.loader.Injects(ctx); err != nil {
+	if rules, provided, err := l.Injects(ctx); err != nil {
 		return nil, err
 	} else if provided {
 		out := make([]edgeInjectRule, 0, len(rules))

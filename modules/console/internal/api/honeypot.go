@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"time"
+
+	"shen/modules/console/internal/deception"
 )
 
 // 投递结果的中文说明（与适配器 delivery_result 取值一一对应）。
@@ -35,7 +37,7 @@ func (s *Server) handleDeliveries(w http.ResponseWriter, r *http.Request) {
 	}
 	v := deliveriesView{Window: win, ByLayer: map[string]int{}, ByResult: map[string]int{}, Labels: deliveryLabels,
 		Interactions: map[string]any{"connected": false,
-			"note": "合成管理台的登录 / 浏览 / 受限写事件目前只进蜜罐后端本地日志，尚未回流核心（README §6.2 #4）"}}
+			"note": "合成管理台的登录 / 浏览 / 受限写事件目前只进蜜罐后端本地日志，尚未回流核心（根 README §8 成熟度「明确还没做」）"}}
 	limit := intParam(r, "limit", 200, 1, 1000)
 	for _, row := range rows {
 		if row.Layer != layerMirage && row.Layer != layerDecoy && row.Layer != layerFallback {
@@ -115,7 +117,61 @@ func (s *Server) handleBackends(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Requests > out[j].Requests })
 	writeJSON(w, http.StatusOK, map[string]any{"window": win, "backends": out,
-		"note": "由时间窗内的实际流量推导；未收到流量的已登记后端不会出现在这里"})
+		"registered": s.registeredBackends(out),
+		"note":       "流量统计由时间窗内的实际流量推导；已登记但空闲的蜜罐与健康状态见「蜜罐池 · 登记与健康」"})
+}
+
+// registeredView 是蜜罐池里一个已登记后端的运维视图（登记 + 健康 + 引用 + 流量）。
+type registeredView struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Addr       string `json:"addr"`
+	Enabled    bool   `json:"enabled"`
+	Health     string `json:"health"` // healthy | unhealthy | unknown | disabled
+	LatencyMS  int64  `json:"latency_ms"`
+	Error      string `json:"error,omitempty"`
+	References int    `json:"references"` // 引用它的启用诱饵数
+	Requests   int    `json:"requests"`
+	Idle       bool   `json:"idle"` // 时间窗内无流量
+}
+
+// registeredBackends 合并蜜罐池登记、核心上报的健康探测与流量统计（未启用数据集时返回空）。
+func (s *Server) registeredBackends(traffic []backendView) []registeredView {
+	out := []registeredView{}
+	if s.cfg.Deception == nil || s.cfg.Sync == nil {
+		return out
+	}
+	ds := s.cfg.Deception.Get()
+	st := s.cfg.Sync.Status(ds.ProjectionRev)
+	probes := map[string]deception.HoneypotProbe{}
+	for _, p := range st.Honeypots {
+		probes[p.Name] = p
+	}
+	refs := map[string]int{}
+	for _, d := range ds.Decoys {
+		if d.Enabled {
+			refs[d.Backend]++
+		}
+	}
+	reqs := map[string]int{}
+	for _, t := range traffic {
+		reqs[t.Name] += t.Requests
+	}
+	for _, h := range ds.Honeypots {
+		v := registeredView{Name: h.Name, Type: h.Type, Addr: h.Addr, Enabled: h.Enabled,
+			References: refs[h.Name], Requests: reqs[h.Name], Health: "unknown"}
+		v.Idle = v.Requests == 0
+		switch p, ok := probes[h.Name]; {
+		case !h.Enabled:
+			v.Health = "disabled"
+		case ok && p.Healthy:
+			v.Health, v.LatencyMS = "healthy", p.LatencyMS
+		case ok:
+			v.Health, v.Error = "unhealthy", p.Error
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 type analysisView struct {
@@ -196,5 +252,5 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"window": win, "alerts": out, "counts": counts,
-		"alert_score": s.cfg.AlertScore})
+		"alert_score": s.cfg.AlertScore, "system_alerts": s.systemAlerts()})
 }

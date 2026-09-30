@@ -54,6 +54,22 @@ type InjectRule struct {
 // 分类只描述「钩子是哪种诱饵形态」，**不参与注入行为** —— 因此新增分类不需要改执行代码。
 var InjectKinds = []string{"developer_api", "instruction_file", "hidden_link", "dataset"}
 
+// NoDeceptionRule 是一条「禁止欺骗路径」（黑名单）：命中的请求**绝不**改道到幻境。
+//
+// 与白名单的区别：白名单是**免判定**（连判定都不做，内部来源 / 探针）；
+// 本规则仍然判定（信号与观测照常），只是把 route_mirage 降级为放行 —— 用于合规 / 法务
+// 指定"无论多可疑都不许欺骗"的路径（如支付回调）。Reason 必填：回滚与审计时要能回答"为什么"。
+type NoDeceptionRule struct {
+	ID         string
+	PathPrefix string // 归一化的绝对路径前缀（按路径段边界匹配，与白名单同一口径 N5）
+	Reason     string
+}
+
+// SignalDeceptionExcluded 是「本会改道、但命中禁止欺骗路径而放行」时附加的信号 id。
+//
+// 它让黑名单的效果**可观测**：控制台能看到"这条请求本来会被改道"。
+const SignalDeceptionExcluded = "deception_excluded"
+
 // DecoyAsset 是一个诱饵资产的**定义**。
 //
 // 它是数据（可配置、可持久化），不是行为 —— 内容生成由 responder 负责，

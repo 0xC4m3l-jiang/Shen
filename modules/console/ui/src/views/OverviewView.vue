@@ -6,6 +6,7 @@ import DonutChart from '@/components/charts/DonutChart.vue'
 import BarList from '@/components/charts/BarList.vue'
 import TrendChart from '@/components/charts/TrendChart.vue'
 import GeoTag from '@/components/GeoTag.vue'
+import ConfigSyncCard from '@/components/config/ConfigSyncCard.vue'
 import KpiCard from '@/components/KpiCard.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import RowDrawer from '@/components/RowDrawer.vue'
@@ -19,9 +20,11 @@ import { fmtAgo, fmtPct, layerMeta } from '@/lib/format'
 import type { Layer, Overview, TrafficRow } from '@/lib/types'
 import { useLiveStore } from '@/stores/live'
 import { usePrefsStore } from '@/stores/prefs'
+import { useAuthStore } from '@/stores/auth'
 
 const live = useLiveStore()
 const prefs = usePrefsStore()
+const auth = useAuthStore()
 const now = useNow({ interval: 1000 })
 const { data, error, loading, refresh } = useLiveResource((signal) =>
   api.get<Overview>('/api/v1/overview', { window: live.span }, signal),
@@ -81,6 +84,8 @@ const freshness = computed(() => fmtAgo(live.lastEventAt || data.value?.window.f
       <KpiCard label="来源 IP" :value="stats?.unique_ips ?? 0" :icon="Globe2" tone="info" :hint="`已登记服务 ${data?.services_registered ?? 0} 个`" />
       <KpiCard label="数据新鲜度" :text="freshness" :icon="Clock3" tone="decoy" :hint="live.healthy ? '实时流已连接' : '实时流未连接：定时刷新中'" />
     </section>
+
+    <ConfigSyncCard v-if="data?.config_sync && auth.can('config:read')" :card="data.config_sync" :system-alerts="data.system_alerts ?? 0" />
 
     <section class="grid grid-cols-1 gap-4 xl:grid-cols-3">
       <SpotlightCard :interactive="false" class="p-5 xl:col-span-2">

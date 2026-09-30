@@ -39,6 +39,15 @@ type configDoc struct {
 	Honeypots  *[]honeypotDoc `yaml:"honeypots"`
 	Injects    *[]injectDoc   `yaml:"injects"`
 	AI         *aiDoc         `yaml:"ai"`
+	// Blacklist 是「禁止欺骗路径」（可选）：命中的请求绝不改道（见 contract.NoDeceptionRule）。
+	Blacklist *[]blacklistDoc `yaml:"blacklist"`
+}
+
+// blacklistDoc 是一条禁止欺骗路径。三项都必填：reason 是审计与回滚时回答"为什么"的依据。
+type blacklistDoc struct {
+	ID         *string `yaml:"id"`
+	PathPrefix *string `yaml:"path_prefix"`
+	Reason     *string `yaml:"reason"`
 }
 
 // injectDoc 是一条**响应改写规则**（数据，不是代码分支 —— ST-24）。
@@ -164,6 +173,11 @@ type Loader struct {
 	coreListen  string  // core.listen（实际监听地址取 SHEN_LISTEN）
 	guardBudget float64 // guard.false_route_budget（误调度率护栏属阶段 2b+）
 	storeExtra  bool    // store.{redis,clickhouse,postgres}（driver 只支持 memory）
+
+	blacklist []contract.NoDeceptionRule
+	// raw 是装载时的**原始配置字节**（基线）：WithOverlay 每次从它重新解码出一份全新的
+	// configDoc 再覆盖 —— 等价于深拷贝，且保证覆盖永远基于同一份部署配置（不会层层叠加）。
+	raw []byte
 }
 
 // Load 解析并校验配置，产出不可变快照。
@@ -174,8 +188,36 @@ func Load(r io.Reader) (*Loader, error) {
 	if r == nil {
 		return nil, errors.New("policy: 配置读取器不能为 nil")
 	}
+	// 配置文件是 KB 级：整体读入，留作 WithOverlay 的基线（见 Loader.raw）。
+	raw, err := io.ReadAll(io.LimitReader(r, maxConfigBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("policy: 读取配置失败：%w", err)
+	}
+	if len(raw) > maxConfigBytes {
+		return nil, fmt.Errorf("policy: 配置超过 %d 字节上限", maxConfigBytes)
+	}
+	d, err := decodeConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := d.validate()
+	if err != nil {
+		return nil, err
+	}
+	l, err := d.build(rules)
+	if err != nil {
+		return nil, err
+	}
+	l.raw = raw
+	return l, nil
+}
 
-	dec := yaml.NewDecoder(r)
+// maxConfigBytes 是部署配置的体积上限（防御性：正常配置远小于它）。
+const maxConfigBytes = 4 << 20
+
+// decodeConfig 严格解码一份配置（未知键拒绝、只允许单文档）。
+func decodeConfig(raw []byte) (*configDoc, error) {
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true) // 未知键一律拒绝：静默忽略错键等于配置失效
 
 	var d configDoc
@@ -194,12 +236,7 @@ func Load(r io.Reader) (*Loader, error) {
 		}
 		return nil, errors.New("policy: 配置只允许包含一个 YAML 文档")
 	}
-
-	rules, err := d.validate()
-	if err != nil {
-		return nil, err
-	}
-	return d.build(rules)
+	return &d, nil
 }
 
 // Rules 返回规则集的副本。
@@ -348,11 +385,85 @@ func (d *configDoc) validate() ([]contract.Rule, error) {
 	if err := d.validateAI(); err != nil {
 		return nil, err
 	}
-	// 跨段一致性检查放在最后：它要同时看 decoys 与 honeypots 两段。
+	if err := d.validateBlacklist(); err != nil {
+		return nil, err
+	}
+	// 跨段一致性检查放在最后：它要同时看 decoys 与 honeypots（以及 blacklist）两段。
 	if err := d.validateDecoyBackends(); err != nil {
 		return nil, err
 	}
+	if err := d.validateDecoyVsBlacklist(); err != nil {
+		return nil, err
+	}
 	return rules, nil
+}
+
+// validateBlacklist 校验「禁止欺骗路径」段（可选）：id 唯一、前缀为归一化绝对路径、reason 必填。
+func (d *configDoc) validateBlacklist() error {
+	if d.Blacklist == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for i, b := range *d.Blacklist {
+		p := fmt.Sprintf("blacklist[%d]", i)
+		if b.ID == nil || strings.TrimSpace(*b.ID) == "" {
+			return fmt.Errorf("policy: %s.id 不能为空", p)
+		}
+		if _, dup := seen[*b.ID]; dup {
+			return fmt.Errorf("policy: %s.id=%q 重复", p, *b.ID)
+		}
+		seen[*b.ID] = struct{}{}
+		if b.PathPrefix == nil || !strings.HasPrefix(*b.PathPrefix, "/") {
+			return fmt.Errorf("policy: %s.path_prefix 必须以 / 开头", p)
+		}
+		if norm := contract.NormalizePath(*b.PathPrefix); norm != *b.PathPrefix {
+			return fmt.Errorf("policy: %s.path_prefix=%q 不是归一化形态（应写作 %q）", p, *b.PathPrefix, norm)
+		}
+		if b.Reason == nil || strings.TrimSpace(*b.Reason) == "" {
+			return fmt.Errorf("policy: %s.reason 不能为空（禁止欺骗必须写明原因，供审计与回滚）", p)
+		}
+	}
+	return nil
+}
+
+// validateDecoyVsBlacklist 拒绝「落在禁止欺骗路径下的启用诱饵」：同一路径又投放线索又绝不欺骗，
+// 语义自相矛盾 —— 边缘会把命中诱饵的请求送去幻境，而核心却要求放行，谁赢没有明确答案。
+func (d *configDoc) validateDecoyVsBlacklist() error {
+	if d.Blacklist == nil || d.Decoys == nil || d.Decoys.Assets == nil {
+		return nil
+	}
+	for i, a := range *d.Decoys.Assets {
+		if a.Enabled == nil || !*a.Enabled || a.Path == nil {
+			continue
+		}
+		for _, b := range *d.Blacklist {
+			pfx := *b.PathPrefix
+			if contract.PathSegmentPrefix(*a.Path, pfx) || contract.PathSegmentPrefix(pfx, *a.Path) {
+				return fmt.Errorf("policy: decoys.assets[%d].path=%q 与禁止欺骗路径 blacklist[%s]=%q 冲突 —— 先停用诱饵或移除该规则",
+					i, *a.Path, *b.ID, pfx)
+			}
+		}
+	}
+	return nil
+}
+
+// buildBlacklist 把配置转成禁止欺骗规则（validate 已保证字段安全）。
+func (d *configDoc) buildBlacklist() []contract.NoDeceptionRule {
+	if d.Blacklist == nil {
+		return nil
+	}
+	out := make([]contract.NoDeceptionRule, 0, len(*d.Blacklist))
+	for _, b := range *d.Blacklist {
+		out = append(out, contract.NoDeceptionRule{
+			ID: *b.ID, PathPrefix: *b.PathPrefix, Reason: strings.TrimSpace(*b.Reason),
+		})
+	}
+	return out
+}
+
+// Blacklist 返回禁止欺骗路径（副本）。消费方是 director（route_mirage → 放行）。
+func (l *Loader) Blacklist(context.Context) ([]contract.NoDeceptionRule, error) {
+	return append([]contract.NoDeceptionRule(nil), l.blacklist...), nil
 }
 
 // validateDecoyBackends 校验「启用中的诱饵 → 已登记且启用的幻境后端」这条跨段引用（C01）。
@@ -1052,6 +1163,7 @@ func (d *configDoc) build(rules []contract.Rule) (*Loader, error) {
 		honeypots:     d.buildHoneypots(),
 		wl:            d.buildWhitelist(),
 		injects:       d.buildInjects(),
+		blacklist:     d.buildBlacklist(),
 	}, nil
 }
 

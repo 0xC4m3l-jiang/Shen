@@ -14,6 +14,7 @@ import (
 // config 是控制台 API 进程的全部运行参数（一律来自环境变量；密钥支持 `*_FILE` 形式）。
 type config struct {
 	CoreAddr          string
+	CoreGRPCToken     string
 	Listen            string
 	DataDir           string
 	AllowedOrigins    []string
@@ -21,6 +22,8 @@ type config struct {
 	TokenSources      []netip.Prefix
 	APIToken          string
 	IntegrationToken  string // 网关集成令牌（/api/v1/integration/* 专用；与只读令牌分权）
+	CoreSyncToken     string // 核心同步令牌（/api/v1/integration/deception*；与网关令牌分权）
+	SeedConfig        string // 部署配置路径（与核心同一份，只读挂载）：数据集为空时自动初始化
 	SecretKey         string // 大模型密钥的加密主密钥；空 = 数据目录自动生成
 	CookieSecure      bool
 	BootstrapUser     string
@@ -48,10 +51,12 @@ func loadConfig(getenv func(string) string) (config, error) {
 	}
 	c := config{
 		CoreAddr:      get("SHEN_CORE_ADDR", defaultCoreAddr),
+		CoreGRPCToken: strings.TrimSpace(get("SHEN_CORE_GRPC_TOKEN", "")),
 		Listen:        get("SHEN_CONSOLE_LISTEN", defaultListen),
 		DataDir:       get("SHEN_CONSOLE_DATA_DIR", defaultDataDir()),
 		BootstrapUser: get("SHEN_CONSOLE_BOOTSTRAP_USER", "admin"),
 		GeoDB:         get("SHEN_CONSOLE_GEOIP_DB", ""),
+		SeedConfig:    get("SHEN_CONSOLE_SEED_CONFIG", ""),
 	}
 	var errs []error
 	var err error
@@ -59,6 +64,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 		errs = append(errs, err)
 	}
 	if c.IntegrationToken, err = secret(getenv, "SHEN_CONSOLE_INTEGRATION_TOKEN"); err != nil {
+		errs = append(errs, err)
+	}
+	if c.CoreSyncToken, err = secret(getenv, "SHEN_CONSOLE_CORE_SYNC_TOKEN"); err != nil {
 		errs = append(errs, err)
 	}
 	if c.BootstrapPassword, err = secret(getenv, "SHEN_CONSOLE_BOOTSTRAP_PASSWORD"); err != nil {

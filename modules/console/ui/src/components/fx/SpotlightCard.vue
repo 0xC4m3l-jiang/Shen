@@ -5,7 +5,8 @@ import { cn } from '@/lib/utils'
 import BorderBeam from './BorderBeam.vue'
 
 const props = withDefaults(
-  defineProps<{ beam?: boolean; interactive?: boolean; class?: HTMLAttributes['class']; as?: string }>(),
+  // bodyClass 作用在内层包裹上：插槽内容的 flex / grid / gap 要写在这里（写在 class 上够不到子元素）。
+  defineProps<{ beam?: boolean; interactive?: boolean; class?: HTMLAttributes['class']; bodyClass?: HTMLAttributes['class']; as?: string }>(),
   { beam: false, interactive: true, as: 'div' },
 )
 const el = ref<HTMLElement | null>(null)
@@ -44,7 +45,7 @@ function onMove(e: MouseEvent) {
       aria-hidden="true"
     />
     <BorderBeam v-if="props.beam" />
-    <div class="relative">
+    <div :class="cn('relative', props.bodyClass)">
       <slot />
     </div>
   </component>

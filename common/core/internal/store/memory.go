@@ -441,6 +441,21 @@ func (s *DecoyMemory) Put(_ context.Context, a contract.DecoyAsset) error {
 	return nil
 }
 
+// Replace 整表替换诱饵资产（先在锁外构造新表，锁内只换指针级的 map）。
+func (s *DecoyMemory) Replace(_ context.Context, as []contract.DecoyAsset) error {
+	next := make(map[string]contract.DecoyAsset, len(as))
+	for _, a := range as {
+		if a.ID == "" {
+			return errors.New("store: 诱饵资产缺少 id")
+		}
+		next[a.ID] = a
+	}
+	s.mu.Lock()
+	s.m = next
+	s.mu.Unlock()
+	return nil
+}
+
 // ── ContentStore ─────────────────────────────────────────
 
 // contentEntry 为预生成内容加 TTL。
