@@ -104,12 +104,34 @@ func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "删除必须携带 version 参数（防止误删他人刚改过的记录）")
 		return
 	}
+	// 先取快照：删除之后就拿不到服务名了，而级联吊销要按服务名做（SHEN-M4-03）。
+	svc, ok := s.registry.Get(id)
+	if !ok {
+		s.record(r, p, "registry.delete", id, "failed", "not found")
+		s.fail(w, r, registry.ErrNotFound)
+		return
+	}
 	if err := s.registry.Delete(id, version); err != nil {
 		s.record(r, p, "registry.delete", id, "failed", err.Error())
 		s.fail(w, r, err)
 		return
 	}
-	s.record(r, p, "registry.delete", id, "ok", "")
+	// 级联：删除服务 ⇒ 它名下的接入凭证一并失效（`SHEN-M4-03`：不留孤儿数据）。
+	//
+	// 吊销而不是删除：凭证的吊销记录要能被审计翻出来；而且删记录会让「谁曾经持有过」
+	// 这件事凭空消失 —— 对安全组件来说那是信息损失。
+	//
+	// 级联失败**不改变删除结果**（服务已经删了），但必须**看得见**：写进审计并把原因回给调用方。
+	cascade := "credentials=0"
+	if s.cfg.Connector != nil {
+		n, cerr := s.cfg.Connector.Keys().RevokeByService(svc.Name)
+		cascade = "credentials=" + strconv.Itoa(n)
+		if cerr != nil {
+			cascade += "（级联失败：部分凭证可能仍可用）"
+			s.cfg.Logf("console: 删除服务 %q 后级联吊销凭证失败：%v", svc.Name, cerr)
+		}
+	}
+	s.record(r, p, "registry.delete", id, "ok", "cascade:"+cascade)
 	w.WriteHeader(http.StatusNoContent)
 }
 

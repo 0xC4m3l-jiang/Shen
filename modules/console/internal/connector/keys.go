@@ -216,6 +216,40 @@ func (s *KeyStore) Revoke(id string) (CredentialView, error) {
 }
 
 // List 返回全部凭证的脱敏视图（按创建时间）。
+// RevokeByService 吊销某服务名下的**全部**未吊销凭证（`SHEN-M4-03`：删除服务时级联失效）。
+//
+// 为什么按「服务名」而不是按 id：删除服务的人只知道服务名，不该被迫先查出凭证 id 列表；
+// 而这正是「一条凭证 = 一个服务」的模型能提供的能力。
+//
+// 返回被吊销的条数（0 = 该服务本来就没有可用凭证，不算错误）。
+// 语义与单条 `Revoke` 一致：**留痕不删除** —— 吊销记录要能被审计翻出来。
+func (s *KeyStore) RevokeByService(name string) (int, error) {
+	target := strings.ToLower(strings.TrimSpace(name))
+	if target == "" {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	n := 0
+	for _, c := range s.items { // 指针：原地改，不需要写回 map
+		if c.Revoked || strings.ToLower(strings.TrimSpace(c.Name)) != target {
+			continue
+		}
+		c.Revoked = true
+		c.Version++
+		c.UpdatedAt = now
+		n++
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if err := s.persistLocked(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *KeyStore) List() []CredentialView {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
