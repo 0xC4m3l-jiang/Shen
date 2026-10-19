@@ -40,10 +40,32 @@ type contentManifest struct {
 	Selector string         `json:"selector"`
 	Variants int            `json:"variants"`
 	Entries  []contentEntry `json:"entries"`
+	// Services 是 Host → 服务 的映射（SHEN-M4-01，可选）。
+	//
+	// 缺省（旧核心）⇒ 所有请求都按「不分服务」查表，行为与改造前一致。
+	// 出现时：请求 Host 命中某服务 ⇒ 只查该服务的条目，查不到再退回不分服务的条目。
+	Services []contentService `json:"services,omitempty"`
+}
+
+// contentService 是一个接入单元与它声明的 Host（与核心侧 `policy.edgeService` 手工对齐）。
+//
+// `hosts` 里的通配只在这里做**字面**匹配：`*.example.com` 覆盖子域但不含根域（与诱饵路由的
+// 归属声明 `W7` 同口径）。大小写与端口在归一化时处理。
+type contentService struct {
+	ID    string   `json:"id"`
+	Hosts []string `json:"hosts,omitempty"`
 }
 
 type contentEntry struct {
-	Resource  string        `json:"resource"`
+	Resource string `json:"resource"`
+	// Service 是这条内容所属的**接入单元**（SHEN-M4-01）。
+	//
+	// 空串 = 未声明服务 ⇒ 对所有服务生效（旧核心的形态，兼容保留）。
+	// 非空 = 只对该服务生效 —— 两个服务声明同名 `resource` 时必须各走各的，不能互相覆盖。
+	//
+	// 为什么要与 `profile_id` 分开：服务是**接入单元**（谁在接流量），画像是**生成单元**
+	// （按谁的口径写内容）。一个服务可以换画像，一个画像也可以服务多个接入点。
+	Service   string        `json:"service,omitempty"`
 	ProfileID string        `json:"profile_id"`
 	Bodies    []contentBody `json:"bodies"`
 }
@@ -62,7 +84,11 @@ type contentBody struct {
 type contentIndex struct {
 	version  uint64
 	variants int
-	entries  map[string]map[int]contentBody
+	// entries[服务][资源][变体]（SHEN-M4-01）。服务键 "" 表示「不分服务」。
+	entries map[string]map[string]map[int]contentBody
+	// hostServices 是 Host（小写、去端口）→ 服务标识（来自载荷 `services[]`）。
+	// 没有这张表（旧载荷 / 单服务部署）时恒取 ""，行为与改造前逐字节一致。
+	hostServices map[string]string
 }
 
 // newContentIndex 构建索引；结构不合法（selector 不认识 / variants < 1）时返回 nil。
@@ -73,9 +99,17 @@ func newContentIndex(m *contentManifest) *contentIndex {
 		return nil
 	}
 	idx := &contentIndex{
-		version:  m.Version,
-		variants: m.Variants,
-		entries:  make(map[string]map[int]contentBody, len(m.Entries)),
+		version:      m.Version,
+		variants:     m.Variants,
+		entries:      make(map[string]map[string]map[int]contentBody, len(m.Entries)),
+		hostServices: map[string]string{},
+	}
+	for _, svc := range m.Services {
+		for _, host := range svc.Hosts {
+			if h := normalizeHost(host); h != "" {
+				idx.hostServices[h] = svc.ID
+			}
+		}
 	}
 	for _, entry := range m.Entries {
 		if entry.Resource == "" {
@@ -88,8 +122,17 @@ func newContentIndex(m *contentManifest) *contentIndex {
 			}
 			bodies[body.VariantID] = body
 		}
-		if len(bodies) > 0 {
-			idx.entries[entry.Resource] = bodies
+		if len(bodies) == 0 {
+			continue
+		}
+		byResource, ok := idx.entries[entry.Service]
+		if !ok {
+			byResource = map[string]map[int]contentBody{}
+			idx.entries[entry.Service] = byResource
+		}
+		// 同一服务内同名资源：保留先到的那条（后者覆盖的旧行为正是本条需求要修的问题）。
+		if _, exists := byResource[entry.Resource]; !exists {
+			byResource[entry.Resource] = bodies
 		}
 	}
 	if len(idx.entries) == 0 {
@@ -274,12 +317,52 @@ func (h *Handler) contentInjectionReady(st *remoteState) (bool, *contentIndex) {
 	return true, st.content
 }
 
+// serviceOf 取请求所属的服务标识；没有映射（或没命中）时返回 ""（= 不分服务）。
+func (idx *contentIndex) serviceOf(r *http.Request) string {
+	if len(idx.hostServices) == 0 {
+		return ""
+	}
+	host := normalizeHost(r.Host)
+	if svc, ok := idx.hostServices[host]; ok {
+		return svc
+	}
+	// 通配：`*.example.com` 覆盖 `a.example.com`，不含 `example.com` 本身（W7 同口径）。
+	for pattern, svc := range idx.hostServices {
+		if suffix, ok := strings.CutPrefix(pattern, "*."); ok {
+			if strings.HasSuffix(host, "."+suffix) && host != suffix {
+				return svc
+			}
+		}
+	}
+	return ""
+}
+
+// normalizeHost 把 Host 归一化成小写、去端口、去尾点；空串原样返回。
+func normalizeHost(raw string) string {
+	h := strings.ToLower(strings.TrimSpace(raw))
+	if h == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(h, ':'); i > 0 && !strings.Contains(h[i:], "]") {
+		h = h[:i]
+	}
+	return strings.TrimSuffix(h, ".")
+}
+
 // contentFor 取给这次请求用的内容片段；没有可用内容时返回 ok=false（⇒ 上报 `no_content`）。
 //
 // 命中规则（阶段 A）：`resource` 与**请求路径精确相等**（区分大小写）；不做前缀匹配
 // （前缀匹配需要与路径归一化一起定，属阶段 B —— `spec/ai-contract.md` §2）。
 func (h *Handler) contentFor(r *http.Request, idx *contentIndex) (contentBody, bool) {
-	entry, ok := idx.entries[r.URL.Path]
+	// 先按请求所属服务查，再退回「不分服务」的条目（旧载荷 / 单服务部署）。
+	//
+	// 为什么先具体后兜底：服务专属内容一定比通用内容更贴合该服务；
+	// 反过来（先通用）会让专属内容永远不生效。
+	path := r.URL.Path
+	entry, ok := idx.entries[idx.serviceOf(r)][path]
+	if !ok {
+		entry, ok = idx.entries[""][path]
+	}
 	if !ok {
 		return contentBody{}, false
 	}

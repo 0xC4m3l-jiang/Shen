@@ -145,7 +145,8 @@ func TestNewContentIndexSkipsBadBodies(t *testing.T) {
 	if idx == nil {
 		t.Fatal("有可用内容时不应返回 nil")
 	}
-	if n := len(idx.entries[testResource]); n != 2 {
+	// SHEN-M4-01 起索引是「服务 → 资源 → 变体」；没有服务声明的条目挂在 "" 下。
+	if n := len(idx.entries[""][testResource]); n != 2 {
 		t.Fatalf("坏条必须被跳过（越界 + 空体），剩下 2 条，实际 %d", n)
 	}
 }
@@ -363,8 +364,11 @@ func TestApplyEdgePolicyParsesAIContent(t *testing.T) {
 	if st.content == nil || st.content.version != 2 || st.content.variants != 8 {
 		t.Fatalf("content_manifest 未被索引：%+v", st.content)
 	}
-	if _, ok := st.content.entries["/api/users"][1]; !ok {
-		t.Error("清单条目未被索引到（资源/变体）")
+	if _, ok := st.content.entries[""]["use/users"]; ok {
+		t.Error("不该存在这个资源")
+	}
+	if _, ok := st.content.entries[""]["/api/users"][1]; !ok {
+		t.Error("清单条目未被索引到（服务 → 资源 → 变体）")
 	}
 }
 

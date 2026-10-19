@@ -48,7 +48,10 @@ type ContentBody struct {
 
 // ContentEntry 是「一个资源 × 它的各变体」。
 type ContentEntry struct {
-	Resource  string        `json:"resource"`
+	Resource string `json:"resource"`
+	// Service 是这条内容所属的**接入单元**（`SHEN-M4-01`）。空 = 未声明（对所有服务生效）。
+	// 与 `ProfileID` 是两件事：服务是接入单元，画像是生成单元。
+	Service   string        `json:"service,omitempty"`
 	ProfileID string        `json:"profile_id"`
 	Bodies    []ContentBody `json:"bodies"`
 }

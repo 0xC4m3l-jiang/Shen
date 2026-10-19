@@ -91,7 +91,9 @@ type edgeContentManifest struct {
 }
 
 type edgeContentEntry struct {
-	Resource  string            `json:"resource"`
+	Resource string `json:"resource"`
+	// Service 透传服务维度（`SHEN-M4-01`）：空 = 不分服务（旧核心的形态）。
+	Service   string            `json:"service,omitempty"`
 	ProfileID string            `json:"profile_id"`
 	Bodies    []edgeContentBody `json:"bodies"`
 }
@@ -363,6 +365,7 @@ func (s *Server) projectContent(ctx context.Context, src *ContentSource) (*edgeC
 		}
 		out.Entries = append(out.Entries, edgeContentEntry{
 			Resource:  entry.Resource,
+			Service:   entry.Service,
 			ProfileID: entry.ProfileID,
 			Bodies:    bodies,
 		})
