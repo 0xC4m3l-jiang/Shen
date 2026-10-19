@@ -16,8 +16,10 @@ export interface NavItem {
   name: string
   /** 侧栏与页面标题共用同一个字符串 —— 两处各写一份必然漂移。 */
   label: string
-  /** 侧栏副标题：说清「这一页能做什么」，并保留内部叫法以便对照文档。 */
+  /** 侧栏副标题：一句话说清「这一页能做什么」。**必须能在一行内显示完**（侧栏 224px）。 */
   desc: string
+  /** 内部叫法（反向链接器 / 欺骗层 / …）：进悬停提示，便于对照文档；不占副标题宽度。 */
+  hint?: string
   /** 分组名（见 `navGroups`）。分组是**展示顺序**的依据，不参与权限。 */
   group: NavGroup
   icon: Component
@@ -54,7 +56,8 @@ export const navItems: NavItem[] = [
   {
     name: 'services',
     label: '服务登记',
-    desc: '登记被保护的 Web 服务（反向链接器）',
+    desc: '被保护的 Web 服务',
+    hint: '内部叫法：反向链接器',
     group: '接入',
     icon: Network,
     perm: 'registry:read',
@@ -70,7 +73,8 @@ export const navItems: NavItem[] = [
   {
     name: 'deception',
     label: '判定与流量',
-    desc: '核心判定、逐请求链路与策略快照（欺骗层）',
+    desc: '判定、链路与策略快照',
+    hint: '内部叫法：欺骗层',
     group: '运行观测',
     icon: Radar,
     perm: 'deception:read',
@@ -78,7 +82,8 @@ export const navItems: NavItem[] = [
   {
     name: 'honeypot',
     label: '蜜罐与诱饵',
-    desc: '投递结果与后端健康（蜜罐层）',
+    desc: '投递结果与后端健康',
+    hint: '内部叫法：蜜罐层',
     group: '运行观测',
     icon: Castle,
     perm: 'honeypot:read',
@@ -86,7 +91,8 @@ export const navItems: NavItem[] = [
   {
     name: 'config',
     label: '策略与数据集',
-    desc: '蜜罐池、诱饵、黑白名单、注入与版本（欺骗管控）',
+    desc: '蜜罐池、诱饵、黑白名单',
+    hint: '内部叫法：欺骗管控',
     group: '策略与治理',
     icon: SlidersHorizontal,
     perm: 'config:read',
@@ -102,7 +108,7 @@ export const navItems: NavItem[] = [
   {
     name: 'analysis',
     label: '分析',
-    desc: '模型对话、用量与近线结论',
+    desc: '模型对话与近线结论',
     group: '策略与治理',
     icon: BrainCircuit,
     perm: 'analysis:read',
@@ -110,7 +116,7 @@ export const navItems: NavItem[] = [
   {
     name: 'system',
     label: '系统',
-    desc: '主题、账号、审计与大模型接入',
+    desc: '主题、账号与审计',
     group: '系统',
     icon: Settings2,
     perm: 'self:manage',

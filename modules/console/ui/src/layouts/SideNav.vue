@@ -23,7 +23,7 @@ const isActive = (name: string) => route.name === name || (name === 'services' &
         <!-- 分组标题：收起时不显示（只留图标，靠 title 提示） -->
         <p
           v-if="!collapsed"
-          class="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/60"
+          class="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/75"
         >
           {{ section.group }}
         </p>
@@ -34,13 +34,14 @@ const isActive = (name: string) => route.name === name || (name === 'services' &
             v-for="item in section.items"
             :key="item.name"
             :to="{ name: item.name }"
-            class="group relative flex items-center gap-3 overflow-hidden rounded-xl px-3 py-2.5 text-sm transition-all duration-200"
+            class="group relative flex items-center gap-3 overflow-hidden rounded-xl px-3 py-2.5 text-sm transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             :class="
               isActive(item.name)
                 ? 'bg-primary/10 text-foreground'
                 : 'text-muted-foreground hover:bg-primary/5 hover:text-foreground'
             "
-            :title="collapsed ? `${item.label}：${item.desc}` : item.desc"
+            :title="item.hint ?? item.desc"
+            :aria-current="isActive(item.name) ? 'page' : undefined"
           >
             <span
               class="absolute inset-y-2 left-0 w-[3px] rounded-full bg-gradient-to-b from-primary to-accent transition-opacity"
@@ -53,7 +54,7 @@ const isActive = (name: string) => route.name === name || (name === 'services' &
             />
             <span v-if="!collapsed" class="flex min-w-0 flex-col">
               <span class="truncate font-medium">{{ item.label }}</span>
-              <span class="truncate text-[11px] text-muted-foreground/80">{{ item.desc }}</span>
+              <span class="truncate text-[11px] text-muted-foreground/90">{{ item.desc }}</span>
             </span>
           </RouterLink>
         </div>
@@ -61,7 +62,7 @@ const isActive = (name: string) => route.name === name || (name === 'services' &
     </nav>
     <button
       type="button"
-      class="mt-1 flex cursor-pointer items-center justify-center rounded-lg py-2 text-muted-foreground transition hover:bg-primary/10 hover:text-foreground"
+      class="mt-1 flex cursor-pointer items-center justify-center rounded-lg py-2 text-muted-foreground transition hover:bg-primary/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       :aria-label="collapsed ? '展开导航' : '收起导航'"
       @click="collapsed = !collapsed"
     >

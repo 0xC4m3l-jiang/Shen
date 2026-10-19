@@ -56,12 +56,16 @@ describe('导航分组与顺序', () => {
     expect(new Set(perms).size).toBe(perms.length)
   })
 
-  it('描述里保留内部叫法，便于对照文档（服务登记=反向链接器 / 判定与流量=欺骗层 …）', () => {
+  it('内部叫法放在 hint（悬停提示）里，副标题因此能在一行内显示完', () => {
     const byName = new Map(navItems.map((i) => [i.name, i]))
-    expect(byName.get('services')?.desc).toContain('反向链接器')
-    expect(byName.get('deception')?.desc).toContain('欺骗层')
-    expect(byName.get('honeypot')?.desc).toContain('蜜罐层')
-    expect(byName.get('config')?.desc).toContain('欺骗管控')
+    expect(byName.get('services')?.hint).toContain('反向链接器')
+    expect(byName.get('deception')?.hint).toContain('欺骗层')
+    expect(byName.get('honeypot')?.hint).toContain('蜜罐层')
+    expect(byName.get('config')?.hint).toContain('欺骗管控')
+    // 副标题必须短：侧栏 224px、11px 字号，超过 ~14 个汉字就会被截断（截图踩过）。
+    for (const item of navItems) {
+      expect(item.desc.length, `${item.name} 的副标题过长：${item.desc}`).toBeLessThanOrEqual(14)
+    }
   })
 
   it('无权限时分组为空（不渲染空标题）', () => {
@@ -98,5 +102,10 @@ describe('侧栏渲染顺序', () => {
 
     const labels = wrapper.findAll('nav a span.font-medium').map((n) => n.text())
     expect(labels).toEqual(navItems.map((i) => i.label))
+
+    // 当前页要在语义上标出来（屏幕阅读器与「跳转到主内容」都依赖它）。
+    const current = wrapper.findAll('nav a[aria-current="page"]')
+    expect(current.length).toBe(1)
+    expect(current[0]?.text()).toContain('总览')
   })
 })
