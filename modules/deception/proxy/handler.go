@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -958,8 +960,11 @@ func (h *Handler) judgedEventPayload(id string, r *http.Request, act judgev1.Act
 		// 专属诱饵路由命中时不调核心、没有 decision 事件，这两个键是它唯一的来源信息。
 		"host":      normalizeRequestHost(r.Host),
 		"source_ip": clientIP(r, h.TrustXFF),
-		"action":    act.String(),
-		"shadow":    h.Shadow,
+		// session_hash 是会话身份的**不可逆**摘要（`SHEN-M2-03`）：评估五项会话级指标需要它，
+		// 但会话原值属认证材料，**禁止**进遥测（ST-20）。无会话身份时为空串（键恒在）。
+		"session_hash": sessionHash(h.sessionKeyOf(r)),
+		"action":       act.String(),
+		"shadow":       h.Shadow,
 		// 判定失败的原因要留下 —— 否则运营看到的是「全是放行」而不知道核心挂了。
 		"decision_error": errString(info.cause),
 		// 以下为「实际落点 + 返回信息」（图与验证页靠它们）：
@@ -1051,6 +1056,18 @@ func (h *Handler) reportMetrics() {
 	default:
 		// 队列满 = 上报跟不上：丢这条快照（**不阻塞请求路径**）。下一轮还会再算一次。
 	}
+}
+
+// sessionHash 是会话键的不可逆摘要：`sha256` 前 16 位十六进制。
+//
+// 为什么截断到 16 位：评估只需要「同一会话能否对上」，不需要全强度抗碰撞；
+// 截短也让日志/事件看起来不像一个可被暴力还原的指纹。
+func sessionHash(session string) string {
+	if session == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(session))
+	return hex.EncodeToString(sum[:8])
 }
 
 func errString(err error) string {

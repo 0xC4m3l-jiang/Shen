@@ -6,6 +6,7 @@ package proxy
 // 指标算错比指标缺失更危险：缺失只是看不见，算错会让运维照着假数据做决定。
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -141,5 +142,27 @@ func TestSessionFlipAlertFiresOnce(t *testing.T) {
 		if a == "session_flip" {
 			t.Fatalf("同一次翻转不该再告警：%v", second.Alerts)
 		}
+	}
+}
+
+// TestSessionHashIsStableAndIrreversible 断言会话摘要是「稳定的短摘要」：
+// 同会话恒同值（评估要能对上）、不同会话不同值、且**不含原值**（原值属认证材料，禁止进遥测）。
+func TestSessionHashIsStableAndIrreversible(t *testing.T) {
+	raw := "sess-abcdef-12345"
+	h1 := sessionHash(raw)
+	if h1 == "" || len(h1) != 16 {
+		t.Fatalf("摘要应为 16 位十六进制，实际 %q", h1)
+	}
+	if sessionHash(raw) != h1 {
+		t.Fatal("同一会话两次摘要不一致（评估会对不上）")
+	}
+	if sessionHash(raw+"x") == h1 {
+		t.Fatal("不同会话不该得到同一个摘要")
+	}
+	if strings.Contains(h1, raw) || strings.Contains(h1, "abcdef") {
+		t.Fatalf("摘要里泄漏了会话原值：%q", h1)
+	}
+	if got := sessionHash(""); got != "" {
+		t.Fatalf("无会话身份时应为空串（键恒在），实际 %q", got)
 	}
 }

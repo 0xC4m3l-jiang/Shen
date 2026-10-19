@@ -16,5 +16,6 @@
   "shadow": false,
   "source_ip": "192.0.2.1",
   "status": 200,
-  "ua": "HeadlessChrome/120"
+  "ua": "HeadlessChrome/120",
+  "session_hash": ""
 }
