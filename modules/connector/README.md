@@ -22,6 +22,23 @@ TLS 长连接，网关校验控制台签发的 auth key，代理经隧道把请�
 | **Go SDK** `sdk/` | `connector.Connect(ctx, cfg)` | Go 业务：进程内三行代码接入 |
 | **二进制** `cmd/shen-connector/` | 独立进程 | 非 Go 业务：一个进程接入 |
 
+## 服务是接入单元的键（`SHEN-M4-03`）
+
+凭证表（`gateway.KeyTable`）是「现在有哪些服务、占着哪些 Host」的事实源。对上层只需一个入口：
+
+```go
+for _, svc := range table.Services() {
+    // svc.Name 服务名 · svc.Hosts 归属域名（并集、已排序）· svc.KeyIDs 绑定凭证 · svc.Revoked 是否全部吊销
+}
+```
+
+三条语义（都有用例锁住）：
+
+1. **同一服务多条凭证**（轮换期并存）合并成一条，`Hosts` 取并集、`KeyIDs` 全部列出；
+2. **只有全部凭证都吊销**才判定该服务吊销 —— 还有一条可用就不能算下线；
+3. **删除服务 = 从凭证表里删掉它的凭证**：`Services()` 与 `HostKnown()` 同时看不到它，
+   不给上层留孤儿数据。
+
 ## 接入链路（数据怎么流）
 
 ```text

@@ -104,6 +104,82 @@ func hostAllowed(patterns []string, host string) bool {
 	return false
 }
 
+// Service 是一个**接入单元**的对外视图（`SHEN-M4-03`）：服务名 + 归属域名 + 凭证状态。
+//
+// 为什么要有它：控制台/策略/审计都需要「现在有哪些服务、它们占着哪些 Host」，
+// 而这个事实源在连接器的凭证表里。把视图收敛到一处（而不是让每个消费方各写一遍去重与合并），
+// 才能保证「删除一条凭证 = 这个服务从所有视图里消失」，不留孤儿数据。
+type Service struct {
+	Name    string   // 服务名（凭证绑定的唯一服务）
+	Hosts   []string // 归属域名（同一服务多条凭证时取并集，已排序）
+	KeyIDs  []string // 绑定到该服务的凭证 id（便于审计与一键吊销）
+	Revoked bool     // **全部**凭证都已吊销才算吊销；还有一条可用就不算
+}
+
+// Services 返回按服务名去重后的接入单元视图（按名称排序，保证确定性）。
+//
+// 同一服务可能有多条凭证（轮换期并存）：这里合并成一条，Hosts 取并集、KeyIDs 全部列出。
+// 名字大小写不敏感 —— 与 `Validate` 的服务名比对同一口径。
+func (t *KeyTable) Services() []Service {
+	t.mu.RLock()
+	byName := make(map[string]*Service, len(t.keys))
+	for _, k := range t.keys {
+		key := strings.ToLower(strings.TrimSpace(k.Name))
+		if key == "" {
+			continue // 无名凭证无法归属到任何服务：不制造一条空服务
+		}
+		svc, ok := byName[key]
+		if !ok {
+			svc = &Service{Name: strings.TrimSpace(k.Name), Revoked: true}
+			byName[key] = svc
+		}
+		svc.KeyIDs = append(svc.KeyIDs, k.ID)
+		svc.Hosts = append(svc.Hosts, k.Hosts...)
+		if !k.Revoked {
+			svc.Revoked = false
+		}
+	}
+	t.mu.RUnlock()
+
+	out := make([]Service, 0, len(byName))
+	for _, svc := range byName {
+		out = append(out, Service{
+			Name:    svc.Name,
+			Hosts:   sortedUniqueHosts(svc.Hosts),
+			KeyIDs:  sortedCopy(svc.KeyIDs),
+			Revoked: svc.Revoked,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// sortedUniqueHosts 归一化 + 去重 + 排序（Host 大小写/端口/尾点不同也算同一个）。
+func sortedUniqueHosts(hosts []string) []string {
+	seen := make(map[string]struct{}, len(hosts))
+	out := make([]string, 0, len(hosts))
+	for _, raw := range hosts {
+		h := NormalizeHost(raw)
+		if h == "" {
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedCopy 返回排序后的副本（确定性：同一份输入两次调用得到同一串顺序）。
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
 // HostsOf 返回某凭证名的白名单（握手应答与排障用；找不到返回空）。
 func (t *KeyTable) HostsOf(name string) []string {
 	t.mu.RLock()
