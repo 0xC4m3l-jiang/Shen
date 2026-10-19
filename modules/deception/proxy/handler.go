@@ -610,8 +610,13 @@ func (h *Handler) dispatch(st *remoteState, w http.ResponseWriter, r *http.Reque
 	}
 	switch act {
 	case judgev1.Action_ACTION_MIRAGE:
-		// 后端名查不到一律回落业务（NI-5）—— 宁可漏改道，不可断业务。
+		// 后端名查不到：安全方法按 NI-5 回落业务（宁可漏改道，不可断业务）；
+		// 写方法**不回落**（SHEN-M3-02）—— 回流会改到真数据。
 		if _, ok := h.mirageHandler(st, backend); !ok {
+			if fallbackOnMirageFailure(r.Method) == fallbackRefuse {
+				h.refuseReroutedWrite(w, r, backend, "backend_missing")
+				return executedFor(false, act, false, true), nil
+			}
 			return executedFor(false, act, false, false), h.forward(st, w, r, next, targetOrigin)
 		}
 		fellBack, err := h.forwardMirage(st, w, r, next, backend)
@@ -671,8 +676,12 @@ func (h *Handler) mirageHandler(st *remoteState, name string) (caddyhttp.Middlew
 // 写过 → 只能把错误如实抛出（由 Caddy 错误路由处理），否则会输出半截响应。
 func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (bool, error) {
 	if reason := h.healthReason(backend); reason != "" {
-		// 评分改道：后端探针判定不可达 ⇒ **回落业务**（`NI-1`：引流失败绝不能变成业务失败）。
-		// 与"转发失败后回落"同一条语义，只是不必先吃满一次连接失败。
+		// 评分改道：后端探针判定不可达 ⇒ 安全方法**回落业务**（`NI-1`：引流失败绝不能变成业务失败）；
+		// 写方法不回落（`SHEN-M3-02`）：回流会改到真数据。
+		if fallbackOnMirageFailure(r.Method) == fallbackRefuse {
+			h.refuseReroutedWrite(w, r, backend, "probe_unhealthy")
+			return true, nil
+		}
 		log.Printf("proxy: 幻境后端 %q 探针判定不健康，改道回落业务：%s", backend, reason)
 		return true, h.origin.ServeHTTP(w, r, next)
 	}
@@ -694,6 +703,11 @@ func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.
 	h.stripCredentials(mreq)
 	if err := rp.ServeHTTP(tw, mreq, next); err != nil {
 		if !tw.wrote {
+			// 还没写出任何字节 ⇒ 理论上可安全重放；但**写方法不重放到业务**（SHEN-M3-02）。
+			if fallbackOnMirageFailure(r.Method) == fallbackRefuse {
+				h.refuseReroutedWrite(w, r, backend, "backend_unreachable")
+				return true, nil
+			}
 			log.Printf("proxy: 引流后端不可达，回落业务：%v", err)
 			return true, h.origin.ServeHTTP(w, r, next)
 		}
@@ -783,6 +797,39 @@ var errDegradedCache = errors.New("命中判定降级缓存（上一轮判定失
 // executedFor 决定「实际落点」的取值 —— 这是图上区分「核心判成什么」与「实际走了哪」的唯一依据。
 //
 // 纯函数（不碰任何依赖），因此可以穷举测试；`shadow` 优先于一切（影子模式只观测）。
+// fallbackOnMirageFailure 决定「已判定改道、但改道不可用」时怎么办（SHEN-M3-02）。
+//
+// 两类动作分得很开：
+//   - **安全方法**（GET/HEAD/…）：回落真实业务 —— NI-1（引流失败绝不能变成业务失败）。
+//   - **写方法**（POST/PUT/PATCH/DELETE）：**不回落**，返回 503。
+//
+// 为什么写请求必须特殊对待：改道侧的一个写操作如果能回流业务，它就会**改到真数据**——
+// 那是不可逆的业务事故，比「这一次没骗成」严重得多。而 503 对对手而言只是一次故障，
+// 比 403 更不像「有人在拦你」（403 等于承认这里有问题）。
+//
+// POST 一律按写处理：GraphQL / 表单 / 回调都可能落库。把查询误当写的代价是「这次不回流业务」，
+// 把写误当查询的代价是真数据被改。
+func fallbackOnMirageFailure(method string) string {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return fallbackRefuse
+	default:
+		return fallbackOrigin
+	}
+}
+
+const (
+	fallbackOrigin = "origin" // 回落真实业务（仅安全方法）
+	fallbackRefuse = "refuse" // 拒绝，不碰业务（写方法）
+)
+
+// refuseReroutedWrite 处理「改道不可用」的写请求：不回流业务，直接 503。
+func (h *Handler) refuseReroutedWrite(w http.ResponseWriter, r *http.Request, backend, why string) {
+	log.Printf("proxy: 改道写请求不回落业务（%s %s, backend=%q, reason=%s）", r.Method, r.URL.Path, backend, why)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
 func executedFor(shadow bool, act judgev1.Action, mirageFound bool, mirageFellBack bool) string {
 	if shadow {
 		return executedOrigin

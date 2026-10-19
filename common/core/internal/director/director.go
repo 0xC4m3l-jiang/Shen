@@ -157,13 +157,17 @@ func (e *Engine) Decide(ctx context.Context, req contract.JudgeRequest) (contrac
 
 	action, backend := e.classify(sf, v.Score, th, req.Observed.Path)
 
-	// 灰度只作用于「本会改道」的请求：按 decision_id 哈希确定性判定。
+	// 灰度只作用于「本会改道」的请求，并按**会话**哈希（SHEN-M1-03）。
+	//
+	// 为什么不能用 decision_id：它含路径与时间窗，于是同一会话访问 /index.html 与 /api/user
+	// 会拿到两种去向（假首页配真接口），跨一个时间窗还可能翻转 —— 对「不被识破」是硬伤。
+	// decision_id 仍然照旧派生、照旧用于幂等与去重（ST-10），只是不再参与灰度。
 	if action == contract.ActionMirage {
 		gray, gerr := e.gray.GrayPct(ctx)
 		if gerr != nil {
 			return contract.Decision{}, gerr
 		}
-		if !grayAllows(req.DecisionID, gray) {
+		if !grayAllows(grayKey(req), gray) {
 			action, backend = contract.ActionOrigin, ""
 		}
 	}
@@ -266,11 +270,30 @@ func (sf *surface) excluded(path string) (contract.NoDeceptionRule, bool) {
 	return contract.NoDeceptionRule{}, false
 }
 
+// grayKey 取灰度归属键：**会话级**（SHEN-M1-03）。
+//
+// 会话身份由 session 提取器按 INT-19 给出（业务 cookie → TLS ticket → IP+UA 指纹），
+// 因此几乎总有值；极端情况下才退到源 IP，最后才退到 decision_id —— 退到弱键也**不能**
+// 退化成「按路径翻转」，那正是这条需求要修的问题。
+//
+// 本函数是纯函数：同样的请求得同样的键，多副本天然一致（AR-9），不引入进程内状态。
+func grayKey(req contract.JudgeRequest) string {
+	if k := strings.TrimSpace(req.Session.ID); k != "" {
+		return "s:" + k
+	}
+	if ip := req.Observed.SourceIP; ip.IsValid() {
+		return "i:" + ip.String()
+	}
+	return "d:" + req.DecisionID
+}
+
 // grayAllows 判断本会改道的请求是否落在灰度范围内。
 //
-// **必须确定性**：同一 decision_id 必得同一结果 —— 用随机数会让重试得到不同决策，
+// 入参是**灰度归属键**（会话级，见 grayKey），不是 decision_id。
+//
+// **必须确定性**：同一键必得同一结果 —— 用随机数会让重试得到不同决策，
 // 直接破坏 ST-10 的幂等。
-func grayAllows(decisionID string, grayPct uint8) bool {
+func grayAllows(grayKey string, grayPct uint8) bool {
 	switch {
 	case grayPct == 0:
 		return false // 0% = 全放行（影子模式的自然延续）
@@ -278,7 +301,7 @@ func grayAllows(decisionID string, grayPct uint8) bool {
 		return true // 100% = 全改道
 	}
 	h := fnv.New32a()
-	_, _ = h.Write([]byte(decisionID))
+	_, _ = h.Write([]byte(grayKey))
 	return h.Sum32()%100 < uint32(grayPct)
 }
 

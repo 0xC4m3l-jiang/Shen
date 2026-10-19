@@ -432,6 +432,9 @@ func TestInjectableRejectsNoBodyAndNoTransform(t *testing.T) {
 		{"no-transform", html(http.StatusOK, map[string]string{"Cache-Control": "public, no-transform"}), false},
 		{"压缩响应", html(http.StatusOK, map[string]string{"Content-Encoding": "gzip"}), false},
 		{"非 HTML", html(http.StatusOK, map[string]string{"Content-Type": "application/json"}), false},
+		// SHEN-M1-04：协议升级不能碰 —— 握手之后是长连接字节流，不是响应体。
+		{"升级握手 101", html(http.StatusSwitchingProtocols, nil), false},
+		{"带 Upgrade 头的 200", html(http.StatusOK, map[string]string{"Upgrade": "websocket"}), false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -32,9 +32,18 @@ import (
 //	④ **无正文的方法与状态**（HEAD / 1xx / 204 / 304）—— 它们本来就没有体，
 //	   不能因为“注入成功”就凭空造一个体出来（会与声明的 Content-Length 矛皾）；
 //	⑤ **部分响应**（206 / 带 Content-Range）—— 改写单段会破坏范围语义；
-//	⑥ **`Cache-Control: no-transform`** —— 上游明确禁止中介改写内容（HTTP 语义约定）。
+//	⑥ **`Cache-Control: no-transform`** —— 上游明确禁止中介改写内容（HTTP 语义约定）；
+//	⑦ **协议升级**（`Upgrade` 头 / 101）—— SSE 之外的长连接（WebSocket 等）一旦被改写边界
+//	   碰到就会破坏帧语义（SHEN-M1-04）。
 func injectable(resp *http.Response) (contentType string, ok bool) {
 	if resp.Request != nil && resp.Request.Method == http.MethodHead {
+		return "", false
+	}
+	// ⑦ 协议升级：握手成功后是长连接字节流，不是可改写的响应体。
+	//
+	// 为什么连 101 一起挡：101 已被上面的 1xx 分支挡住，但**头里带 Upgrade 的 200**
+	// （部分实现在升级前先回 200）同样不能改写 —— 否则客户端与上游的帧对不上。
+	if resp.StatusCode == http.StatusSwitchingProtocols || resp.Header.Get("Upgrade") != "" {
 		return "", false
 	}
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified ||
