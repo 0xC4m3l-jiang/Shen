@@ -610,6 +610,9 @@ func (h *Handler) dispatch(st *remoteState, w http.ResponseWriter, r *http.Reque
 	}
 	switch act {
 	case judgev1.Action_ACTION_MIRAGE:
+		// SHEN-M4-02：服务维度可以**改去哪个幻境池**（核心给的是默认池）。
+		// 这不是判定：要不要改道仍由核心决定，这里只解析「送到哪个池」。
+		backend = h.backendForService(st, r, backend)
 		// 后端名查不到：安全方法按 NI-5 回落业务（宁可漏改道，不可断业务）；
 		// 写方法**不回落**（SHEN-M3-02）—— 回流会改到真数据。
 		if _, ok := h.mirageHandler(st, backend); !ok {
@@ -630,6 +633,27 @@ func (h *Handler) dispatch(st *remoteState, w http.ResponseWriter, r *http.Reque
 		// ACTION_ORIGIN 与任何未识别取值都放行。
 		return executedFor(false, act, false, false), h.forward(st, w, r, next, targetOrigin)
 	}
+}
+
+// backendForService 按请求所属服务改写幻境后端逻辑名（`SHEN-M4-02`）。
+//
+// 规则：服务声明了 `mirage_backend` ⇒ 用它的；否则沿用核心给的名字（默认池）。
+// 找不到服务（旧载荷 / 单服务部署）⇒ 原样返回 —— 行为与改造前一致。
+//
+// 为什么放在适配器而不是核心：核心不知道「这个请求属于哪个接入单元」（那要看 Host 归属，
+// 而归属声明只在边缘侧）；核心只回答「要不要改道」，选池属于部署拓扑。
+func (h *Handler) backendForService(st *remoteState, r *http.Request, fallback string) string {
+	if st == nil || len(st.serviceBackends) == 0 {
+		return fallback
+	}
+	sid := serviceOfHost(st.hostServices, r.Host)
+	if sid == "" {
+		return fallback
+	}
+	if be, ok := st.serviceBackends[sid]; ok && be != "" {
+		return be
+	}
+	return fallback
 }
 
 // forward 把请求交给指定后端的 Caddy reverse_proxy。

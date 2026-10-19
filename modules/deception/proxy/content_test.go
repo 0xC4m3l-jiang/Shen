@@ -42,7 +42,7 @@ func contentHandler(t *testing.T, m *contentManifest, enabled bool) *Handler {
 	h := &Handler{InjectContent: true}
 	h.now = now
 	h.pins = newVariantPins(time.Minute, 16, now)
-	h.remote.Store(&remoteState{injectEnabled: enabled, content: newContentIndex(m)})
+	h.remote.Store(&remoteState{injectEnabled: enabled, content: newContentIndex(m, nil)})
 	return h
 }
 
@@ -129,7 +129,7 @@ func TestNewContentIndexRejectsBadShapes(t *testing.T) {
 		"无可用条目":     {Version: 1, Selector: selectorSession, Variants: 8, Entries: []contentEntry{{Resource: ""}}},
 	}
 	for name, m := range cases {
-		if idx := newContentIndex(m); idx != nil {
+		if idx := newContentIndex(m, nil); idx != nil {
 			t.Errorf("%s：应返回 nil（= 没有可用内容），实际 %+v", name, idx)
 		}
 	}
@@ -141,7 +141,7 @@ func TestNewContentIndexSkipsBadBodies(t *testing.T) {
 		contentBody{VariantID: 9, ContentID: "c-bad", Checksum: "x", Body: "越界的变体"},
 		contentBody{VariantID: 1, ContentID: "c-empty", Checksum: "x", Body: ""},
 	)
-	idx := newContentIndex(m)
+	idx := newContentIndex(m, nil)
 	if idx == nil {
 		t.Fatal("有可用内容时不应返回 nil")
 	}

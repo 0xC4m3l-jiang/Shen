@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 // contentIdx 取当前生效的内容索引（测试用；生产路径走 `contentInjectionReady`）。
@@ -22,18 +23,19 @@ func contentIdx(t *testing.T, h *Handler) *contentIndex {
 }
 
 // svcManifest 造一份带服务维度的清单：两个服务各自声明同一个资源 /api/users。
-func svcManifest(t *testing.T) *contentManifest {
+// svcPayload 造一份「清单 + 接入单元表」：服务表在**载荷顶层**（SHEN-M4-01/M4-02 起）。
+func svcPayload(t *testing.T) (*contentManifest, map[string]string) {
 	t.Helper()
 	bodyA := `<html><body>site-a users</body></html>`
 	bodyB := `<html><body>site-b users</body></html>`
-	return &contentManifest{
+	hosts := map[string]string{
+		"a.example.com":   "site-a",
+		"*.b.example.com": "site-b",
+	}
+	m := &contentManifest{
 		Version:  1,
 		Selector: selectorSession,
 		Variants: 1,
-		Services: []contentService{
-			{ID: "site-a", Hosts: []string{"a.example.com", "A.EXAMPLE.COM:8443"}},
-			{ID: "site-b", Hosts: []string{"*.b.example.com"}},
-		},
 		Entries: []contentEntry{
 			{Service: "site-a", Resource: "/api/users", ProfileID: "site-a", Bodies: []contentBody{
 				{VariantID: 0, ContentID: "c-a", Checksum: checksumOf(bodyA), Body: bodyA, Marker: testMarker},
@@ -43,6 +45,18 @@ func svcManifest(t *testing.T) *contentManifest {
 			}},
 		},
 	}
+	return m, hosts
+}
+
+// contentHandlerFor 用「清单 + 服务表」造一个可注入的 Handler。
+func contentHandlerFor(t *testing.T, m *contentManifest, hosts map[string]string) *Handler {
+	t.Helper()
+	now := time.Now
+	h := &Handler{InjectContent: true}
+	h.now = now
+	h.pins = newVariantPins(time.Minute, 16, now)
+	h.remote.Store(&remoteState{injectEnabled: true, content: newContentIndex(m, hosts), hostServices: hosts})
+	return h
 }
 
 // reqFor 造一个带 Host 的请求（`httptest.NewRequest` 默认 Host 是 example.com）。
@@ -54,7 +68,8 @@ func reqFor(host, path string) *http.Request {
 
 // TestContentIndexSeparatesServicesByName 断言：同名资源在两个服务下**各有各的正文**。
 func TestContentIndexSeparatesServicesByName(t *testing.T) {
-	h := contentHandler(t, svcManifest(t), true)
+	m, hosts := svcPayload(t)
+	h := contentHandlerFor(t, m, hosts)
 
 	gotA, okA := h.contentFor(reqFor("a.example.com", "/api/users"), contentIdx(t, h))
 	if !okA {
@@ -74,7 +89,8 @@ func TestContentIndexSeparatesServicesByName(t *testing.T) {
 
 // TestContentIndexHostNormalization 断言：大小写、端口、尾点不影响归属。
 func TestContentIndexHostNormalization(t *testing.T) {
-	h := contentHandler(t, svcManifest(t), true)
+	m, hosts := svcPayload(t)
+	h := contentHandlerFor(t, m, hosts)
 	for _, host := range []string{"a.example.com", "A.EXAMPLE.COM", "a.example.com:8443", "a.example.com."} {
 		body, ok := h.contentFor(reqFor(host, "/api/users"), contentIdx(t, h))
 		if !ok || body.ContentID != "c-a" {
@@ -86,13 +102,13 @@ func TestContentIndexHostNormalization(t *testing.T) {
 // TestContentIndexUnknownHostFallsBackToUnscoped 断言：Host 没命中任何服务时，
 // 只看得见「不分服务」的条目 —— 不能顺手借到别的服务的内容。
 func TestContentIndexUnknownHostFallsBackToUnscoped(t *testing.T) {
-	m := svcManifest(t)
+	m, hosts := svcPayload(t)
 	scoped := `<html><body>global</body></html>`
 	m.Entries = append(m.Entries, contentEntry{
 		Resource: "/index.html", ProfileID: "generic",
 		Bodies: []contentBody{{VariantID: 0, ContentID: "c-global", Checksum: checksumOf(scoped), Body: scoped, Marker: testMarker}},
 	})
-	h := contentHandler(t, m, true)
+	h := contentHandlerFor(t, m, hosts)
 
 	if body, ok := h.contentFor(reqFor("unknown.example.org", "/index.html"), contentIdx(t, h)); !ok || body.ContentID != "c-global" {
 		t.Fatalf("未命中服务的请求应看得见不分服务的条目，实际 ok=%v", ok)
@@ -104,13 +120,13 @@ func TestContentIndexUnknownHostFallsBackToUnscoped(t *testing.T) {
 
 // TestContentIndexScopedWinsOverUnscoped 断言：同一资源同时有专属与通用条目时，专属优先。
 func TestContentIndexScopedWinsOverUnscoped(t *testing.T) {
-	m := svcManifest(t)
+	m, hosts := svcPayload(t)
 	generic := `<html><body>generic users</body></html>`
 	m.Entries = append(m.Entries, contentEntry{
 		Resource: "/api/users", ProfileID: "generic",
 		Bodies: []contentBody{{VariantID: 0, ContentID: "c-generic", Checksum: checksumOf(generic), Body: generic, Marker: testMarker}},
 	})
-	h := contentHandler(t, m, true)
+	h := contentHandlerFor(t, m, hosts)
 
 	if body, _ := h.contentFor(reqFor("a.example.com", "/api/users"), contentIdx(t, h)); body.ContentID != "c-a" {
 		t.Fatalf("专属内容应优先于通用内容，实际 %q", body.ContentID)
@@ -124,11 +140,11 @@ func TestContentIndexScopedWinsOverUnscoped(t *testing.T) {
 // 载荷里没有 `services[]` 时，行为与改造前一致（任何 Host 都命中同一条）。
 func TestContentIndexWithoutServicesKeepsLegacyBehavior(t *testing.T) {
 	// 旧载荷的形态：既没有 `services[]`，条目上也没有 `service` 字段。
-	m := svcManifest(t)
-	m.Services = nil
+	m, hosts := svcPayload(t)
+	hosts = nil
 	m.Entries = m.Entries[:1]
 	m.Entries[0].Service = ""
-	h := contentHandler(t, m, true)
+	h := contentHandlerFor(t, m, hosts)
 
 	for _, host := range []string{"a.example.com", "whatever.example.org"} {
 		if body, ok := h.contentFor(reqFor(host, "/api/users"), contentIdx(t, h)); !ok || body.ContentID != "c-a" {

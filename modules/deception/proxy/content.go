@@ -40,20 +40,6 @@ type contentManifest struct {
 	Selector string         `json:"selector"`
 	Variants int            `json:"variants"`
 	Entries  []contentEntry `json:"entries"`
-	// Services 是 Host → 服务 的映射（SHEN-M4-01，可选）。
-	//
-	// 缺省（旧核心）⇒ 所有请求都按「不分服务」查表，行为与改造前一致。
-	// 出现时：请求 Host 命中某服务 ⇒ 只查该服务的条目，查不到再退回不分服务的条目。
-	Services []contentService `json:"services,omitempty"`
-}
-
-// contentService 是一个接入单元与它声明的 Host（与核心侧 `policy.edgeService` 手工对齐）。
-//
-// `hosts` 里的通配只在这里做**字面**匹配：`*.example.com` 覆盖子域但不含根域（与诱饵路由的
-// 归属声明 `W7` 同口径）。大小写与端口在归一化时处理。
-type contentService struct {
-	ID    string   `json:"id"`
-	Hosts []string `json:"hosts,omitempty"`
 }
 
 type contentEntry struct {
@@ -94,7 +80,11 @@ type contentIndex struct {
 // newContentIndex 构建索引；结构不合法（selector 不认识 / variants < 1）时返回 nil。
 //
 // nil 的语义 = 「没有可用内容」⇒ 适配器报 `no_content`，**不报错、不阻断**（`NI-1`）。
-func newContentIndex(m *contentManifest) *contentIndex {
+// newContentIndex 构建索引；`hostServices` 是载荷顶层的「Host → 服务」表（可为空）。
+//
+// 为什么服务表从清单里搬到载荷顶层：服务同时决定「内容走哪条」与「改道去哪个幻境池」（`SHEN-M4-02`），
+// 两处各存一份会漂移 —— 一张表、两个消费方。
+func newContentIndex(m *contentManifest, hostServices map[string]string) *contentIndex {
 	if m == nil || m.Selector != selectorSession || m.Variants < 1 {
 		return nil
 	}
@@ -102,14 +92,10 @@ func newContentIndex(m *contentManifest) *contentIndex {
 		version:      m.Version,
 		variants:     m.Variants,
 		entries:      make(map[string]map[string]map[int]contentBody, len(m.Entries)),
-		hostServices: map[string]string{},
+		hostServices: hostServices,
 	}
-	for _, svc := range m.Services {
-		for _, host := range svc.Hosts {
-			if h := normalizeHost(host); h != "" {
-				idx.hostServices[h] = svc.ID
-			}
-		}
+	if idx.hostServices == nil {
+		idx.hostServices = map[string]string{}
 	}
 	for _, entry := range m.Entries {
 		if entry.Resource == "" {
@@ -319,15 +305,22 @@ func (h *Handler) contentInjectionReady(st *remoteState) (bool, *contentIndex) {
 
 // serviceOf 取请求所属的服务标识；没有映射（或没命中）时返回 ""（= 不分服务）。
 func (idx *contentIndex) serviceOf(r *http.Request) string {
-	if len(idx.hostServices) == 0 {
+	return serviceOfHost(idx.hostServices, r.Host)
+}
+
+// serviceOfHost 是「Host → 服务」的唯一实现（内容查表与后端选池共用同一份口径）。
+//
+// 通配：`*.example.com` 覆盖 `a.example.com`，但**不含** `example.com` 本身
+// （与诱饵归属声明 `W7` 同口径：通配不该顺带把根域也算进来）。
+func serviceOfHost(hostServices map[string]string, rawHost string) string {
+	if len(hostServices) == 0 {
 		return ""
 	}
-	host := normalizeHost(r.Host)
-	if svc, ok := idx.hostServices[host]; ok {
+	host := normalizeHost(rawHost)
+	if svc, ok := hostServices[host]; ok {
 		return svc
 	}
-	// 通配：`*.example.com` 覆盖 `a.example.com`，不含 `example.com` 本身（W7 同口径）。
-	for pattern, svc := range idx.hostServices {
+	for pattern, svc := range hostServices {
 		if suffix, ok := strings.CutPrefix(pattern, "*."); ok {
 			if strings.HasSuffix(host, "."+suffix) && host != suffix {
 				return svc

@@ -54,12 +54,28 @@ type edgePolicy struct {
 	// InjectEnabled 是 **AI 欺骗内容注入**的下发级开关（`ADR-0023` 决定 4）。
 	// 恒出现（不是指针）：适配器必须能区分「明确关闭」与「这份载荷没谈这件事」。
 	InjectEnabled bool `json:"inject_enabled"`
+	// Services 是**接入单元表**（`SHEN-M4-01` / `M4-02`）：Host 声明 + 该服务的幻境后端。
+	//
+	// 为什么放顶层而不是塞进 content_manifest：服务是**接入**概念，同时约束
+	// 「哪些 Host 属于它」「它的内容走哪条」「它改道去哪个幻境池」——把三者放在一处，
+	// 才不会出现「内容按服务分组了、后端却仍共用」的半截状态。
+	Services []policyService `json:"services,omitempty"`
 	// ContentManifest 是内容清单（含内容体）。nil = 没有内容 ⇒ 一律报 `no_content`。
 	ContentManifest *contentManifest `json:"content_manifest"`
 	// Decoys 是**诱饵路由表**：专属路径 → 幻境后端逻辑名（方案 §9.2 / C01）。
 	//
 	// 核心只投影**启用中**的资产 ⇒ 这里没有「撤销」这种中间态：载荷里没有 = 边缘没有这条路由。
 	Decoys []policyDecoy `json:"decoys,omitempty"`
+}
+
+// policyService 是一个接入单元（与核心侧 `policy.edgeService` 手工对齐）。
+//
+// `hosts` 是归属声明（支持 `*.x`，不含根域）；`mirage_backend` 是该服务改道时优先使用的
+// 幻境后端逻辑名（空 = 沿用核心判定给出的 `backend`）。
+type policyService struct {
+	ID            string   `json:"id"`
+	Hosts         []string `json:"hosts,omitempty"`
+	MirageBackend string   `json:"mirage_backend,omitempty"`
 }
 
 // policyDecoy 是诱饵路由表的一行（与核心侧 `policy.edgeDecoy` 手工对齐）。
@@ -113,6 +129,10 @@ type remoteState struct {
 	injectEnabled bool
 	// content 是已索引的远端内容清单；无可用内容时为 nil（= 报 `no_content`）。
 	content *contentIndex
+	// hostServices 是 Host（归一化）→ 服务标识（来自载荷 `services[]`）。
+	hostServices map[string]string
+	// serviceBackends 是 服务标识 → 幻境后端逻辑名（来自载荷 `services[].mirage_backend`）。
+	serviceBackends map[string]string
 	// decoys 是**专属诱饵路由表**（已归一化路径 + 按路径长度降序，便于最长匹配）。
 	//
 	// 它与 `backends` 分开：后端表是「能去哪」，路由表是「什么路径该去哪」。
@@ -268,6 +288,9 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte, checksum stri
 		return decoys[i].path < decoys[j].path // 同长度按字典序，保证确定性（AR-30）
 	})
 
+	// 接入单元表：Host → 服务，服务 → 幻境后端（`SHEN-M4-01` / `M4-02`）。
+	hostServices, serviceBackends := buildServiceTables(doc.Services)
+
 	// 搜索碑（N6）：上一份快照里有、本份里没有的路径 ⇒ 进入租约期，期内仍不属于业务。
 	// 重新登记的路径从碑里移除（它又有主了）；过期碑被清理，归属真正还给业务。
 	tombstones := h.nextTombstones(decoys)
@@ -281,7 +304,9 @@ func (h *Handler) applyEdgePolicy(ctx context.Context, raw []byte, checksum stri
 		injectRulesProvided: doc.InjectRules != nil,
 		injector:            inj,
 		injectEnabled:       doc.InjectEnabled,
-		content:             newContentIndex(doc.ContentManifest),
+		content:             newContentIndex(doc.ContentManifest, hostServices),
+		hostServices:        hostServices,
+		serviceBackends:     serviceBackends,
 		decoys:              decoys,
 		tombstones:          tombstones,
 		addresses:           addresses,
@@ -521,6 +546,33 @@ func normalizeHostPattern(raw string) string {
 		return "" // 只支持最左标签通配；其它形态直接丢弃（宁可不接管，也不要模糊归属）
 	}
 	return h
+}
+
+// buildServiceTables 把载荷里的接入单元表展开成两张查表（`SHEN-M4-01` / `M4-02`）。
+//
+//   - `hosts`：Host（归一化，可含最左标签通配）→ 服务标识；
+//   - `backends`：服务标识 → 该服务改道时优先使用的幻境后端逻辑名。
+//
+// 非法项**跳过**而不是让整份策略失败：一条写错的服务声明不该把全局策略带下水
+// （与后端表「坏地址只丢那一条」同一纪律）。空 id 一律丢弃 —— 空 id 会让归属变得不可判定。
+func buildServiceTables(in []policyService) (map[string]string, map[string]string) {
+	hosts := make(map[string]string, len(in))
+	backends := make(map[string]string, len(in))
+	for _, svc := range in {
+		id := strings.TrimSpace(svc.ID)
+		if id == "" {
+			continue
+		}
+		if be := strings.TrimSpace(svc.MirageBackend); be != "" {
+			backends[id] = be
+		}
+		for _, raw := range svc.Hosts {
+			if pattern := normalizeHostPattern(raw); pattern != "" {
+				hosts[pattern] = id
+			}
+		}
+	}
+	return hosts, backends
 }
 
 // defaultDecoyLease 是搜索碑租约的默认值（N6）。

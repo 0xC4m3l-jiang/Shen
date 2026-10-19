@@ -110,7 +110,7 @@ func TestVariantUsesSameIdentityAsDecisionID(t *testing.T) {
 // manifestIndex 取夹具清单索引（与 `contentHandler` 内部用的是同一份；`newContentIndex` 返回 nil 时直接失败）。
 func manifestIndex(t *testing.T, m *contentManifest) *contentIndex {
 	t.Helper()
-	idx := newContentIndex(m)
+	idx := newContentIndex(m, nil)
 	if idx == nil {
 		t.Fatal("夹具清单应可索引")
 	}
