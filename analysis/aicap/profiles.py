@@ -37,8 +37,13 @@ GENERIC_PROFILE_ID = "generic"
 _PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$")
 
 
-def _valid_id(profile_id: str) -> bool:
+def valid_profile_id(profile_id: str) -> bool:
+    """画像 id 是否可安全地拼进文件路径（读与写共用同一判据）。"""
     return bool(_PROFILE_ID_RE.match(profile_id)) and ".." not in profile_id
+
+
+# 兼容旧名（包内私有用法的历史拼写）。
+_valid_id = valid_profile_id
 
 
 GENERIC_TERMS: tuple[str, ...] = ("Records", "Status", "Revision", "Summary")
