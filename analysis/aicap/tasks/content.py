@@ -246,6 +246,7 @@ def build(checked: Mapping[str, Any], spec: TaskSpec, generated_at: str) -> Cont
         generated_at=generated_at,
         generator=str(checked["generator"]),
         marker=str(checked.get("marker", "")),
+        service=str(spec.payload.get("service", "")),
     )
 
 

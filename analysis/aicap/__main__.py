@@ -47,6 +47,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--kind", default="content", help="任务种类（必须已登记）")
     parser.add_argument("--profile", default="site-a", help="文档画像标识")
     parser.add_argument(
+        "--service",
+        default="",
+        help="接入单元标识（SHEN-M4-01）；留空 = 不分服务，对所有 Host 生效",
+    )
+    parser.add_argument(
         "--resources",
         default="/",
         help="资源路径列表（逗号分隔）；资源是请求路径的精确值",
@@ -131,6 +136,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "variant": variant,
                         "version": args.version,
                         "profile_id": args.profile,
+                        "service": args.service,
                         # 走不走模型由**命令行参数**决定，不靠环境变量隐式决定
                         # （否则同一条命令在不同环境里产出不同类产物，无法复现）。
                         "use_model": bool(args.llm),

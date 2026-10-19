@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
@@ -27,6 +28,18 @@ PROFILE_DIR = Path(__file__).parent / "resources" / "profiles"
 """画像目录：一个服务一个 JSON。新增服务 = 加一个文件，不改代码。"""
 
 GENERIC_PROFILE_ID = "generic"
+
+# 画像 id 的合法形态：只允许字母数字与 `._-`，且不得以点开头/结尾。
+#
+# 为什么必须校验：画像 id 来自策略载荷 / 命令行，会被拼进文件路径
+# （`PROFILE_DIR / f"{id}.json"`）。不校验就等于把 `../` 交给调用方 —— 那属于
+# 「本来只该读一个目录，结果能读全盘」。宁可报错，也不要读一个猜出来的文件。
+_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$")
+
+
+def _valid_id(profile_id: str) -> bool:
+    return bool(_PROFILE_ID_RE.match(profile_id)) and ".." not in profile_id
+
 
 GENERIC_TERMS: tuple[str, ...] = ("Records", "Status", "Revision", "Summary")
 """通用画像的**结构性**词汇（不含任何业务语义），仅用于「没有为该服务准备画像」的场合。
@@ -119,6 +132,8 @@ def load_profile(profile_id: str) -> ServiceProfile:
     pid = (profile_id or "").strip()
     if not pid or pid == GENERIC_PROFILE_ID:
         return GENERIC_PROFILE
+    if not _valid_id(pid):
+        raise ProfileError(f"画像 id 非法：{pid!r}（只允许字母数字与 ._-，且不得含 ..）")
 
     path = PROFILE_DIR / f"{pid}.json"
     if not path.is_file():

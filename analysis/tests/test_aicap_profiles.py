@@ -186,3 +186,27 @@ def test_generate_accepts_its_own_profile(profile_id: str) -> None:
         generated_at="2026-10-14T00:00:00+00:00",
     )
     assert envelope.accepted, envelope.rejected_reason
+
+
+# ── 安全：画像 id 会被拼进文件路径，必须拒绝穿越 ─────────────────────────────
+
+
+def test_profile_id_rejects_path_traversal() -> None:
+    from analysis.aicap.profiles import ProfileError
+
+    for bad in ("../etc/passwd", "a/b", "..", "", "x" * 80):
+        if bad == "":  # 空串是合法的（= 通用画像）
+            continue
+        try:
+            load_profile(bad)
+        except ProfileError:
+            continue
+        raise AssertionError(f"画像 id {bad!r} 未被拦住（会被拼进文件路径）")
+
+
+def test_profile_id_accepts_reasonable_ids() -> None:
+    for ok in ("site-a", "site_b", "svc.1", "A9"):
+        try:
+            load_profile(ok)
+        except Exception as exc:
+            raise AssertionError(f"合法画像 id {ok!r} 被拒：{exc}") from exc

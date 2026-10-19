@@ -430,3 +430,52 @@ def test_cli_labels_mixed_when_some_items_fall_back(tmp_path: Path, monkeypatch)
     assert code == 0, "部分回落不该让整轮失败（清单仍值得写）"
     manifest = _json.loads(out.read_text(encoding="utf-8"))
     assert manifest["generator"] == "mixed:model-v1,template-v1", manifest["generator"]
+
+
+# ── SHEN-M4-01：内容可带服务维度（接入单元），且不改变既有产出的字节 ──────────
+
+
+def test_manifest_omits_service_when_unset() -> None:
+    """不传服务 ⇒ 清单里**不出现** `service` 字段（既有产出的字节不变）。"""
+    item = make_content(
+        resource="/api/users",
+        profile_id="site-a",
+        variant=0,
+        body="<html>Order</html>",
+        version=1,
+        generated_at=STAMP,
+        generator=GENERATOR,
+    )
+    manifest = build_manifest(
+        [item], version=1, variants=1, generated_at=STAMP, generator=GENERATOR
+    )
+    entry = manifest["entries"][0]
+    assert "service" not in entry
+
+
+def test_manifest_groups_same_resource_by_service() -> None:
+    """同名资源在不同服务下是**两条**条目 —— 不互相覆盖（SHEN-M4-01 的核心）。"""
+
+    def item(service: str, marker: str):
+        return make_content(
+            resource="/api/users",
+            profile_id="site-a",
+            variant=0,
+            body=f"<html>{marker}</html>",
+            version=1,
+            generated_at=STAMP,
+            generator=GENERATOR,
+            service=service,
+        )
+
+    manifest = build_manifest(
+        [item("site-a", "Order-a"), item("site-b", "Order-b")],
+        version=1,
+        variants=1,
+        generated_at=STAMP,
+        generator=GENERATOR,
+    )
+    entries = manifest["entries"]
+    assert len(entries) == 2, f"两个服务应各占一条，实际 {len(entries)} 条"
+    assert {e["service"] for e in entries} == {"site-a", "site-b"}
+    assert {e["resource"] for e in entries} == {"/api/users"}

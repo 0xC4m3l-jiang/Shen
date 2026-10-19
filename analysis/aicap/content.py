@@ -104,6 +104,9 @@ class ContentObject:
     generated_at: str
     generator: str
     marker: str = DEFAULT_MARKER
+    # service 是**接入单元**（`SHEN-M4-01`）；空 = 不分服务（对所有 Host 生效）。
+    # 与 `profile_id` 是两件事：服务是接入单元，画像是生成单元。
+    service: str = ""
     kind: str = CONTENT_KIND
 
     @property
@@ -141,6 +144,7 @@ def make_content(
     generated_at: str,
     generator: str,
     marker: str = "",
+    service: str = "",
 ) -> ContentObject:
     """构造内容对象；`checksum` 与 `content_id` 由内容算出（**不接受**调用方传入）。"""
     if not body:
@@ -169,6 +173,7 @@ def make_content(
         generated_at=generated_at,
         generator=generator,
         marker=marker or DEFAULT_MARKER,
+        service=service,
     )
 
 
@@ -222,7 +227,7 @@ def build_manifest(
     resolved_variants = as_int(variants, field_name="variants")
     if resolved_variants < 1:
         raise ValueError(f"variants 必须 ≥ 1，实际 {resolved_variants}")
-    grouped: dict[str, dict[str, Any]] = {}
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
     skipped: list[dict[str, str]] = []
     for item in sorted(contents, key=lambda c: (c.resource, c.variant)):
         size = len(body_bytes(item.body))
@@ -244,10 +249,14 @@ def build_manifest(
                 }
             )
             continue
+        # 键里带服务：同名的 `resource` 在不同服务下是**两条**条目，不能互相覆盖（SHEN-M4-01）。
+        group_key = (item.service, item.resource)
         entry = grouped.setdefault(
-            item.resource,
+            group_key,
             {"resource": item.resource, "profile_id": item.profile_id, "bodies": []},
         )
+        if item.service:
+            entry["service"] = item.service
         entry["bodies"].append(
             {
                 "variant_id": item.variant,
