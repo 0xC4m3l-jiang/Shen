@@ -131,9 +131,13 @@ def run_task(
         )
     task.assert_declared()
 
+    # 生效护栏档案：由任务自己解析（`kind=content` 按服务画像取术语，见 `SHEN-M5-01`）。
+    # 一次算好、两个阶段共用 —— 提示词里写的术语与后置检查用的术语不能是两套。
+    profile = task.profile(spec)
+
     # ① 前置护栏：三段式提示词（含数据区），渲染本身就会校验（AR-24 / AR-31）
     prompt = guardrail_prompts.render(
-        task.guardrail_profile,
+        profile,
         untrusted_rows=spec.untrusted_rows(),
     )
 
@@ -145,6 +149,7 @@ def run_task(
     checked, reasons = guardrail_inspect.check(
         candidate,
         task=task,
+        profile=profile,
         blacklist=guardrail_inspect.blacklist_of(tuple(identifiers)),
     )
     if reasons:

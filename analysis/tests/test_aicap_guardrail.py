@@ -22,11 +22,11 @@ from analysis.aicap import service
 from analysis.aicap.guardrail import inspect as guardrail_inspect
 from analysis.aicap.guardrail import prompts as guardrail_prompts
 from analysis.aicap.model import Unavailable, resolve
+from analysis.aicap.profiles import GENERIC_TERMS
 from analysis.aicap.tasks import _registry
 from analysis.aicap.tasks.content import (
     CONTENT_TASK,
     GENERATOR,
-    PROFILE_VOCAB,
 )
 from analysis.llm import contract as _contract
 from analysis.llm.untrusted import DATA_BEGIN, DATA_END, UNTRUSTED_BANNER
@@ -168,16 +168,16 @@ def test_gate_leak_private_ip() -> None:
 def test_gate_leak_identifier_injected_at_startup() -> None:
     """真实业务标识由部署方注入（`AR-24`），命中即拒（`AR-22`）。"""
     _, reasons = guardrail_inspect.check(
-        _candidate(f"<html>{PROFILE_VOCAB[0]}</html>"),
+        _candidate(f"<html>{GENERIC_TERMS[0]}</html>"),
         task=CONTENT_TASK,
-        blacklist=guardrail_inspect.blacklist_of(("Service status",)),
+        blacklist=guardrail_inspect.blacklist_of((GENERIC_TERMS[0],)),
     )
     assert any(item["check"] == "blacklist" for item in reasons)
 
 
 def test_gate_overlength() -> None:
     """超长类：超过用途上限即拒（`AR-23`）。"""
-    reasons = _check(_candidate(PROFILE_VOCAB[0] + "x" * 66_000))
+    reasons = _check(_candidate(GENERIC_TERMS[0] + "x" * 66_000))
     assert any(item["check"] == "length" for item in reasons)
 
 
@@ -188,7 +188,7 @@ def test_gate_style() -> None:
 
 
 def test_gates_pass_for_template_output() -> None:
-    reasons = _check(_candidate("<html>" + PROFILE_VOCAB[0] + "</html>"))
+    reasons = _check(_candidate("<html>" + GENERIC_TERMS[0] + "</html>"))
     assert reasons == []
 
 

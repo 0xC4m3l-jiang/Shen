@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from ...llm.contract import Field, Schema
 from ...llm.extract import ExtractionError
 from ..content import CONTENT_KIND, ContentObject, make_content
 from ..model import Unavailable
+from ..profiles import GENERIC_FIELDS, load_profile
 from ._produce import structured_candidate
 from ._registry import GuardrailProfile, Task, TaskLimits
 
@@ -64,40 +66,45 @@ CONTENT_SCHEMA = Schema(
 )
 """候选输出的结构契约（后置护栏第一关，`AR-15`）。"""
 
-PROFILE_VOCAB: tuple[str, ...] = (
-    "Service status",
-    "Service health",
-    "Service summary",
-    "Service overview",
-    "Service report",
-    "Service inventory",
-    "Service catalog",
-    "Service registry",
-)
-"""画像术语（`style_terms`）：内容**必须**至少命中一个，否则判为「不像该画像」（`AR-33`）。
 
-同时也是模板生成器的**措辞层扰动来源**（`variant` 决定用哪一条）—— 一处定义，两处使用。
-"""
+def _entity_of(resource: str) -> str:
+    """从资源路径取**实体名**：`/api/orders/42` → `orders`；取不到就用空串（走画像兜底）。
 
-FIELD_ORDERS: tuple[tuple[str, ...], ...] = (
-    ("id", "name", "status"),
-    ("id", "region", "status"),
-    ("id", "owner", "status"),
-    ("id", "tier", "status"),
-    ("id", "name", "revision"),
-    ("id", "region", "revision"),
-    ("id", "owner", "revision"),
-    ("id", "tier", "revision"),
-)
-"""字段层扰动：`variant` 决定字段组合（同一槽位里 `variant` 固定 ⇒ 输出稳定）。"""
+    只取路径里的字面片段，**不推断业务语义**（画像里没登记就吃兜底字段）。
+    """
+    parts = [seg for seg in str(resource).split("/") if seg]
+    for seg in reversed(parts):
+        if not seg.replace("-", "").replace("_", "").isdigit():
+            return seg.lower()
+    return ""
 
-CONTENT_PROFILE = GuardrailProfile(
-    name="site-content",
-    prompt="content",
-    style_terms=PROFILE_VOCAB,
-    checked_fields=("body",),
-)
-"""内容任务的护栏档案；受检字段只有 `body`（黑名单与风格只作用在正文上，`AR-22` / `AR-33`）。"""
+
+@lru_cache(maxsize=64)
+def _guardrail_for(profile_id: str) -> GuardrailProfile:
+    """按画像取护栏档案 —— 画像标识一变，`style_terms` 跟着变（`SHEN-M5-01`）。
+
+    档案名带上画像标识：拒绝原因里能看出「是哪份画像判它不像」。
+    """
+    profile = load_profile(profile_id)
+    return GuardrailProfile(
+        name=f"content:{profile.profile_id}",
+        prompt="content",
+        style_terms=profile.domain_terms,
+        checked_fields=("body",),
+    )
+
+
+def profile_for(spec: TaskSpec) -> GuardrailProfile:
+    """本任务的**生效**护栏档案：由 `spec.payload["profile_id"]` 决定（缺省用通用画像）。
+
+    为什么按请求取而不是按任务取：同一个 `kind=content` 要为多个服务生成内容，
+    而「像不像该画像」只能对着**该服务**的术语判 —— 用全局术语判，等于没判（`AR-33`）。
+    """
+    return _guardrail_for(str(spec.payload.get("profile_id", "")))
+
+
+CONTENT_PROFILE = _guardrail_for("")
+"""默认档案（通用画像）：只用于登记期声明检查；实际生成时以 `profile_for(spec)` 为准。"""
 
 CONTENT_LIMITS = TaskLimits(purpose="deception_content", max_output=65536)
 
@@ -113,18 +120,36 @@ def _render_body(*, resource: str, profile_id: str, variant: int, version: int) 
     为什么是片段：注入复用 `deception/injection` 的**插入**语义
     （插在标记之前，`ST-5` 不新增替换语义），
     所以内容得是「能插进去的一段」，而不是另一个 `<html>` 文档。
+
+    内容全部由**画像**决定（术语 / 字段名），`variant` 只做**顺序扰动**：
+    同一 `(resource, profile_id, variant, version)` 逐字节可复现，
+    不同画像之间不会共用一套措辞（`SHEN-M5-01`）。
     """
-    headline = PROFILE_VOCAB[variant % len(PROFILE_VOCAB)]
-    fields = FIELD_ORDERS[variant % len(FIELD_ORDERS)]
+    profile = load_profile(profile_id)
+    entity = _entity_of(resource)
+
+    fields = profile.fields_for(entity)
+    if not fields:  # 画像里显式给了空数组：不猜字段，退回通用字段
+        fields = GENERIC_FIELDS
+    headline = profile.domain_terms[variant % len(profile.domain_terms)]
+    rotate = variant % len(fields)
+    ordered = fields[rotate:] + fields[:rotate]
+
     record = _record_id(variant=variant, version=version)
     rows = "\n".join(
-        f"    <li>{name}: {record if name == 'id' else f'value-{idx}-{variant}'}</li>"
-        for idx, name in enumerate(fields)
+        f"    <li>{name}: {record if idx == 0 else f'value-{idx}-{variant}'}</li>"
+        for idx, name in enumerate(ordered)
+    )
+    status = (
+        f'<p class="state">{profile.status_values[variant % len(profile.status_values)]}</p>\n'
+        if profile.status_values
+        else ""
     )
     return (
         '<section class="service-detail">\n'
         f"  <h2>{headline}</h2>\n"
-        f'  <p class="source">{profile_id} API response for <code>{resource}</code>.</p>\n'
+        f'  <p class="source">{profile.profile_id} API response for <code>{resource}</code>.</p>\n'
+        f"{status}"
         '  <ul class="records">\n'
         f"{rows}\n"
         "  </ul>\n"
@@ -225,6 +250,7 @@ CONTENT_TASK = Task(
     kind=CONTENT_KIND,
     schema=CONTENT_SCHEMA,
     guardrail_profile=CONTENT_PROFILE,
+    profile_for=profile_for,
     limits=CONTENT_LIMITS,
     produce=produce,
     build=build,

@@ -28,11 +28,11 @@ from analysis.aicap.content import (
     make_content,
     manifest_bytes,
 )
+from analysis.aicap.profiles import load_profile
 from analysis.aicap.tasks.content import (
     CONTENT_TASK,
     GENERATOR,
     MODEL_GENERATOR,
-    PROFILE_VOCAB,
     _render_body,
     produce,
 )
@@ -133,7 +133,7 @@ def test_produce_reads_payload() -> None:
     )
     candidate = produce("prompt", spec, None)  # type: ignore[arg-type] - 模板生成器不用 client
     assert candidate["resource"] == "/x"
-    assert PROFILE_VOCAB[1 % len(PROFILE_VOCAB)] in str(candidate["body"])
+    assert load_profile("site-b").domain_terms[1] in str(candidate["body"])
 
 
 # ── 清单：形状、上限、确定性 ─────────────────────────────────────────────────
@@ -144,7 +144,7 @@ def _item(resource: str, variant: int, body: str = "", version: int = 1):
         resource=resource,
         profile_id="site-a",
         variant=variant,
-        body=body or f"<html>{PROFILE_VOCAB[variant % len(PROFILE_VOCAB)]}</html>",
+        body=body or f"<html>{load_profile('site-a').domain_terms[variant % 8]}</html>",
         version=version,
         generated_at=STAMP,
         generator=GENERATOR,
@@ -225,7 +225,7 @@ def test_generate_rejects_and_keeps_store_empty() -> None:
             payload={"resource": "/", "variant": 0, "version": 1, "profile_id": "site-a"},
         ),
         sink=store,
-        identifiers=("Service status",),  # 命中真实业务标识 → 泄露类（AR-22）
+        identifiers=("records",),  # 每条内容都必然包含 → 泄露类必命中（AR-22）
         generated_at=STAMP,
     )
     assert not envelope.accepted
@@ -283,7 +283,7 @@ def test_cli_refuses_to_write_when_everything_is_rejected(tmp_path: Path) -> Non
             "--variants",
             "2",
             "--identifiers",
-            PROFILE_VOCAB[0][:8],  # 模板里必然出现的片段 → 全部被护栏拒（AR-22）
+            "records",  # 每条内容都必然包含 → 全部被护栏拒（AR-22）
             "--quiet",
         ]
     )
@@ -340,7 +340,7 @@ def test_produce_defaults_to_template_even_when_a_client_is_present() -> None:
 def test_produce_model_path_labels_model_and_takes_identity_from_spec() -> None:
     """模型只负责正文；`resource` / `variant` 由生成器从输入取（模型笔误不得改清单归属）。"""
     reply = json.dumps(
-        {"resource": "/WRONG", "variant": 99, "body": "<section>Service status</section>"}
+        {"resource": "/WRONG", "variant": 99, "body": "<section>Order status</section>"}
     )
     candidate = produce(
         "p", _spec(use_model=True, resource="/api/users", variant=3), _StubClient(reply=reply)
@@ -348,7 +348,7 @@ def test_produce_model_path_labels_model_and_takes_identity_from_spec() -> None:
     assert candidate["generator"] == MODEL_GENERATOR
     assert candidate["resource"] == "/api/users", "身份字段必须来自 spec"
     assert candidate["variant"] == 3, "身份字段必须来自 spec"
-    assert candidate["body"] == "<section>Service status</section>", "正文必须是模型写的"
+    assert candidate["body"] == "<section>Order status</section>", "正文必须是模型写的"
 
 
 def test_produce_falls_back_to_template_when_model_is_unavailable() -> None:
@@ -380,7 +380,7 @@ def test_service_end_to_end_model_path_is_accepted_and_labelled() -> None:
     store = ContentStore()
     envelope = service.generate(
         _spec(use_model=True),
-        client=_StubClient(reply=json.dumps({"body": "<section>Service status</section>"})),
+        client=_StubClient(reply=json.dumps({"body": "<section>Order status</section>"})),
         sink=store,
     )
     assert envelope.accepted, envelope.rejected_reason
@@ -421,7 +421,7 @@ def test_cli_labels_mixed_when_some_items_fall_back(tmp_path: Path, monkeypatch)
             del prompt, session_id, timeout
             calls["n"] += 1
             if calls["n"] == 1:
-                return _json.dumps({"body": "<section>Service status</section>"})
+                return _json.dumps({"body": "<section>Order status</section>"})
             raise Unavailable("模型中途不可用")
 
     monkeypatch.setattr("analysis.aicap.__main__.from_environment", lambda: _FlakyOnce())

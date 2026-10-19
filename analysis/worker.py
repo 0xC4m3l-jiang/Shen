@@ -189,10 +189,10 @@ def _fetch_contiguous(
     while True:
         fetched = port.list_events(limit=want, since=since or None, event_type="decision")
         if len(fetched) < want:
-            return fetched, True, ""
+            return list(fetched), True, ""
         if want >= CURSOR_MAX_LIMIT:
             return (
-                fetched,
+                list(fetched),
                 False,
                 f"游标 {since or '(起点)'} 之后的事件多于 {CURSOR_MAX_LIMIT} 条："
                 "无法证明这一段连续（完整性未知）—— 本轮不提交游标，建议缩短轮询间隔",

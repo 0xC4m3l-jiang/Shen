@@ -1,0 +1,24 @@
+{
+  "profile_id": "site-b",
+  "domain_terms": [
+    "Article",
+    "Document",
+    "Workspace",
+    "Category",
+    "Tag",
+    "Author",
+    "Comment",
+    "Revision"
+  ],
+  "entity_fields": {
+    "articles": ["article_slug", "title", "workspace", "published_at", "visibility"],
+    "documents": ["doc_uuid", "title", "owner", "word_count", "visibility"],
+    "categories": ["category_key", "label", "parent_key", "sort_order"],
+    "comments": ["comment_uuid", "article_slug", "author", "posted_at", "moderation"],
+    "tags": ["tag_key", "label", "usage_count"],
+    "authors": ["author_key", "pen_name", "joined_at", "role"],
+    "*": ["entry_ref", "visibility", "touched_at"]
+  },
+  "status_values": ["draft", "in_review", "published", "archived"],
+  "roles": ["workspace_owner", "editor", "reader"]
+}

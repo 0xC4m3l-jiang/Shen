@@ -1,0 +1,24 @@
+{
+  "profile_id": "site-a",
+  "domain_terms": [
+    "Order",
+    "Payment",
+    "Invoice",
+    "Refund",
+    "Settlement",
+    "Merchant",
+    "Billing",
+    "Receipt"
+  ],
+  "entity_fields": {
+    "orders": ["order_id", "merchant", "amount", "currency", "status"],
+    "payments": ["payment_id", "channel", "amount", "captured_at", "status"],
+    "invoices": ["invoice_no", "billing_period", "amount_due", "issued_at", "status"],
+    "refunds": ["refund_no", "payment_id", "amount", "reason", "state"],
+    "users": ["user_id", "display_name", "role", "state"],
+    "accounts": ["account_no", "merchant", "balance", "opened_at", "state"],
+    "*": ["record_id", "state", "updated_at"]
+  },
+  "status_values": ["pending", "authorized", "captured", "refunded", "voided"],
+  "roles": ["merchant_admin", "finance_operator", "support_agent"]
+}

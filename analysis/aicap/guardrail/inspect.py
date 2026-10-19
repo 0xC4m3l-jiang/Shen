@@ -30,7 +30,7 @@ from ...llm.blacklist import Blacklist
 from ...llm.contract import ContractError, validate
 
 if TYPE_CHECKING:  # pragma: no cover - 只用于类型标注，避免运行期循环导入
-    from ..tasks._registry import Task
+    from ..tasks._registry import GuardrailProfile, Task
 
 CHECK_SCHEMA = "schema"
 CHECK_BLACKLIST = "blacklist"
@@ -48,6 +48,7 @@ def check(
     *,
     task: Task,
     blacklist: Blacklist,
+    profile: GuardrailProfile | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """执行后置四关。
 
@@ -56,13 +57,16 @@ def check(
     """
     reasons: list[dict[str, str]] = []
 
+    # 生效档案：调用方解析好的那一份；没给就退回任务声明的那份（既有调用点不受影响）。
+    active = profile or task.guardrail_profile
+
     try:
         checked = validate(candidate, task.schema)
     except (ContractError, ValueError) as exc:
         reasons.append({"check": CHECK_SCHEMA, "detail": f"{exc}（AR-15）"})
         return {}, reasons
 
-    for name in task.guardrail_profile.checked_fields:
+    for name in active.checked_fields:
         if name not in checked:
             reasons.append(
                 {
@@ -99,13 +103,13 @@ def check(
                     ),
                 }
             )
-        if not any(term in value for term in task.guardrail_profile.style_terms):
+        if not any(term in value for term in active.style_terms):
             reasons.append(
                 {
                     "check": CHECK_STYLE,
                     "detail": (
                         f"{name}: 未命中任何画像术语 "
-                        f"{list(task.guardrail_profile.style_terms)}"
+                        f"{list(active.style_terms)}"
                         " —— 不像该文档画像，拒绝（AR-33）"
                     ),
                 }

@@ -36,6 +36,12 @@ Produce = Callable[[str, "TaskSpec", "AnalysisClient"], Mapping[str, Any]]
 Build = Callable[[Mapping[str, Any], "TaskSpec", str], "Artifact"]
 
 
+# profile_for：按请求解析**生效**的护栏档案（缺省用任务上的那一份）。
+# 为什么允许按请求解析：一个 `kind` 可能服务多个画像（如 `kind=content` 为多个服务生成内容），
+# 「像不像该画像」只能对着**该请求的**术语判 —— 用全局术语判等于没判（AR-33）。
+ProfileFor = Callable[["TaskSpec"], "GuardrailProfile"]
+
+
 @dataclass(frozen=True)
 class GuardrailProfile:
     """护栏档案（契约 §1.4）：提示词模板 + **受检字段** + 风格一致性判据。
@@ -98,6 +104,18 @@ class Task:
     build: Build
     generator: str
     requires_model: bool = False
+    # profile_for 为 None 时，生效档案就是 `guardrail_profile`（绝大多数任务如此）。
+    profile_for: ProfileFor | None = None
+
+    def profile(self, spec: TaskSpec) -> GuardrailProfile:
+        """本次请求**生效**的护栏档案。
+
+        为什么由任务决定而不是内核查表：内核不认识登记表（ADR-0025 决定 1），
+        它只调这个已声明的函数；画像注册表留在**任务自己**的模块里。
+        """
+        if self.profile_for is None:
+            return self.guardrail_profile
+        return self.profile_for(spec)
 
     def assert_declared(self) -> None:
         """声明逐条核对；缺一样即**抛异常**（启动期断言，`AR-33`）。"""
