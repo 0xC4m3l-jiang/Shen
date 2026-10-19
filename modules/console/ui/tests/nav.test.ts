@@ -68,3 +68,35 @@ describe('导航分组与顺序', () => {
     expect(groupedNav(() => false)).toEqual([])
   })
 })
+
+// ── 渲染后再验一次顺序（数据模型对不代表 DOM 顺序对：模板里一个 v-for 嵌套改错就乱了）──
+import { mount } from '@vue/test-utils'
+import { vi } from 'vitest'
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ can: () => true }),
+}))
+vi.mock('vue-router', async () => {
+  const actual = await vi.importActual<typeof import('vue-router')>('vue-router')
+  return { ...actual, useRoute: () => ({ name: 'overview' }) }
+})
+
+describe('侧栏渲染顺序', () => {
+  it('DOM 里的分组与链接顺序与 navItems 一致', async () => {
+    const SideNav = (await import('@/layouts/SideNav.vue')).default
+    const wrapper = mount(SideNav, {
+      global: {
+        stubs: {
+          // 只为占位：真实 RouterLink 依赖 router 实例，这里只关心顺序与文案。
+          RouterLink: { template: '<a><slot /></a>' },
+        },
+      },
+    })
+
+    const groups = wrapper.findAll('nav > div > p').map((n) => n.text())
+    expect(groups).toEqual(navGroups)
+
+    const labels = wrapper.findAll('nav a span.font-medium').map((n) => n.text())
+    expect(labels).toEqual(navItems.map((i) => i.label))
+  })
+})
