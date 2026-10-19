@@ -183,6 +183,9 @@ type Handler struct {
 	closeOnce sync.Once
 
 	now func() time.Time
+	// metrics 是边缘侧的路由指标账本（`SHEN-M1-02`）：窗口计数 + 会话去向表。
+	// 它**只用于观测**，不参与任何判定；nil 安全（单测里可以不起它）。
+	metrics *routeMetrics
 }
 
 // CaddyModule 把 Handler 注册为 Caddy 模块 `http.handlers.shen_proxy`。
@@ -239,6 +242,7 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 
 	now := time.Now
 	h.now = now
+	h.metrics = newRouteMetrics(now)
 
 	cacheCap := h.CacheMaxEntries
 	if cacheCap <= 0 {
@@ -922,6 +926,10 @@ func (h *Handler) reportRoute(r *http.Request, id string, act judgev1.Action, in
 			r.Method, r.URL.Path, id, actionName(act), info.executed, info.backend,
 			info.status, info.bytes, info.durationMs)
 	}
+	// 记账：按「服务（Host）+ 会话 + 实际落点」计数（`SHEN-M1-02`）。
+	// 会话身份与判定/内容注入同一口径 —— 另算一份必然漂移。
+	h.metrics.record(normalizeRequestHost(r.Host), h.sessionKeyOf(r), info.executed)
+
 	h.enqueueEvent(r, id, act, info)
 }
 
@@ -996,10 +1004,16 @@ func (h *Handler) enqueueEvent(r *http.Request, id string, act judgev1.Action, i
 }
 
 func (h *Handler) runReporter() {
+	// 指标快照按固定间隔推进事件流（`SHEN-M1-02`）：告警**不依赖**管控台轮询 ——
+	// 控台只读事件，判定"引擎是不是已经失效"的是边缘自己。
+	tick := time.NewTicker(metricsInterval)
+	defer tick.Stop()
 	for {
 		select {
 		case <-h.done:
 			return
+		case <-tick.C:
+			h.reportMetrics()
 		case ev := <-h.events:
 			ctx, cancel := context.WithTimeout(h.ctx, reportTimeout)
 			// 回执里的计数不在这里消费：它是给核心侧对账用的，
@@ -1009,6 +1023,33 @@ func (h *Handler) runReporter() {
 			}
 			cancel()
 		}
+	}
+}
+
+// reportMetrics 把当前窗口的指标快照推一条事件（`proxy_metrics`）。
+//
+// 只在**有样本**时推：空窗口推一条「0/0」会让控台的图出现锯齿状噪声。
+func (h *Handler) reportMetrics() {
+	if h.report == nil || h.metrics == nil {
+		return
+	}
+	snap := h.metrics.snapshot()
+	if snap.Total == 0 {
+		return
+	}
+	payload, err := json.Marshal(snap)
+	if err != nil {
+		return
+	}
+	ev := &telemetryv1.TelemetryEvent{
+		EventId:   fmt.Sprintf("metrics:%d", time.Now().UnixNano()),
+		EventType: "proxy_metrics",
+		Payload:   payload,
+	}
+	select {
+	case h.events <- ev:
+	default:
+		// 队列满 = 上报跟不上：丢这条快照（**不阻塞请求路径**）。下一轮还会再算一次。
 	}
 }
 
