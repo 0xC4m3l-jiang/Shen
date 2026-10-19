@@ -41,6 +41,8 @@ type configDoc struct {
 	AI         *aiDoc         `yaml:"ai"`
 	// Blacklist 是「禁止欺骗路径」（可选）：命中的请求绝不改道（见 contract.NoDeceptionRule）。
 	Blacklist *[]blacklistDoc `yaml:"blacklist"`
+	// Services 是**接入单元表**（可选，`SHEN-M4-03`）。缺省 = 不分服务（旧行为）。
+	Services *[]serviceDoc `yaml:"services"`
 }
 
 // blacklistDoc 是一条禁止欺骗路径。三项都必填：reason 是审计与回滚时回答"为什么"的依据。
@@ -57,6 +59,14 @@ type injectDoc struct {
 	Kind    *string `yaml:"kind"`    // 可选；登记值见 contract.InjectKinds
 	Snippet *string `yaml:"snippet"` // 必填
 	Marker  *string `yaml:"marker"`  // 可选；空 = </body>
+}
+
+// serviceDoc 是一个接入单元（`SHEN-M4-03`）。三项都参与投影：id 进载荷、hosts 决定归属、
+// mirage_backend 决定改道去哪个池。
+type serviceDoc struct {
+	ID            *string   `yaml:"id"`
+	Hosts         *[]string `yaml:"hosts"`
+	MirageBackend *string   `yaml:"mirage_backend"`
 }
 
 type coreDoc struct {
@@ -162,6 +172,8 @@ type Loader struct {
 	wl        contract.Whitelist
 	// injects 为 nil 表示**未配置**该段（与「配置为空数组」语义不同，见 Injects）。
 	injects *[]contract.InjectRule
+	// services 是接入单元表（`SHEN-M4-03`）；空切片 = 未配置（旧行为：不分服务）。
+	services []contract.ServiceConfig
 	// sessionCookie 是业务自身的 session cookie 名（`session.cookie_name`）。
 	//
 	// 它此前**只被校验、没被消费**（cmd/core 里写死 `"sid"`）—— 客户把名字改成 `PHPSESSID` 时，
@@ -291,6 +303,39 @@ func (d *configDoc) buildWhitelist() contract.Whitelist {
 	return w
 }
 
+// Services 返回接入单元表的副本（`SHEN-M4-03`）。消费方是策略投影（`server.go`）。
+func (l *Loader) Services(context.Context) ([]contract.ServiceConfig, error) {
+	out := make([]contract.ServiceConfig, len(l.services))
+	for i, s := range l.services {
+		out[i] = contract.ServiceConfig{
+			ID:            s.ID,
+			Hosts:         append([]string(nil), s.Hosts...),
+			MirageBackend: s.MirageBackend,
+		}
+	}
+	return out, nil
+}
+
+// buildServices 把配置转成接入单元表（`validateServices` 已保证必填项与唯一性）。
+func (d *configDoc) buildServices() []contract.ServiceConfig {
+	if d.Services == nil || *d.Services == nil {
+		return nil
+	}
+	out := make([]contract.ServiceConfig, 0, len(*d.Services))
+	for _, s := range *d.Services {
+		hosts := make([]string, 0, len(*s.Hosts))
+		for _, h := range *s.Hosts {
+			hosts = append(hosts, strings.ToLower(strings.TrimSpace(h)))
+		}
+		svc := contract.ServiceConfig{ID: strings.TrimSpace(*s.ID), Hosts: hosts}
+		if s.MirageBackend != nil {
+			svc.MirageBackend = strings.TrimSpace(*s.MirageBackend)
+		}
+		out = append(out, svc)
+	}
+	return out
+}
+
 // Shadow 报告是否处于影子模式。消费方是 cmd/core 的装配：
 // 影子时用 ShadowDecider（恒放行），关闭后才用 director 的真实三值（INT-11）。
 func (l *Loader) Shadow() bool { return l.shadow }
@@ -386,6 +431,9 @@ func (d *configDoc) validate() ([]contract.Rule, error) {
 		return nil, err
 	}
 	if err := d.validateBlacklist(); err != nil {
+		return nil, err
+	}
+	if err := d.validateServices(); err != nil {
 		return nil, err
 	}
 	// 跨段一致性检查放在最后：它要同时看 decoys 与 honeypots（以及 blacklist）两段。
@@ -1148,6 +1196,7 @@ func (d *configDoc) build(rules []contract.Rule) (*Loader, error) {
 			Payload:  raw,
 			Rules:    rules,
 		},
+		services: d.buildServices(),
 		// validateThresholds 已保证两个指针非 nil，故此处安全解引用。
 		thr: contract.Thresholds{
 			Mirage: *d.Thresholds.RouteMirage,
@@ -1184,6 +1233,48 @@ type payloadWhitelist struct {
 	SourceCIDRs  []string `json:"source_cidrs"`
 	UserAgents   []string `json:"user_agents"`
 	PathPrefixes []string `json:"path_prefixes"`
+}
+
+// validateServices 校验接入单元表（`SHEN-M4-03`）。该段**可选**（nil = 未配置，行为与旧版一致）。
+//
+// 为什么这里"宁可报错也不猜"：
+//   - id 重复 ⇒ 内容/后端/审计的归属会二义，运行期无法自愈；
+//   - hosts 为空 ⇒ 这个服务永远命中不到请求（配了等于没配，是最难查的一类配置错误）；
+//   - 通配写成 `a*b` 这种形态 ⇒ 边缘只会把它丢掉，等于静默失效 —— 启动期就该拒绝。
+func (d *configDoc) validateServices() error {
+	if d.Services == nil || *d.Services == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(*d.Services))
+	for i, svc := range *d.Services {
+		path := fmt.Sprintf("services[%d]", i)
+		if svc.ID == nil || strings.TrimSpace(*svc.ID) == "" {
+			return missing(path + ".id")
+		}
+		id := strings.TrimSpace(*svc.ID)
+		norm := strings.ToLower(id)
+		if _, dup := seen[norm]; dup {
+			return fmt.Errorf("policy: 接入单元 id 重复：%q（%s.id）", id, path)
+		}
+		seen[norm] = struct{}{}
+
+		if svc.Hosts == nil || len(*svc.Hosts) == 0 {
+			return missing(path + ".hosts")
+		}
+		for j, raw := range *svc.Hosts {
+			host := strings.ToLower(strings.TrimSpace(raw))
+			if host == "" {
+				return fmt.Errorf("policy: %s.hosts[%d] 为空（空 Host 会让归属不可判定）", path, j)
+			}
+			if strings.Contains(host, "*") && !strings.HasPrefix(host, "*.") {
+				return fmt.Errorf("policy: %s.hosts[%d]=%q 只支持最左标签通配（`*.x`）", path, j, raw)
+			}
+		}
+		if svc.MirageBackend != nil && strings.TrimSpace(*svc.MirageBackend) == "" {
+			return fmt.Errorf("policy: %s.mirage_backend 为空串（要么不写，要么写后端名）", path)
+		}
+	}
+	return nil
 }
 
 func missing(path string) error {

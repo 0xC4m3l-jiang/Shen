@@ -53,6 +53,9 @@ type edgeDoc struct {
 	// （撤销因此天然生效，不需要额外的回执语义）。
 	// 排序（按 path）是为了让「同内容必得同一校验和」继续成立（`AR-30` 精神）。
 	Decoys []edgeDecoy `json:"decoys,omitempty"`
+	// Services 是**接入单元表**（`SHEN-M4-03`）：Host 归属 + 该服务的幻境池。
+	// 未配置时不出现（旧载荷形态），适配器行为不变。
+	Services []edgeService `json:"services,omitempty"`
 }
 
 // edgeDecoy 是诱饵路由表的一行：归一化路径 → 幻境后端逻辑名。
@@ -83,6 +86,14 @@ func edgeBackendURL(addr string) string {
 }
 
 // edgeContentManifest 是下发给适配器的内容清单（字段与生成侧清单对齐，见 docs/spec/ai-contract.md §3）。
+// edgeService 是接入单元表的一行（与适配器侧 `deception.proxy.policyService` 手工对齐）。
+type edgeService struct {
+	ID    string   `json:"id"`
+	Hosts []string `json:"hosts,omitempty"`
+	// MirageBackend 是服务维度选池的依据（`SHEN-M4-02`）；空 = 用核心判定给的默认池。
+	MirageBackend string `json:"mirage_backend,omitempty"`
+}
+
 type edgeContentManifest struct {
 	Version  uint64             `json:"version"`
 	Selector string             `json:"selector"`
@@ -258,6 +269,11 @@ func (s *Server) edgePayload(ctx context.Context, l *Loader, snap contract.Polic
 		return nil, err
 	}
 
+	services, err := l.Services(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	doc := edgeDoc{
 		SchemaVersion: EdgePayloadSchemaVersion,
 		PolicyID:      snap.PolicyID,
@@ -265,6 +281,7 @@ func (s *Server) edgePayload(ctx context.Context, l *Loader, snap contract.Polic
 		Backends:      make([]edgeBackend, 0, len(backends)),
 		Whitelist:     edgeWhitelist{SourceCIDRs: make([]string, 0, len(wl.SourceCIDRs))},
 		Decoys:        make([]edgeDecoy, 0, len(assets)),
+		Services:      make([]edgeService, 0, len(services)),
 	}
 	// 只投影**启用中**的资产（未启用 = 边缘不该有这条路由）；路径归一化后再排序，
 	// 让「同内容必得同一校验和」继续成立（`AR-30` 精神：下发的字节要可复现）。
@@ -277,6 +294,14 @@ func (s *Server) edgePayload(ctx context.Context, l *Loader, snap contract.Polic
 		sort.Strings(hosts) // 排序：让「同内容必得同一校验和」继续成立（AR-30 精神）
 		doc.Decoys = append(doc.Decoys, edgeDecoy{
 			ID: a.ID, Path: contract.NormalizePath(a.Path), Hosts: hosts, Backend: a.Backend,
+		})
+	}
+	// 接入单元表：Host 排序后下发，让「同内容必得同一校验和」继续成立（AR-30 精神）。
+	for _, svc := range services {
+		hosts := append([]string(nil), svc.Hosts...)
+		sort.Strings(hosts)
+		doc.Services = append(doc.Services, edgeService{
+			ID: svc.ID, Hosts: hosts, MirageBackend: svc.MirageBackend,
 		})
 	}
 	sort.Slice(doc.Decoys, func(i, j int) bool {

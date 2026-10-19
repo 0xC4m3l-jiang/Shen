@@ -46,6 +46,16 @@ type ContentBody struct {
 	Marker    string `json:"marker,omitempty"`
 }
 
+// ServiceConfig 是一个**接入单元**（`SHEN-M4-03`）：服务名 + Host 声明 + 幻境后端。
+//
+// 它是「服务」这条线的唯一来源：内容按它分组、改道按它选池、审计按它归属。
+// 服务是**接入单元**，画像是**生成单元** —— 两者不得混用（一个服务可以换画像）。
+type ServiceConfig struct {
+	ID            string   // 服务标识（唯一）
+	Hosts         []string // Host 声明（可含最左标签通配 `*.x`）
+	MirageBackend string   // 该服务改道优先使用的幻境后端逻辑名；空 = 用默认池
+}
+
 // ContentEntry 是「一个资源 × 它的各变体」。
 type ContentEntry struct {
 	Resource string `json:"resource"`
