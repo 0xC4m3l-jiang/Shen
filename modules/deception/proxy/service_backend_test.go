@@ -15,8 +15,8 @@ import (
 func TestBuildServiceTables(t *testing.T) {
 	hosts, backends := buildServiceTables([]policyService{
 		{ID: "site-a", Hosts: []string{"A.Example.COM:8443", "a.example.com."}, MirageBackend: "hp-a"},
-		{ID: "site-b", Hosts: []string{"*.b.example.com"}}, // 不声明后端 ⇒ 用核心给的默认池
-		{ID: "  ", Hosts: []string{"ignored.example.com"}},  // 空 id 丢弃：归属不可判定
+		{ID: "site-b", Hosts: []string{"*.b.example.com"}},   // 不声明后端 ⇒ 用核心给的默认池
+		{ID: "  ", Hosts: []string{"ignored.example.com"}},   // 空 id 丢弃：归属不可判定
 		{ID: "bad", Hosts: []string{"*", "a*b.example.com"}}, // 非法通配丢弃（只支持最左标签）
 	})
 
