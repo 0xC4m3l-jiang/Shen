@@ -77,3 +77,6 @@ dist/
 /AGENTS.md
 /.pi/
 /licensecheck
+
+# make tools 生成的检查工具二进制
+/scripts/bin/

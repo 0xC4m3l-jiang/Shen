@@ -8,8 +8,8 @@
 | --- | --- | --- | --- |
 | ① **欺骗层** —— 反向代理转发与 TLS · 响应改写注入 · 假路径 / 蜜饵 · 旁路镜像 · DNS 引流 · 网络欺骗声明式产物 | [`deception/`](deception/README.md) | [`adapter-proxy.md`](../docs/modules/adapter-proxy.md) · [`edge-injection.md`](../docs/modules/edge-injection.md) · [`adapter-mirror.md`](../docs/modules/adapter-mirror.md) · [`adapter-dns.md`](../docs/modules/adapter-dns.md) · [`netpolicy.md`](../docs/modules/netpolicy.md) | `go test ./modules/deception/...` |
 | ② **AI 蜜罐层** —— 蜜罐协议仿真入口 · 假 shell（未建） · 后端池对接 | [`honeypot/`](honeypot/README.md) | [`honeypot-protocol.md`](../docs/modules/honeypot-protocol.md) · [`honeypot-shell.md`](../docs/modules/honeypot-shell.md) | `go test ./modules/honeypot/...` |
-| ③ **管控平台** —— 只读观测台 · 页面与 HTTP 接口 · 流量日志视图 | [`console/`](console/README.md) | [`console.md`](../docs/modules/console.md) · [`console-api.md`](../docs/spec/console-api.md) | `go test ./modules/console/...` |
-| ④ **连接器** —— 反向隧道网关（连接器接入 · 会话池 · 字节桥）· 业务侧 SDK 与独立二进制 | [`connector/`](connector/README.md) | [`connector.md`](../docs/modules/connector.md)（发布树）· [`connector/README.md`](connector/README.md) | `go test ./modules/connector/...` |
+| ③ **管控平台** —— 观测台 + 管理面：反向链接器登记 · 欺骗管控数据集与版本回滚 · 账号权限与审计 · 大模型接入 · 连接器凭证 · 页面与 `/api/v1` 接口 | [`console/`](console/README.md) | [`console.md`](../docs/modules/console.md) · [`console-api.md`](../docs/spec/console-api.md) | `go test ./modules/console/...` |
+| ④ **连接器** —— 反向隧道网关（连接器接入 · 会话池 · 字节桥）· 业务侧 SDK 与独立二进制 | [`connector/`](connector/README.md) | [`connector/README.md`](connector/README.md)（模块文档 `docs/modules/connector.md` 在发布树，本仓库未纳入） | `go test ./modules/connector/...` |
 
 ## 这里**不**放什么（去隔壁）
 

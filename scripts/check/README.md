@@ -15,7 +15,7 @@
 | [`leakcheck/`](leakcheck/) | `leakcheck` | `go run ./scripts/check/leakcheck` | 字符串字面量不出现对外禁用词、响应头不回传决策与分数（豁免在 `allow.txt`） | `OH-1…OH-5` |
 | [`licensecheck/`](licensecheck/) | `licensecheck` | `go run ./scripts/check/licensecheck` | Go / Python 依赖许可，拦 AGPL / SSPL / BUSL 等 | `TB-16` |
 | `verify/` | `verify-evidence` | `go run ./scripts/check/verify -no-run` | 每个模块的证据链齐备（文档 · 规则依据 · 测试目标 · 功能场景） | `MD-17/22` |
-| `bin/` | `tools` | `make tools` | 固定版本的 `staticcheck` / `errcheck`（本地缓存，不入库） | `TB-14/15` |
+| `scripts/check/bin/` | `tools` | `make tools` | 固定版本的 `staticcheck` / `errcheck`（本地缓存，不入库） | `TB-14/15` |
 
 `internal/` 是 `archcheck` / `verify` / `tracecheck` / `leakcheck` 共用的解析包（模块清单、设计文档位置），不单独运行。
 设计文档不在本仓库时，依赖它的检查会打印「跳过：设计文档不在本仓库」—— 这是**明示的跳过**，不是通过。

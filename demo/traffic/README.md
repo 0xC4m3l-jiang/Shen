@@ -1,16 +1,16 @@
-# 伪造流量与判定核对（`scripts/traffic/`）
+# 伪造流量与判定核对（`demo/traffic/`）
 
 给欺骗引擎发**伪造流量**，然后从**观测面**核对判定结果 —— 用于人工测试与回归验证。
 
 ```sh
-scripts/traffic/send.py                    # 全部场景（36 条，按分组打印）
-scripts/traffic/send.py --group 扫描器指纹   # 只跑一组
-scripts/traffic/send.py --only probe-git-headless --repeat 3
-scripts/traffic/send.py --check-l4         # 顺带核对 L4 结论与证据引用（AR-12）
-scripts/traffic/send.py --check-graph      # 顺带核对 DAG：落点取值合法 + 每步三段齐全（请求/响应/为什么）
-scripts/traffic/send.py --json             # 机器可读（自动化）
-scripts/traffic/send.py --explain          # 失败/缺口场景额外打印判定原文与追查线索
-scripts/traffic/send.py --report /tmp/r.json   # 把完整报告写到文件（留档/自动化）
+demo/traffic/send.py                    # 全部场景（36 条，按分组打印）
+demo/traffic/send.py --group 扫描器指纹   # 只跑一组
+demo/traffic/send.py --only probe-git-headless --repeat 3
+demo/traffic/send.py --check-l4         # 顺带核对 L4 结论与证据引用（AR-12）
+demo/traffic/send.py --check-graph      # 顺带核对 DAG：落点取值合法 + 每步三段齐全（请求/响应/为什么）
+demo/traffic/send.py --json             # 机器可读（自动化）
+demo/traffic/send.py --explain          # 失败/缺口场景额外打印判定原文与追查线索
+demo/traffic/send.py --report /tmp/r.json   # 把完整报告写到文件（留档/自动化）
 scripts/shen.sh verify                     # 一键：状态 + 全量流量 + L4 核对 + 报告 + 线索
 ```
 
@@ -33,7 +33,7 @@ scripts/shen.sh verify                     # 一键：状态 + 全量流量 + L4
 ```text
 请求 ──► 引擎 ──► 响应（只有业务内容，没有判定细节）
                      │
-                     └─► 异步遥测 ──► 控制台 /api/flow（分值 / 命中信号 / 决策）
+                     └─► 异步遥测 ──► 控制台 /api/v1/deception/flow（分值 / 命中信号 / 决策）
 ```
 
 脚本正是按这条规矩写的：**发请求看响应状态**，**看判定问控制台**。
@@ -88,8 +88,8 @@ scripts/shen.sh verify                     # 一键：状态 + 全量流量 + L4
    （`--wait`），等不到会在结果里报出来，而不是假装通过。
 3. **第一条请求要热身**：冷连接 + 适配器还没 Pull 到策略的窗口里会 failopen（`K-24`），
    只跑单条场景时第一条几乎必然假红。脚本现在自动热身（失败时会打一行提示）。
-4. **`executed` / `inject` 要去逐请求链路里取**（`/api/graphs`，按 `decision_id`）——
-   判定记录（`/api/flow`）里**没有**这两个字段；断言它们时脚本会自动去链路里取并等。
+4. **`executed` / `inject` 要去逐请求链路里取**（`/api/v1/deception/graphs`，按 `decision_id`）——
+   判定记录（`/api/v1/deception/flow`）里**没有**这两个字段；断言它们时脚本会自动去链路里取并等。
    **形态不匹配记「观察」不记失败**：影子栈里跑 `stack: takeover` 的场景、
    或 AI 关闭时跑 `stack: takeover-ai` 的场景，会打印一行原因（例：`AI 层未打开（核心快照 ai.enabled=false）`）。
 

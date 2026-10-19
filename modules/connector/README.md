@@ -7,7 +7,7 @@ TLS 长连接，网关校验控制台签发的 auth key，代理经隧道把请�
 | 项 | 值 |
 | --- | --- |
 | 所属层 | L0 之外（接入通道，不在判定路径上） |
-| 语言 | Go（[ADR-0008](../../../docs/background/decisions/0008-edge-language-go.md)） |
+| 语言 | Go（[ADR-0008](../../docs/background/decisions/0008-edge-language-go.md)） |
 | 数据面 | **yamux over TLS 1.3**（`hashicorp/yamux`，MPL-2.0） |
 | 控制面 | yamux 流 0 上的长度前缀 protobuf（[`common/api/connector/v1`](../../common/api/connector/v1/connector.proto)） |
 | 模块清单 | 第 27 行（`modules.md` §1.1） |

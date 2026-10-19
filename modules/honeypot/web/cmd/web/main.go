@@ -10,6 +10,7 @@
 //	SHEN_WEB_SCENARIO     场景包标识（默认 atlas；未知 id 回落默认场景，不报错）
 //	SHEN_WEB_MAX_BODY     请求体上限（字节，默认 65536；超限 413）
 //	SHEN_WEB_SESSION_TTL  合成会话存活期（默认 30m）
+//	SHEN_WEB_TRUSTED_PROXIES 可信前跳网段（逗号分隔 CIDR，默认空 = 只信直接对端）
 //
 // 三条纪律（与模块设计一致）：
 //
@@ -30,8 +31,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"sort"
@@ -74,21 +77,30 @@ func main() {
 		log.Fatalf("web: %v", err)
 	}
 
+	// 可信前跳（`R13`）：只有来自这些网段的请求，我们才采信它带来的 `X-Forwarded-For`。
+	// 空 = 只信直接对端（最保守）。**部署在引擎后面时必预显式声明** —— 否则所有请求会把代理 IP 当来源，
+	// 登录配额退化成全局一个桶（`W6` / `K-30`）。写错即启动失败，不悄悄回落。
+	trustedProxies, err := envPrefixes("SHEN_WEB_TRUSTED_PROXIES")
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
+
 	// 场景包（可选）：`SHEN_WEB_SCENARIOS` 指向 JSON 文件（格式见 docs/spec/decoy-scenario.md）。
 	// 文件存在即**必须**合法：坏素材宁可启动失败，也不带出去（见 pack.go 的三条设计要点）。
 	packs := loadScenarioPacks(env("SHEN_WEB_SCENARIOS", ""), scenarioID)
 
 	h := web.New(web.Options{
-		ScenarioID:   scenarioID,
-		Packs:        packs,
-		MaxBodyBytes: maxBody,
-		SessionTTL:   ttl,
-		CookieSecure: envBool("SHEN_WEB_COOKIE_SECURE", false),
-		LoginBurst:   loginBurst,
-		LoginWindow:  loginWindow,
-		EventQueue:   eventQueue,
-		RequestLog:   envBool("SHEN_WEB_REQUEST_LOG", false),
-		Events:       eventLogger{},
+		ScenarioID:     scenarioID,
+		Packs:          packs,
+		MaxBodyBytes:   maxBody,
+		SessionTTL:     ttl,
+		CookieSecure:   envBool("SHEN_WEB_COOKIE_SECURE", false),
+		LoginBurst:     loginBurst,
+		LoginWindow:    loginWindow,
+		EventQueue:     eventQueue,
+		RequestLog:     envBool("SHEN_WEB_REQUEST_LOG", false),
+		TrustedProxies: trustedProxies,
+		Events:         eventLogger{},
 	})
 	defer h.Close()
 	sc := h.Scenario()
@@ -246,4 +258,28 @@ func envDuration(key string, fallback time.Duration) (time.Duration, error) {
 		return 0, errors.New(key + " 必须是正的时长（如 30m）")
 	}
 	return d, nil
+}
+
+// envPrefixes 解析逗号分隔的 CIDR 网段（`SHEN_WEB_TRUSTED_PROXIES`）。
+//
+// 空串 = 空列表（只信直接对端）。任一段写错就**启动失败**：可信前跳写错 = 要么限流被伪造的
+// `X-Forwarded-For` 绕过，要么把所有来源并成一个配额桶（两种都是静默的错）。
+func envPrefixes(key string) ([]netip.Prefix, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("%s 里的 %q 不是 CIDR（形如 127.0.0.1/32）：%w", key, part, err)
+		}
+		out = append(out, p.Masked())
+	}
+	return out, nil
 }

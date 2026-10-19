@@ -67,7 +67,7 @@ go run ./scripts/check/archcheck -dump   # 只打印解析出的清单，不做�
 它回答一个具体问题：**有没有一条不过护栏的生成路径**。
 
 `ai-capability` 把四关（结构 / 黑名单 / 长度 / 风格）做在唯一出口 `service.generate()` 里面；
-如果别处直接 import 模型客户端（`analysis/llm/client`）自己生成内容，四关就被绕过了。
+如果别处直接 import 模型客户端（`analysis/llm/client.py`）自己生成内容，四关就被绕过了。
 因此本检查扫描 `analysis/**/*.py` 的 import 语句，只允许这四个前缀：
 
 | 允许 | 为什么 |

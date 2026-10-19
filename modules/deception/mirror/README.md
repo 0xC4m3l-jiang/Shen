@@ -34,8 +34,10 @@
 
 | 环境变量 | 默认 | 含义 |
 | --- | --- | --- |
-| `SHEN_MIRROR_LISTEN` | `127.0.0.1:8082` | 接收端监听地址：镜像流量的出口 |
+| `SHEN_MIRROR_LISTEN` | `127.0.0.1:8080` | 接收端监听地址：镜像流量的出口（镜像源应在同机 / 同 Pod 网络内） |
 | `SHEN_CORE_ADDR` | `127.0.0.1:9443` | 核心判定/遥测面的 gRPC 地址 |
+| `SHEN_CORE_GRPC_TOKEN` | 空 | 调核心时携带的 gRPC 共享令牌（与核心同值）；空 = 不携带 |
+| `SHEN_MIRROR_SESSION_COOKIE` | `sid` | 观测只带**最小身份值**的 cookie 名（`FIX-5`）；**必须与核心 `session.cookie_name` 一致** |
 
 > 接收端**恒回 202**：它在请求路径之外，不对客户端表达任何意见（`INT-6` / `AR-7`）。
 > 它的 HTTP 形态适用于 **LB 请求镜像**；若改用 `iptables TEE` / eBPF，副本是原始 TCP 流，

@@ -31,7 +31,6 @@ make leakcheck          # 或：go run ./scripts/check/leakcheck
 | 入选 | 理由（为什么它的文本可能上攻击者的屏幕） |
 | --- | --- |
 | `modules/deception/proxy` · `modules/deception/mirror` · `modules/deception/injection` | 响应头、错误页、403、注入后的蜜罐侧响应体 |
-| `common/core/internal/responder` | 伪造响应内容 |
 | `common/core/internal/decoy` | 诱饵内容与**投放片段**（会被投放进客户环境） |
 | `common/core/internal/judge` · `director` · `control` · `isolation` · `honeypot` | 判定与决策的取值、后端名、对外行为描述 |
 
