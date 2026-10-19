@@ -212,6 +212,11 @@ pylint: ## Python 静态检查（ruff check）：L4 + scripts/（含 TB-14 的�
 	@cd $(ANALYSIS) && .venv/bin/ruff check . ../scripts
 	@echo "✓ Python 静态检查（ruff）"
 
+diffcheck: ## 差异化门禁（SHEN-M5-03）：内容必须贴合画像、服务之间不串号
+	$(require_pyenv)
+	@cd $(ANALYSIS) && .venv/bin/python -m analysis.aicap.diffcheck
+	@echo "✓ 差异化门禁（SHEN-M5-03）"
+
 pytest: ## L4 单测（pytest）
 	$(require_pyenv)
 	@cd $(ANALYSIS) && .venv/bin/pytest
@@ -283,11 +288,11 @@ coverage: ## 单测覆盖率
 	$(GO) test -cover ./...
 
 # ── 门禁 ─────────────────────────────────────────────────────────────────────
-gate: lint test ## CI 门禁：格式化 + 静态检查 + 架构检查 + 追溯检查 + 泄漏检查 + 许可审计 + 单测（含 -race）
+gate: lint test diffcheck ## CI 门禁：格式化 + 静态检查 + 架构检查 + 追溯检查 + 泄漏检查 + 许可审计 + 单测（含 -race）+ 差异化
 	@echo
 	@echo "门禁通过。"
 
-check: build fmt-check vet archcheck trace leakcheck ## 快速内循环检查（不需要下载任何工具）
+check: build fmt-check vet archcheck trace leakcheck diffcheck ## 快速内循环检查（不需要下载任何工具）
 	@echo
 	@echo "快速检查通过。"
 

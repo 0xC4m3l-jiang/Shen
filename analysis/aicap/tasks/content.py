@@ -27,6 +27,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import zlib
 from collections.abc import Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
@@ -109,9 +111,15 @@ CONTENT_PROFILE = _guardrail_for("")
 CONTENT_LIMITS = TaskLimits(purpose="deception_content", max_output=65536)
 
 
-def _record_id(*, variant: int, version: int) -> str:
-    """确定性的假记录号（**不是**随机数 —— `AR-30` 禁止响应路径上的非确定性）。"""
-    return f"{4_100_000 + version * 100_003 + variant * 977}"
+def _record_id(*, profile_id: str, variant: int, version: int) -> str:
+    """确定性的假记录号（**不是**随机数 —— `AR-30` 禁止响应路径上的非确定性）。
+
+    为什么把画像算进去：只按 `(variant, version)` 算的话，**不同服务会产出同一个记录号** ——
+    把两边的页面并排一看就能关联起来（跨服务指纹）。加一个画像派生偏移，既保持确定性，
+    又让每个服务的号段互不重叠。
+    """
+    offset = zlib.crc32(profile_id.encode("utf-8")) % 9_000_000
+    return f"{offset + version * 100_003 + variant * 977 + 1_000_000}"
 
 
 def _render_body(*, resource: str, profile_id: str, variant: int, version: int) -> str:
@@ -135,25 +143,29 @@ def _render_body(*, resource: str, profile_id: str, variant: int, version: int) 
     rotate = variant % len(fields)
     ordered = fields[rotate:] + fields[:rotate]
 
-    record = _record_id(variant=variant, version=version)
+    # 结构类名由画像派生：`class="service-detail"` 这种固定名本身就是**跨部署指纹** ——
+    # 两个不同服务产出同一串 class，等于告诉对手「这两处是同一套系统」。
+    css_prefix = re.sub(r"[^a-z0-9-]+", "-", profile.profile_id.lower()).strip("-") or "svc"
+    record = _record_id(profile_id=profile.profile_id, variant=variant, version=version)
     rows = "\n".join(
         f"    <li>{name}: {record if idx == 0 else f'value-{idx}-{variant}'}</li>"
         for idx, name in enumerate(ordered)
     )
-    status = (
-        f'<p class="state">{profile.status_values[variant % len(profile.status_values)]}</p>\n'
-        if profile.status_values
-        else ""
+    state = (
+        profile.status_values[variant % len(profile.status_values)] if profile.status_values else ""
     )
+    status = f'<p class="{css_prefix}-state">{state}</p>\n' if state else ""
     return (
-        '<section class="service-detail">\n'
+        f'<section class="{css_prefix}-detail">\n'
         f"  <h2>{headline}</h2>\n"
-        f'  <p class="source">{profile.profile_id} API response for <code>{resource}</code>.</p>\n'
+        f'  <p class="{css_prefix}-source">{profile.profile_id} API response '
+        f"for <code>{resource}</code>.</p>\n"
         f"{status}"
-        '  <ul class="records">\n'
+        f'  <ul class="{css_prefix}-records">\n'
         f"{rows}\n"
         "  </ul>\n"
-        f'  <p class="revision">revision {version} · variant {variant} · record {record}</p>\n'
+        f'  <p class="{css_prefix}-revision">'
+        f"revision {version} · variant {variant} · record {record}</p>\n"
         "</section>\n"
     )
 
