@@ -72,7 +72,7 @@ async function remove() {
 <template>
   <div class="flex flex-col gap-6">
     <RouterLink :to="{ name: 'services' }" class="flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-primary">
-      <ArrowLeft class="h-4 w-4" /> 返回反向链接器
+      <ArrowLeft class="h-4 w-4" /> 返回服务登记
     </RouterLink>
     <PageHeader :title="svc?.name ?? '服务详情'" :subtitle="svc?.description || '该服务的流量是否流入蜃楼（幻境 / 诱饵），以及来源与归属地。'">
       <template v-if="auth.can('registry:write') && svc" #actions>

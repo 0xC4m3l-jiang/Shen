@@ -131,7 +131,7 @@ function addBlank(): void {
         <h3 class="flex items-center gap-2 text-sm font-medium"><BrainCircuit class="h-4 w-4 text-primary" />AI 动态内容（只读）</h3>
         <p class="text-xs leading-relaxed text-muted-foreground">
           LLM 生成的欺骗内容走「生成 → 审核 → 发布」的独立链路（M4，尚未接入本数据集），当前仍由部署配置 <code class="font-mono">ai:</code> 段与离线清单驱动 ——
-          为避免「看起来生效、其实没生效」，这里不提供编辑。当前状态见「欺骗层 → 策略快照」，模型提供方在「系统 → 大模型接入」。
+          为避免「看起来生效、其实没生效」，这里不提供编辑。当前状态见「判定与流量 → 策略快照」，模型提供方在「系统 → 大模型接入」。
         </p>
       </SpotlightCard>
     </div>

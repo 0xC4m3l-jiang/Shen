@@ -45,7 +45,7 @@ const slices = computed(() => {
 
 <template>
   <div class="flex flex-col gap-6">
-    <PageHeader title="蜜罐层" subtitle="投递结果、后端与失败原因；专属诱饵故障固定 502，绝不回源生产。" />
+    <PageHeader title="蜜罐与诱饵" subtitle="投递结果、后端与失败原因；专属诱饵故障固定 502，绝不回源生产。" />
     <StatePanel :error="deliveries.error.value" :window="d?.window" :loading="deliveries.loading.value" @retry="deliveries.refresh" />
 
     <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

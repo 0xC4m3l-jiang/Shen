@@ -53,7 +53,7 @@ onBeforeUnmount(() => clearInterval(timer))
 
 <template>
   <div class="flex flex-col gap-6">
-    <PageHeader title="欺骗管控" subtitle="蜜罐池 · 诱饵资产 · 黑白名单 · 注入规则 · 版本 —— 保存后由核心终检并热替换，判定策略不在此处" />
+    <PageHeader title="策略与数据集" subtitle="蜜罐池 · 诱饵资产 · 黑白名单 · 注入规则 · 版本 —— 保存后由核心终检并热替换，判定策略不在此处" />
     <StatePanel v-if="!store.view" :error="store.error" :loading="store.loading" @retry="store.load" />
     <template v-if="store.view">
       <SyncBar :sync="store.sync" :dataset-version="store.view.dataset.version" :initialized="store.view.dataset.initialized" :seed="store.view.seed" />

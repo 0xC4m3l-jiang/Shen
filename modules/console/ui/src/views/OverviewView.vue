@@ -66,7 +66,7 @@ const freshness = computed(() => fmtAgo(live.lastEventAt || data.value?.window.f
 
 <template>
   <div class="flex flex-col gap-6">
-    <PageHeader title="流量总览" subtitle="新流量、来源与归属地，以及流入蜃楼的比例（幻境 / 诱饵）。" />
+    <PageHeader title="总览" subtitle="新流量、来源与归属地，以及流入蜃楼的比例（幻境 / 诱饵）。" />
     <StatePanel :error="error" :window="data?.window" :loading="loading" @retry="refresh" />
 
     <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">

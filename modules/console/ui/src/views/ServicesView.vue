@@ -56,7 +56,7 @@ function onSaved() {
 <template>
   <div class="flex flex-col gap-6">
     <PageHeader
-      title="反向链接器"
+      title="服务登记"
       subtitle="每个被保护的 Web 服务是一项独立登记。生效路由由核心策略面下发。"
     >
       <template #actions>

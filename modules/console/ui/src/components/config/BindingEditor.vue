@@ -48,7 +48,7 @@ function toggle(i: number, id: string): void {
       </div>
     </div>
     <p v-if="!services.length" class="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
-      还没有登记服务 —— 先在「反向链接器」登记被保护的站点，再为它绑定专属诱饵集。
+      还没有登记服务 —— 先在「服务登记」登记被保护的站点，再为它绑定专属诱饵集。
     </p>
     <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
       <div

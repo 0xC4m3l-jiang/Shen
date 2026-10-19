@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
-import { navItems } from '@/lib/nav'
+import { navItems, titleOf } from '@/lib/nav'
 import type { Permission } from '@/lib/types'
 import { useAuthStore } from '@/stores/auth'
 
@@ -19,21 +19,21 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', redirect: { name: 'overview' } },
       { path: 'password', name: 'password', component: () => import('@/views/PasswordView.vue'), meta: { title: '修改口令' } },
-      { path: 'overview', name: 'overview', component: () => import('@/views/OverviewView.vue'), meta: { perm: 'overview:read', title: '总览' } },
-      { path: 'services', name: 'services', component: () => import('@/views/ServicesView.vue'), meta: { perm: 'registry:read', title: '反向链接器' } },
-      { path: 'connectors', name: 'connectors', component: () => import('@/views/ConnectorsView.vue'), meta: { perm: 'registry:read', title: '接入管理' } },
+      { path: 'overview', name: 'overview', component: () => import('@/views/OverviewView.vue'), meta: { perm: 'overview:read', title: titleOf('overview') } },
+      { path: 'services', name: 'services', component: () => import('@/views/ServicesView.vue'), meta: { perm: 'registry:read', title: titleOf('services') } },
+      { path: 'connectors', name: 'connectors', component: () => import('@/views/ConnectorsView.vue'), meta: { perm: 'registry:read', title: titleOf('connectors') } },
       {
         path: 'services/:id',
         name: 'service-detail',
         component: () => import('@/views/ServiceDetailView.vue'),
         meta: { perm: 'registry:read', title: '服务详情' },
       },
-      { path: 'deception', name: 'deception', component: () => import('@/views/DeceptionView.vue'), meta: { perm: 'deception:read', title: '欺骗层' } },
-      { path: 'honeypot', name: 'honeypot', component: () => import('@/views/HoneypotView.vue'), meta: { perm: 'honeypot:read', title: '蜜罐层' } },
-      { path: 'config', name: 'config', component: () => import('@/views/ConfigView.vue'), meta: { perm: 'config:read', title: '欺骗管控' } },
-      { path: 'alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue'), meta: { perm: 'alerts:read', title: '告警' } },
-      { path: 'analysis', name: 'analysis', component: () => import('@/views/AnalysisView.vue'), meta: { perm: 'analysis:read', title: '分析' } },
-      { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue'), meta: { perm: 'self:manage', title: '系统' } },
+      { path: 'deception', name: 'deception', component: () => import('@/views/DeceptionView.vue'), meta: { perm: 'deception:read', title: titleOf('deception') } },
+      { path: 'honeypot', name: 'honeypot', component: () => import('@/views/HoneypotView.vue'), meta: { perm: 'honeypot:read', title: titleOf('honeypot') } },
+      { path: 'config', name: 'config', component: () => import('@/views/ConfigView.vue'), meta: { perm: 'config:read', title: titleOf('config') } },
+      { path: 'alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue'), meta: { perm: 'alerts:read', title: titleOf('alerts') } },
+      { path: 'analysis', name: 'analysis', component: () => import('@/views/AnalysisView.vue'), meta: { perm: 'analysis:read', title: titleOf('analysis') } },
+      { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue'), meta: { perm: 'self:manage', title: titleOf('system') } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },

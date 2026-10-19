@@ -55,7 +55,7 @@ const reset = () =>
 <template>
   <div class="flex flex-col gap-4">
     <div class="flex items-center justify-between">
-      <p class="text-sm text-muted-foreground">四种角色：管理员（全部）· 欺骗运维（欺骗层 + 登记）· 蜜罐运维（蜜罐层）· 只读。改角色 / 停用会立即注销该账号的全部会话。</p>
+      <p class="text-sm text-muted-foreground">四种角色：管理员（全部）· 欺骗运维（判定与流量 + 登记）· 蜜罐运维（蜜罐与诱饵）· 只读。改角色 / 停用会立即注销该账号的全部会话。</p>
       <Button @click="creating = true"><UserPlus /> 新建账号</Button>
     </div>
     <p v-if="error && !creating && !resetting" class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{{ error }}</p>

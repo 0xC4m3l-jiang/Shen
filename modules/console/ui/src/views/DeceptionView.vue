@@ -64,7 +64,7 @@ const show = (v: unknown) => (typeof v === 'boolean' ? (v ? '是' : '否') : Arr
 
 <template>
   <div class="flex flex-col gap-6">
-    <PageHeader title="欺骗层" subtitle="核心判定、逐请求链路与生效中的策略快照（只读）。" />
+    <PageHeader title="判定与流量" subtitle="核心判定、逐请求链路与生效中的策略快照（只读）。" />
     <Tabs v-model="tab" :items="tabs">
       <TabsContent value="flow" class="flex flex-col gap-4">
         <StatePanel :error="flow.error.value" :loading="flow.loading.value" @retry="flow.refresh" />
