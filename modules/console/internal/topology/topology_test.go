@@ -259,3 +259,28 @@ func TestInjectionHopAppearsOnlyWhenApplied(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildRefusedWriteDoesNotPointToOrigin 断言 `SHEN-M3-02` 的落点在调度图上**不指向业务源站**。
+//
+// 为什么单独成例：`refused` 与 `origin_fallback` 在指标上必须分开 ——
+// 前者是「写请求被拒、业务零写入」，后者是「真的回落访问了源站」。
+// 混在一起时，蜜罐挂掉那天运维会以为业务被访问了，从而错过「写请求正在被拒」这个信号。
+func TestBuildRefusedWriteDoesNotPointToOrigin(t *testing.T) {
+	at := time.Unix(1700000000, 0).UTC()
+	events := []JudgedEvent{
+		{DecisionID: "d-r1", At: at, Method: "POST", Path: "/api/orders", Action: ActionMirage, Executed: "refused", Backend: "hp"},
+	}
+	g := Build(Input{Judged: events}, 60)
+
+	for _, n := range g.Nodes {
+		if n.ID == NodeOrigin {
+			t.Fatalf("refused 不应在图上出现业务源站节点：%+v", n)
+		}
+	}
+	if g.Totals.Refused != 1 {
+		t.Fatalf("refused 计数应为 1，实际 %d", g.Totals.Refused)
+	}
+	if g.Totals.ToOrigin != 0 || g.Totals.Fallback != 0 {
+		t.Fatalf("refused 不得计入 to_origin / fallback：%+v", g.Totals)
+	}
+}

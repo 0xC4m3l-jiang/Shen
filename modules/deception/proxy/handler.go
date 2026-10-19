@@ -615,12 +615,11 @@ func (h *Handler) dispatch(st *remoteState, w http.ResponseWriter, r *http.Reque
 		if _, ok := h.mirageHandler(st, backend); !ok {
 			if fallbackOnMirageFailure(r.Method) == fallbackRefuse {
 				h.refuseReroutedWrite(w, r, backend, "backend_missing")
-				return executedFor(false, act, false, true), nil
+				return executedRefused, nil
 			}
-			return executedFor(false, act, false, false), h.forward(st, w, r, next, targetOrigin)
+			return executedFallback, h.forward(st, w, r, next, targetOrigin)
 		}
-		fellBack, err := h.forwardMirage(st, w, r, next, backend)
-		return executedFor(false, act, true, fellBack), err
+		return h.forwardMirage(st, w, r, next, backend)
 	case judgev1.Action_ACTION_BLOCK:
 		// 403 是对手可见的处置 —— 这是**已承认的设计**（ADR-0002：引擎是欺骗调度器，
 		// 不是 WAF，可见拦截交接入层）。block 只用于「明确拒绝已知恶意」，不用于透明误导；
@@ -674,21 +673,21 @@ func (h *Handler) mirageHandler(st *remoteState, name string) (caddyhttp.Middlew
 //
 // 用 trackingWriter 记录「是否已写出字节」：没写过 → 可安全重放到业务；
 // 写过 → 只能把错误如实抛出（由 Caddy 错误路由处理），否则会输出半截响应。
-func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (bool, error) {
+func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.Request, next caddyhttp.Handler, backend string) (string, error) {
 	if reason := h.healthReason(backend); reason != "" {
 		// 评分改道：后端探针判定不可达 ⇒ 安全方法**回落业务**（`NI-1`：引流失败绝不能变成业务失败）；
 		// 写方法不回落（`SHEN-M3-02`）：回流会改到真数据。
 		if fallbackOnMirageFailure(r.Method) == fallbackRefuse {
 			h.refuseReroutedWrite(w, r, backend, "probe_unhealthy")
-			return true, nil
+			return executedRefused, nil
 		}
 		log.Printf("proxy: 幻境后端 %q 探针判定不健康，改道回落业务：%s", backend, reason)
-		return true, h.origin.ServeHTTP(w, r, next)
+		return executedFallback, h.origin.ServeHTTP(w, r, next)
 	}
 	rp, ok := h.mirageHandler(st, backend)
 	if !ok {
 		// 理论上到不了这里（dispatch 已查过表）；真到了就回落业务，不报 500。
-		return true, h.origin.ServeHTTP(w, r, next)
+		return executedFallback, h.origin.ServeHTTP(w, r, next)
 	}
 	tw := &trackingWriter{ResponseWriter: w}
 	// **凭证边界必须覆盖每一条送达幻境的路径**（`R04`，严重）：
@@ -706,15 +705,15 @@ func (h *Handler) forwardMirage(st *remoteState, w http.ResponseWriter, r *http.
 			// 还没写出任何字节 ⇒ 理论上可安全重放；但**写方法不重放到业务**（SHEN-M3-02）。
 			if fallbackOnMirageFailure(r.Method) == fallbackRefuse {
 				h.refuseReroutedWrite(w, r, backend, "backend_unreachable")
-				return true, nil
+				return executedRefused, nil
 			}
 			log.Printf("proxy: 引流后端不可达，回落业务：%v", err)
-			return true, h.origin.ServeHTTP(w, r, next)
+			return executedFallback, h.origin.ServeHTTP(w, r, next)
 		}
 		log.Printf("proxy: 引流后端中途失败：%v", err)
-		return false, err
+		return executedMirage, err
 	}
-	return false, nil
+	return executedMirage, nil
 }
 
 // ── 与核心交互 ───────────────────────────────────────────────────────────────
@@ -776,7 +775,11 @@ const (
 	executedFallback  = "origin_fallback" // route_mirage 但后端不可用 ⇒ 回落源站（NI-5）
 	executedMirage    = "mirage"          // route_mirage 且成功转发到幻境后端
 	executedBlock     = "block"           // block，返回 403
-	executedDecoy     = "decoy"           // 专属诱饵路由命中（未调核心；§9.2）
+	// executedRefused 是「已判定改道、但改道不可用」的**写请求**的落点（SHEN-M3-02）。
+	// 它与 origin_fallback 必须分开：refused 表示**没有**回流源站，若混记成 fallback，
+	// 调度图上会把「写请求被拒」画成「业务被访问」—— 恰好在蜜罐挂掉时误导排障。
+	executedRefused = "refused"
+	executedDecoy   = "decoy" // 专属诱饵路由命中（未调核心；§9.2）
 )
 
 // `delivery_result` 的取值：把「匹配到诱饵路由」与「真的投递出去了」分开（W8）。

@@ -128,8 +128,12 @@ type Totals struct {
 	ToOrigin int `json:"to_origin"`
 	ToMirage int `json:"to_mirage"`
 	Fallback int `json:"fallback"`
-	Blocked  int `json:"blocked"`
-	L4Notes  int `json:"l4_conclusions"`
+	// Refused 是「已判定改道、但改道不可用」的**写请求**数量（SHEN-M3-02）：
+	// 它们没有回流业务，只在图上落一个"拒"节点。与 Fallback 分开计数，
+	// 否则蜜罐挂掉时，页面会把"写请求被拒"读成"业务被访问"。
+	Refused int `json:"refused"`
+	Blocked int `json:"blocked"`
+	L4Notes int `json:"l4_conclusions"`
 }
 
 // Graph 是返回给页面的完整模型。
@@ -282,6 +286,11 @@ func Build(in Input, alertScore float64) Graph {
 			node(NodeOrigin, "业务源站", "origin").add(alerts, highRisk)
 			edge("branch:fallback", NodeOrigin, "fallback").add(alerts, highRisk)
 			totals.Fallback++
+		case "refused":
+			// 改道不可用 + 写请求：**没有**回流业务（INT-8 的反面：业务零写入）。
+			node("branch:refused", "改道不可用 → 拒绝写请求（不回流业务）", "branch").add(alerts, highRisk)
+			edge(decisionID, "branch:refused", "refused").add(alerts, highRisk)
+			totals.Refused++
 		case "block":
 			node(NodeBlock, "拦截 (403)", "block").add(alerts, highRisk)
 			edge(decisionID, NodeBlock, "block").add(alerts, highRisk)

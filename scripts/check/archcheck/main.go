@@ -16,6 +16,7 @@
 //	terminology.md §4   MD-12（决策只有三值：route_origin / route_mirage / block，禁止第四值）
 //	architecture.md     AR-30（响应路径不得有非确定性）+ MD-6（不用时钟做判定）
 //	architecture.md     AR-32（L4 不得碰写侧：只上报结论事件，不改策略、不写响应）
+//	integration.md      INT-8（业务侧响应零改写：改写只允许在 transform.go 一处发生）
 //
 // 清单**从文档解析，不硬编码** —— 文档改则检查跟着改，不会两边漂移。
 // 解析结果不达预期时**直接报错退出**，绝不静默放行：静默通过等于假绿。
@@ -144,6 +145,7 @@ func main() {
 	findings = append(findings, checkDecisionClosedSet(root)...)
 	findings = append(findings, checkHotPathPurity(root, pkgs)...)
 	findings = append(findings, checkL4StaysOffTheWritePlane(root)...)
+	findings = append(findings, checkOriginResponseUntouched(root)...)
 
 	report(findings)
 }
@@ -1434,6 +1436,92 @@ func checkL4StaysOffTheWritePlane(root string) []finding {
 	})
 	if err != nil {
 		out = append(out, finding{ID: "AR-32", Human: "遍历 analysis/ 失败，检查不完整", Where: err.Error()})
+	}
+	return out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 检查 13 · INT-8 业务侧响应零改写：改写只允许在 transform.go 一处发生
+// ─────────────────────────────────────────────────────────────────────────────
+
+// proxyRewriteSites 是**允许**做响应改写的两处（都在蜜罐侧）：
+//
+//   - `transform.go`：改写的**时机与边界**（可注入性判定 + 缓冲上限 + 头自洽）；
+//   - `content.go`：改写的**内容来源**（把命中的内容片段交给 injection 引擎）。
+//
+// 除此之外的任何文件出现改写调用都算越界 —— 尤其是 `handler.go` 的路由分支，
+// 那是业务侧响应经过的地方（INT-8）。
+const proxyRewriteSite = "modules/deception/proxy/transform.go"
+
+var proxyRewriteSites = map[string]bool{
+	"modules/deception/proxy/transform.go": true,
+	"modules/deception/proxy/content.go":   true,
+}
+
+// rewriteCallPatterns 是「确实在改写响应体」的调用形态（带点，避开函数/接口**定义**）。
+//
+// 为什么按调用点扫而不是按行为测：`INT-8` 是一条**结构约束**（改写只能出现在蜜罐侧），
+// 行为用例只能证明「这个用例里没改写」，挡不住有人在 origin 分支里加一行改写。
+var rewriteCallPatterns = []string{".injectContent(", ".Inject(", "injectable(resp"}
+
+// rewriteEvidence 是「改写实现确实还在」的证据串：没有它，禁改规则会因为改写被整体删掉而空转。
+var rewriteEvidence = []string{"func injectable(", ".Inject("}
+
+// checkOriginResponseUntouched 断言：`modules/deception/proxy/` 里只有 `transform.go` 能调改写。
+//
+// 依据 `INT-8`（引擎禁止对业务侧响应做任何改写；改写只能作用于蜜罐侧）。
+// 这条门禁的价值在于**挡住增量**：现有代码是对的，但没有任何机制阻止下一个人
+// 在 `handler.go` 的 origin 分支里顺手改一个 header。
+func checkOriginResponseUntouched(root string) []finding {
+	const dir = "modules/deception/proxy"
+	entries, err := os.ReadDir(filepath.Join(root, dir))
+	if err != nil {
+		return []finding{{ID: "INT-8", Human: "读 proxy 目录失败", Where: err.Error()}}
+	}
+
+	var out []finding
+	rewriteSiteFound := false
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		rel := dir + "/" + name
+		raw, rerr := os.ReadFile(filepath.Join(root, rel))
+		if rerr != nil {
+			out = append(out, finding{ID: "INT-8", Human: "读文件失败", Where: rerr.Error()})
+			continue
+		}
+		body := string(raw)
+		if proxyRewriteSites[rel] {
+			if rel == proxyRewriteSite {
+				ok := false
+				for _, ev := range rewriteEvidence {
+					if strings.Contains(body, ev) {
+						ok = true
+						break
+					}
+				}
+				rewriteSiteFound = ok
+			}
+			continue
+		}
+		for _, pat := range rewriteCallPatterns {
+			if strings.Contains(body, pat) {
+				out = append(out, finding{
+					ID:    "INT-8",
+					Human: "业务侧响应零改写：改写只允许在 transform.go / content.go，其他文件出现改写调用（" + pat + "）",
+					Where: rel,
+				})
+			}
+		}
+	}
+	if !rewriteSiteFound {
+		out = append(out, finding{
+			ID:    "INT-8",
+			Human: "在 transform.go 里找不到改写实现 —— 检查可能已空转（拒绝静默放行）",
+			Where: proxyRewriteSite,
+		})
 	}
 	return out
 }
